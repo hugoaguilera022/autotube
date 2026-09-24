@@ -133,7 +133,7 @@ async function generateMusic(){
     if(!r.ok){let d={};try{d=await r.json()}catch{}throw new Error(d.error||'No se pudo generar la música.');}
     const blob=await r.blob();
     if(window.currentMusicUrl)URL.revokeObjectURL(window.currentMusicUrl);
-    window.currentMusicUrl=URL.createObjectURL(blob);
+    window.currentMusicUrl=URL.createObjectURL(blob);currentVideoPlan.musicUrl=window.currentMusicUrl;
     audio.src=window.currentMusicUrl;audio.classList.remove('hidden');audio.load();
     label.textContent='Música generada · lista para el montaje';state.textContent='Listo';
   }catch(e){state.textContent='Error';label.textContent=e.message;}
@@ -164,7 +164,7 @@ async function renderFinalVideo(){
   if(!scenes.length||!mediaResults.length)return alert('Primero genera las escenas y busca los visuales.');
   const btn=$('#renderVideoBtn'),state=$('#renderState');btn.disabled=true;btn.textContent='Renderizando…';state.textContent='Preparando clips…';
   try{
-    const r=await fetch('/api/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenes,mediaResults,language:currentVideoPlan?.language||'es'})});
+    const form=new FormData();form.append('scenes',JSON.stringify(scenes));form.append('mediaResults',JSON.stringify(mediaResults));form.append('language',currentVideoPlan?.language||'es');for(const url of (currentVideoPlan?.narrationAudio||[])){const rr=await fetch(url);if(!rr.ok)throw new Error('No se pudo preparar una narración para el montaje.');form.append('narration',await rr.blob(),'narration.mp3')}if(currentVideoPlan?.musicUrl){const rr=await fetch(currentVideoPlan.musicUrl);if(!rr.ok)throw new Error('No se pudo preparar la música para el montaje.');form.append('music',await rr.blob(),'music.wav')}const r=await fetch('/api/render',{method:'POST',body:form});
     const d=await r.json().catch(()=>null);
     if(!r.ok)throw new Error(d?.error||'No se pudo iniciar el render.');
     const jobId=d?.jobId;
