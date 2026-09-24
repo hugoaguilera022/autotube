@@ -5,13 +5,30 @@ document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>go(b.dataset.view));d
 async function health(){try{const r=await fetch('/api/health');const d=await r.json();$('#serverStatus').textContent='Servidor conectado';$('#openaiBadge').textContent=d.configured.openai?'Conectado':'Revisar'}catch{$('#serverStatus').textContent='Servidor no disponible'}}health();
 async function connectYoutube(){try{const r=await fetch('/api/youtube/auth');const d=await r.json();if(!r.ok)return alert(d.error);window.open(d.url,'youtube_oauth','width=620,height=760');}catch(e){alert('No se pudo iniciar la conexión con YouTube.')}}
 $('#youtubeBtn').onclick=connectYoutube;$('#youtubeConnect2').onclick=connectYoutube;
+$('#youtubeConnected').onclick=()=>go('connections');
+function updateYoutubeGlobalStatus(connected, profile={}) {
+  const connectButton = $('#youtubeBtn');
+  const connectedButton = $('#youtubeConnected');
+  if (!connectButton || !connectedButton) return;
+  if (connected) {
+    connectButton.classList.add('hidden');
+    connectedButton.classList.remove('hidden');
+    $('#youtubeStatusTitle').textContent = profile.title || 'YouTube conectado';
+    $('#youtubeStatusAvatar').src = profile.avatar || '';
+  } else {
+    connectButton.classList.remove('hidden');
+    connectedButton.classList.add('hidden');
+  }
+}
+
 async function loadYoutubeProfile(){
   try{
     const r=await fetch('/api/youtube/profile');
     const d=await r.json();
     const card=$('#youtubeProfile');
-    if(!r.ok||!d.connected){card.classList.add('hidden');return;}
+    if(!r.ok||!d.connected){card.classList.add('hidden');updateYoutubeGlobalStatus(false);return;}
     card.classList.remove('hidden');
+    updateYoutubeGlobalStatus(true, d);
     $('#ytAvatar').src=d.avatar||'';
     $('#ytTitle').textContent=d.title||'Canal de YouTube';
     $('#ytHandle').textContent=d.handle?d.handle:'';
@@ -19,7 +36,7 @@ async function loadYoutubeProfile(){
     $('#ytVideos').textContent=Number(d.videos||0).toLocaleString('es-ES');
     $('#ytViews').textContent=Number(d.views||0).toLocaleString('es-ES');
     $('#ytChannelId').textContent=d.channelId||'—';
-  }catch{ $('#youtubeProfile').classList.add('hidden'); }
+  }catch{ $('#youtubeProfile').classList.add('hidden'); updateYoutubeGlobalStatus(false); }
 }
 $('#youtubeRefresh').onclick=loadYoutubeProfile;
 $('#youtubeDisconnect').onclick=async()=>{if(!confirm('¿Desconectar este canal de YouTube?'))return;await fetch('/api/youtube/disconnect',{method:'POST'});loadYoutubeProfile();};
