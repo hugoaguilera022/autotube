@@ -538,10 +538,10 @@ async function generateFreeAmbientMusic({ durationSeconds = 180, mood = 'ambient
     // Música procedural generada localmente con FFmpeg: no requiere API externa ni licencia musical.
     // Usa drones suaves, capas armónicas, modulación lenta y fade in/out para acompañar narración.
     const filter = [
-      'sine=f=110:d=' + seconds + ',volume=0.075,tremolo=f=0.08:d=0.35[a]',
-      'sine=f=164.81:d=' + seconds + ',volume=0.045,tremolo=f=0.055:d=0.30[b]',
-      'sine=f=220:d=' + seconds + ',volume=0.028,tremolo=f=0.045:d=0.25[c]',
-      'sine=f=55:d=' + seconds + ',volume=0.018,tremolo=f=0.035:d=0.20[d]',
+      'sine=f=110:d=' + seconds + ',volume=0.075,tremolo=f=0.12:d=0.35[a]',
+      'sine=f=164.81:d=' + seconds + ',volume=0.045,tremolo=f=0.11:d=0.30[b]',
+      'sine=f=220:d=' + seconds + ',volume=0.028,tremolo=f=0.10:d=0.25[c]',
+      'sine=f=55:d=' + seconds + ',volume=0.018,tremolo=f=0.10:d=0.20[d]',
       '[a][b][c][d]amix=inputs=4:duration=longest:normalize=0,lowpass=f=1200,afade=t=in:st=0:d=4,afade=t=out:st=' + Math.max(0, seconds - 6) + ':d=6,volume=0.8[aout]'
     ].join(';');
     await runFfmpeg([
