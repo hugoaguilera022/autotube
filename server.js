@@ -322,6 +322,41 @@ app.post('/api/ai/outline', async (req, res) => {
   }
 });
 
+app.post('/api/ai/production-plan', async (req, res) => {
+  try {
+    const { topic, language = 'es', duration = '8', title = '', outline = [], visualIdeas = [] } = req.body || {};
+    if (!topic) return res.status(400).json({ error: 'Indica un tema.' });
+
+    const sceneCount = Math.max(4, Math.min(12, Math.round(Number(duration) / 2)));
+    if (!process.env.OPENAI_API_KEY) {
+      const scenes = Array.from({ length: sceneCount }, (_, i) => ({
+        number: i + 1,
+        title: i === 0 ? 'Introducción' : 'Escena ' + (i + 1),
+        narration: i === 0 ? 'Introducción al vídeo sobre ' + topic + '.' : 'Desarrollo visual relacionado con ' + topic + '.',
+        visualPrompt: 'Cinematic realistic footage related to ' + topic + ', scene ' + (i + 1) + ', natural lighting, 16:9',
+        duration: Math.round((Number(duration) * 60) / sceneCount),
+        transition: 'Fundido suave'
+      }));
+      return res.json({ demo: true, title: title || 'Vídeo sobre ' + topic, scenes, musicMood: 'Ambient relajante', voiceStyle: 'Natural y cercana' });
+    }
+
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.75,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: 'Eres director de producción de YouTube. Crea un plan audiovisual ORIGINAL. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. scenes debe ser un array con number, title, narration, visualPrompt, duration y transition. Los visualPrompt deben describir imágenes o vídeo originales y no pedir que se copie material protegido.' },
+        { role: 'user', content: JSON.stringify({ topic, language, duration, title, outline, visualIdeas, sceneCount }) }
+      ]
+    });
+    res.json(JSON.parse(response.choices[0].message.content));
+  } catch (err) {
+    console.error('Production plan error:', err);
+    res.status(500).json({ error: 'Error generando el plan de producción.' });
+  }
+});
+
 app.post('/api/project', (req, res) => {
   const project = { id: `p_${Date.now()}`, createdAt: new Date().toISOString(), status: 'draft', ...req.body };
   res.json(project);
