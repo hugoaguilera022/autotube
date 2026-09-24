@@ -654,7 +654,18 @@ app.post('/api/render',async(req,res)=>{
     const mediaResults=Array.isArray(req.body?.mediaResults)?req.body.mediaResults:[];
     if(!scenes.length||!mediaResults.length)return res.status(400).json({error:'Genera las escenas y busca los visuales antes de renderizar.'});
     const narrationBuffers=[];
-    for(const scene of scenes){const text=String(scene.narration||scene.script||'').trim();narrationBuffers.push(text?await generateElevenVoice({text,language:req.body?.language||'es'}):null);}
+    // La narración es opcional durante el render. Si ElevenLabs no está configurado
+    // o falla una escena, el vídeo continúa sin esa pista en lugar de bloquear el MP4.
+    for(const scene of scenes){
+      const text=String(scene.narration||scene.script||'').trim();
+      if(!text || !process.env.ELEVENLABS_API_KEY){ narrationBuffers.push(null); continue; }
+      try{
+        narrationBuffers.push(await generateElevenVoice({text,language:req.body?.language||'es'}));
+      }catch(err){
+        console.error('Narration scene skipped:', err.message);
+        narrationBuffers.push(null);
+      }
+    }
     const result=await renderAutotubeVideo({scenes,mediaResults,narrationBuffers});
     res.set({'Content-Type':'video/mp4','Content-Length':String(result.buffer.length),'Content-Disposition':'attachment; filename="autotube-final.mp4"','Cache-Control':'no-store'});res.send(result.buffer);
   }catch(err){console.error('Render error:',err);res.status(502).json({error:err.message||'No se pudo renderizar el vídeo.'});}
