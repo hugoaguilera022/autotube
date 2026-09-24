@@ -40,39 +40,59 @@ app.post('/api/ai/outline',async(req,res)=>{const{topic,language='es',duration='
 app.post('/api/ai/production-plan',async(req,res)=>{try{const{topic,language='es',duration='8',title='',outline=[],visualIdeas=[],visualReferenceAnalysis=null}=req.body||{};if(!topic)return res.status(400).json({error:'Indica un tema.'});const sceneCount=Math.max(4,Math.min(12,Math.round(Number(duration)/2)));const content=await callGemini({system:'Eres director de producción audiovisual de YouTube. Puedes trabajar con cualquier género, tema o formato de vídeo. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. El género y contenido deben determinarse por el tema y por las referencias proporcionadas; no presupongas naturaleza, paisajes, relajación ni bienestar. Cada escena debe tener number, title, narration, visualPrompt, searchQuery, duration y transition. Si existe visualReferenceAnalysis, úsalo como guía principal de ESTILO VISUAL: paisaje y entorno, iluminación, hora del día, paleta, composición, escala de planos, movimiento de cámara, velocidad/ritmo, presencia o ausencia de personas, textura, profundidad y atmósfera. Mantén esas características de forma consistente entre escenas. Si existe una referencia de YouTube, úsala solo para rasgos generales de formato y temática. NO copies escenas, textos, personajes, encuadres concretos ni contenido identificable. Genera escenas y búsquedas originales que reproduzcan el tipo de experiencia visual, no el vídeo fuente. En visualPrompt describe explícitamente los rasgos de estilo que deben conservarse. En searchQuery incluye las palabras necesarias para encontrar vídeos reales compatibles con ese estilo, además del contenido de la escena. Crea contenido original.',user:JSON.stringify({topic,language,duration,title,outline,visualIdeas,visualReferenceAnalysis,sceneCount,stylePriority:'Cuando haya análisis visual, la similitud buscada es de características audiovisuales generales (ambiente, luz, composición, movimiento y ritmo), no de contenido ni de planos concretos.'}),temperature:0.75,maxOutputTokens:2600,json:true});return res.json(parseJsonResponse(content))}catch(err){console.error('Production plan error:',err);const fallbackCount=Math.max(4,Math.min(12,Math.round(Number(req.body?.duration||8)/2))),fallbackTopic=req.body?.topic||'el tema del vídeo',fallbackScenes=Array.from({length:fallbackCount},(_,i)=>({number:i+1,title:i===0?'Introducción':'Desarrollo · escena '+(i+1),narration:i===0?'Presentación del tema y promesa principal del vídeo.':'Desarrollo del contenido con una explicación clara y visual.',visualPrompt:'Realistic cinematic footage about '+fallbackTopic+', scene '+(i+1)+', natural light, detailed, 16:9, original composition',searchQuery:fallbackTopic,duration:Math.round((Number(req.body?.duration||8)*60)/fallbackCount),transition:'Fundido suave'}));res.json({demo:true,fallback:true,title:req.body?.title||'Vídeo sobre '+fallbackTopic,musicMood:'Ambient cinematográfico',voiceStyle:'Natural y cercana',scenes:fallbackScenes,warning:'La API de IA no respondió. Se ha creado un plan local para que puedas continuar.'})}});
 
 
-function pickElevenVoiceId(voices){
-  const configured=String(process.env.ELEVENLABS_VOICE_ID||'').trim();
-  if(configured)return configured;
-  const list=Array.isArray(voices)?voices:[];
-  return String(list.find(v=>v?.voice_id)?.voice_id||'').trim();
-}
-async function getElevenVoiceId(){
-  const key=String(process.env.ELEVENLABS_API_KEY||'').trim();
-  if(!key)throw new Error('Falta ELEVENLABS_API_KEY.');
-  const configured=String(process.env.ELEVENLABS_VOICE_ID||'').trim();
-  if(configured)return configured;
-  // No consultamos /v1/voices porque algunas claves de ElevenLabs no tienen voices_read.
-  // Esta voz pública sirve como fallback para TTS; si el usuario configura ELEVENLABS_VOICE_ID, se usa esa.
-  return '21m00Tcm4TlvDq8ikWAM';
+async function generateGeminiTts(text,language='es',style='Natural y cercana'){
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('Falta GEMINI_API_KEY.');
+  const safeText=String(text||'').trim();
+  if(!safeText)throw new Error('La narración está vacía.');
+  const lang=String(language||'es').toLowerCase().startsWith('es')?'es-ES':(String(language||'en').toLowerCase().startsWith('en')?'en-US':String(language||'es'));
+  const body={
+    contents:[{role:'user',parts:[{text:'Lee exactamente el siguiente texto como narración profesional para YouTube. Estilo: '+String(style||'Natural y cercana')+'. No añadas palabras, introducciones ni comentarios.\n\n'+safeText}]}],
+    generationConfig:{
+      responseModalities:['AUDIO'],
+      responseMimeType:'audio/L16',
+      speechConfig:{voiceConfig:{voice:'Kore'},languageCode:lang}
+    }
+  };
+  const models=['gemini-3.8-flash-tts','gemini-3.8-flash-lite-tts','gemini-2.5-flash-preview-tts'];
+  let lastError='';
+  for(const model of models){
+    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-goog-api-key':key},
+      body:JSON.stringify(body)
+    });
+    const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
+    if(r.ok){
+      const data=d?.candidates?.[0]?.content?.parts?.find(p=>p?.inlineData?.data)?.inlineData?.data;
+      if(!data)throw new Error('Gemini TTS no devolvió audio.');
+      const pcm=Buffer.from(data,'base64');
+      if(!pcm.length)throw new Error('Gemini TTS devolvió audio vacío.');
+      const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-tts-'));
+      try{
+        const input=path.join(dir,'voice.pcm'),output=path.join(dir,'voice.wav');
+        await fs.writeFile(input,pcm);
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','s16le','-ar','24000','-ac','1','-i',input,'-c:a','pcm_s16le','-ar','44100','-ac','2',output]);
+        const audio=await fs.readFile(output);
+        if(!audio.length)throw new Error('El WAV de Gemini TTS está vacío.');
+        return audio;
+      }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+    }
+    const message=d?.error?.message||raw.slice(0,500)||'Error desconocido';
+    lastError='Gemini TTS '+r.status+': '+message;
+    if(r.status===404||r.status===400||r.status===429||r.status>=500)continue;
+  }
+  throw new Error(lastError||'Gemini TTS no pudo generar la narración.');
 }
 app.post('/api/ai/voice',async(req,res)=>{
   try{
     const text=String(req.body?.text||'').trim();
     if(!text)return res.status(400).json({error:'La narración está vacía.'});
-    const key=String(process.env.ELEVENLABS_API_KEY||'').trim();
-    if(!key)return res.status(503).json({error:'Falta ELEVENLABS_API_KEY.'});
-    const voiceId=await getElevenVoiceId();
-    const r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+encodeURIComponent(voiceId)+'?output_format=mp3_44100_128',{
-      method:'POST',
-      headers:{'xi-api-key':key,'Content-Type':'application/json','Accept':'audio/mpeg'},
-      body:JSON.stringify({text,model_id:'eleven_multilingual_v2'})
-    });
-    const audio=Buffer.from(await r.arrayBuffer());
-    if(!r.ok)throw new Error('ElevenLabs TTS '+r.status+': '+audio.toString('utf8').slice(0,500));
-    if(!audio.length)throw new Error('ElevenLabs devolvió un audio vacío.');
-    res.set('Content-Type','audio/mpeg');res.set('Content-Length',String(audio.length));res.send(audio);
-  }catch(err){console.error('Voice generation error:',err);res.status(502).json({error:err.message||'No se pudo generar la narración.'})}
+    const audio=await generateGeminiTts(text,req.body?.language||'es',req.body?.style||'Natural y cercana');
+    res.set('Content-Type','audio/wav');res.set('Content-Length',String(audio.length));res.send(audio);
+  }catch(err){console.error('Gemini TTS error:',err);res.status(502).json({error:err.message||'No se pudo generar la narración.'})}
 });
+
 app.post('/api/ai/music',async(req,res)=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-music-'));
   try{
@@ -189,19 +209,7 @@ app.get('/api/preflight',async(_req,res)=>{
   await run('youtube-reference',async()=>{const u='https://www.youtube.com/watch?v=fXuWQg7uJKg';const r=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(u)+'&format=json');if(!r.ok)throw new Error('YouTube oEmbed '+r.status);const d=await r.json();return{title:d.title||''}});
   await run('pexels',async()=>{if(!process.env.PEXELS_API_KEY)throw new Error('Falta PEXELS_API_KEY.');const rows=await searchPexels('cinematic');if(!rows.length)throw new Error('Pexels no devolvió vídeos.');return{results:rows.length}});
   await run('pixabay',async()=>{if(!process.env.PIXABAY_API_KEY)throw new Error('Falta PIXABAY_API_KEY.');const rows=await searchPixabay('cinematic');if(!rows.length)throw new Error('Pixabay no devolvió vídeos.');return{results:rows.length}});
-  await run('elevenlabs',async()=>{
-    const id=await getElevenVoiceId();
-    const key=String(process.env.ELEVENLABS_API_KEY||'').trim();
-    const r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+encodeURIComponent(id)+'?output_format=mp3_44100_128',{
-      method:'POST',
-      headers:{'xi-api-key':key,'Content-Type':'application/json','Accept':'audio/mpeg'},
-      body:JSON.stringify({text:'Prueba de narración de AutoTube.',model_id:'eleven_multilingual_v2'})
-    });
-    const audio=Buffer.from(await r.arrayBuffer());
-    if(!r.ok)throw new Error('ElevenLabs TTS '+r.status+': '+audio.toString('utf8').slice(0,500));
-    if(!audio.length)throw new Error('ElevenLabs devolvió un audio vacío.');
-    return{voiceId:id,bytes:audio.length};
-  });
+  await run('tts',async()=>{const audio=await generateGeminiTts('Prueba de narración de AutoTube.','es','Natural y cercana');return{provider:'Gemini TTS',bytes:audio.length};});
   await run('music-ffmpeg',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-music-'));try{const out=path.join(dir,'music.wav');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','sine=frequency=220:sample_rate=44100:duration=2','-f','lavfi','-i','sine=frequency=277:sample_rate=44100:duration=2','-filter_complex','[0:a]volume=0.08[a0];[1:a]volume=0.04[a1];[a0][a1]amix=inputs=2:duration=longest,aresample=44100,apad[a]','-map','[a]','-t','2','-ac','2','-ar','44100','-c:a','pcm_s16le',out]);const st=await fs.stat(out);if(!st.size)throw new Error('La prueba de música produjo un archivo vacío.');return{bytes:st.size}}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
   const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
   await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const clip=rows.find(x=>x.downloadUrl);if(!clip)throw new Error('No hay un clip descargable para la prueba de render.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2}],mediaResults:[{number:1,title:'Preflight',media:[clip]}],narrationAudio:[],musicBuffer:null,finalOutputPath:out});return{bytes:result.size,provider:mediaSource}}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
