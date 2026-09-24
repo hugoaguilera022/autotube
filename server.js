@@ -438,7 +438,7 @@ app.post('/api/ai/production-plan', async (req, res) => {
       temperature: 0.75,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: 'Eres director de producción de YouTube. Crea un plan audiovisual ORIGINAL. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. scenes debe ser un array con number, title, narration, visualPrompt, duration y transition. Los visualPrompt deben describir imágenes o vídeo originales y no pedir que se copie material protegido.' },
+        { role: 'system', content: 'Eres director de producción de YouTube. Crea un plan audiovisual ORIGINAL. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. scenes debe ser un array con number, title, narration, visualPrompt, searchQuery, duration y transition. searchQuery debe ser una consulta corta y concreta para encontrar vídeo de stock horizontal relacionado con la escena. Los visualPrompt deben describir imágenes o vídeo originales y no pedir que se copie material protegido.' },
         { role: 'user', content: JSON.stringify({ topic, language, duration, title, outline, visualIdeas, sceneCount }) }
       ]
     });
@@ -495,6 +495,50 @@ async function generateElevenMusic({ prompt, durationSeconds = 180 }) {
   }
   return Buffer.from(await response.arrayBuffer());
 }
+
+function normalizeSearchQuery(value){
+  return String(value||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim().slice(0,100);
+}
+function pickPexelsFile(video){
+  const files=(video?.video_files||[]).filter(x=>x?.link);
+  return files.sort((a,b)=>((b.width||0)*(b.height||0))-((a.width||0)*(a.height||0)))[0]?.link||'';
+}
+async function searchPexels(query){
+  if(!process.env.PEXELS_API_KEY)return [];
+  const url='https://api.pexels.com/v1/videos/search?'+new URLSearchParams({query,orientation:'landscape',size:'medium',locale:'es-ES',per_page:'8'}).toString();
+  const r=await fetch(url,{headers:{Authorization:process.env.PEXELS_API_KEY}});
+  if(!r.ok)throw new Error('Pexels API '+r.status);
+  const d=await r.json();
+  return (d.videos||[]).map(v=>({provider:'Pexels',id:v.id,title:'Vídeo Pexels',duration:v.duration,thumbnail:v.image,url:v.url,downloadUrl:pickPexelsFile(v)})).filter(x=>x.downloadUrl);
+}
+async function searchPixabay(query){
+  if(!process.env.PIXABAY_API_KEY)return [];
+  const url='https://pixabay.com/api/videos/?'+new URLSearchParams({key:process.env.PIXABAY_API_KEY,q:query,lang:'es',video_type:'film',safesearch:'true',order:'popular',per_page:'8'}).toString();
+  const r=await fetch(url);
+  if(!r.ok)throw new Error('Pixabay API '+r.status);
+  const d=await r.json();
+  return (d.hits||[]).map(v=>({provider:'Pixabay',id:v.id,title:'Vídeo Pixabay',duration:v.duration,thumbnail:v.videos?.medium?.thumbnail||v.videos?.small?.thumbnail||'',url:v.pageURL,downloadUrl:v.videos?.medium?.url||v.videos?.small?.url||''})).filter(x=>x.downloadUrl);
+}
+app.post('/api/media/search',async(req,res)=>{
+  try{
+    const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];
+    if(!scenes.length)return res.status(400).json({error:'No hay escenas para buscar.'});
+    const results=[];
+    for(const scene of scenes.slice(0,12)){
+      const query=normalizeSearchQuery(scene.searchQuery||scene.visualPrompt||scene.title||'nature');
+      const [pexels,pixabay]=await Promise.allSettled([searchPexels(query),searchPixabay(query)]);
+      const media=[
+        ...(pexels.status==='fulfilled'?pexels.value:[]),
+        ...(pixabay.status==='fulfilled'?pixabay.value:[])
+      ];
+      results.push({number:scene.number,title:scene.title,query,media,errors:{
+        pexels:pexels.status==='rejected'?pexels.reason.message:null,
+        pixabay:pixabay.status==='rejected'?pixabay.reason.message:null
+      }});
+    }
+    res.json({ok:true,results,credits:{pexels:'Vídeos proporcionados por Pexels',pixabay:'Vídeos proporcionados por Pixabay'}});
+  }catch(err){console.error('Media search error:',err);res.status(502).json({error:err.message||'No se pudieron buscar visuales.'});}
+});
 
 app.post('/api/ai/music', async (req, res) => {
   try {
