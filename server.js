@@ -178,4 +178,26 @@ app.post('/api/render',upload.fields([{name:'narration',maxCount:12},{name:'musi
 app.get('/api/render/:jobId',async(req,res)=>{const job=renderJobs.get(String(req.params.jobId||''));if(!job)return res.status(404).json({error:'Render no encontrado. El servicio puede haberse reiniciado; inicia un nuevo render.'});if(job.status==='processing')return res.json({ok:true,status:'processing',progress:job.progress||0});if(job.status==='error')return res.json({ok:false,status:'error',error:job.error||'No se pudo renderizar el vídeo.'});try{const stat=await fs.stat(job.outputPath);if(!stat.size)throw new Error('MP4 vacío');res.json({ok:true,status:'done',progress:100,size:stat.size,downloadUrl:'/api/render/'+encodeURIComponent(req.params.jobId)+'/download'})}catch{return res.status(404).json({error:'El vídeo renderizado ya no está disponible. Inicia un nuevo render.'})}});
 app.get('/api/render/:jobId/download',async(req,res)=>{const job=renderJobs.get(String(req.params.jobId||''));if(!job)return res.status(404).json({error:'Render no encontrado.'});if(job.status!=='done')return res.status(409).json({error:'El render todavía no está listo.'});try{await fs.stat(job.outputPath);res.download(job.outputPath,'autotube-final.mp4')}catch{res.status(404).json({error:'El vídeo renderizado ya no está disponible.'})}});
 
+app.get('/api/preflight',async(_req,res)=>{
+  const checks={};
+  const run=async(name,fn)=>{const started=Date.now();try{const value=await fn();checks[name]={ok:true,ms:Date.now()-started,...(value&&typeof value==='object'?value:{})};}catch(err){checks[name]={ok:false,ms:Date.now()-started,error:err.message||String(err)};}};
+  await run('ffmpeg',async()=>{
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-'));try{
+      const out=path.join(dir,'test.mp4');
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x180:r=10','-t','1','-an','-c:v','libx264','-pix_fmt','yuv420p',out]);
+      const st=await fs.stat(out);if(!st.size)throw new Error('FFmpeg produjo un archivo vacío.');return{bytes:st.size};
+    }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+  });
+  await run('gemini',async()=>{const text=await callGemini({system:'Responde únicamente con JSON válido.',user:'Devuelve {"ok":true}.',maxOutputTokens:80,json:true});return{response:parseJsonResponse(text)}});
+  await run('youtube-reference',async()=>{const u='https://www.youtube.com/watch?v=fXuWQg7uJKg';const r=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(u)+'&format=json');if(!r.ok)throw new Error('YouTube oEmbed '+r.status);const d=await r.json();return{title:d.title||''}});
+  await run('pexels',async()=>{if(!process.env.PEXELS_API_KEY)throw new Error('Falta PEXELS_API_KEY.');const rows=await searchPexels('cinematic');if(!rows.length)throw new Error('Pexels no devolvió vídeos.');return{results:rows.length}});
+  await run('pixabay',async()=>{if(!process.env.PIXABAY_API_KEY)throw new Error('Falta PIXABAY_API_KEY.');const rows=await searchPixabay('cinematic');if(!rows.length)throw new Error('Pixabay no devolvió vídeos.');return{results:rows.length}});
+  await run('elevenlabs',async()=>{const id=await getElevenVoiceId();return{voiceId:id}});
+  await run('music-ffmpeg',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-music-'));try{const out=path.join(dir,'music.wav');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','sine=frequency=220:sample_rate=44100:duration=2','-f','lavfi','-i','sine=frequency=277:sample_rate=44100:duration=2','-filter_complex','[0:a]volume=0.08[a0];[1:a]volume=0.04[a1];[a0][a1]amix=inputs=2:duration=longest,aresample=44100,apad[a]','-map','[a]','-t','2','-ac','2','-ar','44100','-c:a','pcm_s16le',out]);const st=await fs.stat(out);if(!st.size)throw new Error('La prueba de música produjo un archivo vacío.');return{bytes:st.size}}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
+  const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
+  await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const clip=rows.find(x=>x.downloadUrl);if(!clip)throw new Error('No hay un clip descargable para la prueba de render.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2}],mediaResults:[{number:1,title:'Preflight',media:[clip]}],narrationAudio:[],musicBuffer:null,finalOutputPath:out});return{bytes:result.size,provider:mediaSource}}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
+  const failed=Object.entries(checks).filter(([,v])=>!v.ok).map(([k,v])=>({name:k,error:v.error}));
+  res.status(failed.length?503:200).json({ok:failed.length===0,checks,failed});
+});
+
 app.listen(PORT,()=>console.log(`AutoTube listening on ${PORT}`));
