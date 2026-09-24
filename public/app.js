@@ -76,6 +76,7 @@ function openProduction(plan){currentVideoPlan={...currentVideoPlan,...plan};$('
 $('#backToCreate').onclick=()=>go('create');
 $('#generateMusicBtn').onclick=generateMusic;
 $('#findMediaBtn').onclick=loadSceneMedia;
+$('#renderVideoBtn').onclick=renderFinalVideo;
 $('#buildProductionBtn').onclick=async()=>{if(!currentVideoPlan?.topic)return alert('Primero genera la estructura del vídeo.');const btn=$('#buildProductionBtn'),progress=$('#productionProgress'),bar=$('#productionProgressBar'),value=$('#productionProgressValue'),label=$('#productionProgressLabel');btn.disabled=true;btn.textContent='Generando…';progress.classList.remove('hidden');$('#productionState').textContent='Produciendo';bar.style.width='12%';value.textContent='12%';label.textContent='Analizando estructura…';try{await new Promise(r=>setTimeout(r,350));bar.style.width='35%';value.textContent='35%';label.textContent='Diseñando escenas…';const r=await fetch('/api/ai/production-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(currentVideoPlan)});const d=await r.json();if(!r.ok)throw new Error(d.error||'No se pudo crear el plan.');currentVideoPlan={...currentVideoPlan,...d};bar.style.width='78%';value.textContent='78%';label.textContent='Preparando narración y visuales…';renderScenes(d);await new Promise(r=>setTimeout(r,250));bar.style.width='100%';value.textContent='100%';label.textContent='Plan de producción listo';$('#productionState').textContent='Listo';}catch(e){$('#productionState').textContent='Error';label.textContent='Error';$('#scenesList').innerHTML='<div class="card empty"><div class="empty-icon">!</div><b>No se pudo generar</b><p>'+escapeHtml(e.message)+'</p></div>'}finally{btn.disabled=false;btn.textContent='Regenerar escenas con IA'}};
 function renderScenes(d){const scenes=d.scenes||[];'<div class="section-head"><h3>'+scenes.length+' escenas preparadas</h3><span>'+escapeHtml(d.musicMood||'Música pendiente')+' · '+escapeHtml(d.voiceStyle||'Voz pendiente')+'</span></div>'+scenes.map(s=>'<div class="card scene-card"><div class="scene-number">'+String(s.number).padStart(2,'0')+'</div><div class="scene-body"><div class="scene-title"><div><b>'+escapeHtml(s.title||'Escena')+'</b><span>'+escapeHtml(String(s.duration||0))+' s · '+escapeHtml(s.transition||'Transición suave')+'</span></div><span class="badge">VISUAL + VOZ</span></div><p><strong>Narración:</strong> '+escapeHtml(s.narration||'')+'</p><p class="visual-prompt"><strong>Visual:</strong> '+escapeHtml(s.visualPrompt||'')+'</p></div></div>').join('')}
 async function generateMusic(){
@@ -96,6 +97,19 @@ async function generateMusic(){
     label.textContent='Música generada · lista para el montaje';state.textContent='Listo';
   }catch(e){state.textContent='Error';label.textContent=e.message;}
   finally{btn.disabled=false;btn.textContent='Generar música con IA'}
+}
+
+async function renderFinalVideo(){
+  const scenes=currentVideoPlan?.scenes||[], mediaResults=currentVideoPlan?.mediaResults||[];
+  if(!scenes.length||!mediaResults.length)return alert('Primero genera las escenas y busca los visuales.');
+  const btn=$('#renderVideoBtn'),state=$('#renderState');btn.disabled=true;btn.textContent='Renderizando…';state.textContent='Preparando clips y música…';
+  try{
+    const r=await fetch('/api/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenes,mediaResults})});
+    if(!r.ok){let d={};try{d=await r.json()}catch{}throw new Error(d.error||'No se pudo renderizar el vídeo.');}
+    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='autotube-final.mp4';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+    state.textContent='MP4 listo';
+  }catch(e){state.textContent='Error';alert(e.message)}
+  finally{btn.disabled=false;btn.textContent='🎬 Renderizar MP4'}
 }
 
 async function loadSceneMedia(){
