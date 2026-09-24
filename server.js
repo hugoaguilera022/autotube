@@ -44,8 +44,9 @@ async function supabaseRequest(path, options = {}) {
   const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
     ...options,
     headers: {
+      // Supabase secret keys (sb_secret_...) must be sent in the apikey header.
+      // Do not send them as Bearer tokens because they are not JWTs.
       apikey: process.env.SUPABASE_SECRET_KEY,
-      Authorization: `Bearer ${process.env.SUPABASE_SECRET_KEY}`,
       'Content-Type': 'application/json',
       ...(options.headers || {})
     }
