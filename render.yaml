@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: autotube
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: APP_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REDIRECT_URI
+        sync: false
+      - key: PEXELS_API_KEY
+        sync: false
+      - key: PIXABAY_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false

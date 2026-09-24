@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#0b0d12" />
+  <title>AutoTube — AI YouTube Studio</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark">▶</div><div><strong>AutoTube</strong><span>AI YouTube Studio</span></div></div>
+      <nav>
+        <button class="nav active" data-view="dashboard">⌂ <span>Dashboard</span></button>
+        <button class="nav" data-view="create">✦ <span>Crear vídeo</span></button>
+        <button class="nav" data-view="projects">▣ <span>Proyectos</span></button>
+        <button class="nav" data-view="automation">◷ <span>Automatización</span></button>
+        <button class="nav" data-view="connections">↗ <span>Conexiones</span></button>
+      </nav>
+      <div class="side-bottom"><div class="status-dot"></div><span id="serverStatus">Comprobando conexión…</span></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><p class="eyebrow">AUTOMATION STUDIO</p><h1 id="pageTitle">Tu contenido, automatizado.</h1></div><button class="ghost" id="youtubeBtn">Conectar YouTube</button></header>
+
+      <section id="dashboard" class="view active-view">
+        <div class="hero"><div><span class="pill">NUEVO · AUTO-PILOT</span><h2>Convierte una idea en un vídeo listo para YouTube.</h2><p>Genera la estructura, guion y recursos desde un único panel. Las claves se mantienen en el servidor y nunca en el navegador.</p><button class="primary" data-go="create">Crear mi primer vídeo →</button></div><div class="hero-orb"><div class="orb-ring"></div><span>AI</span></div></div>
+        <div class="stats"><div><span>Vídeos este mes</span><b>0</b></div><div><span>Publicados</span><b>0</b></div><div><span>Automatizaciones</span><b>0</b></div><div><span>Estado</span><b class="ok">Listo</b></div></div>
+        <div class="section-head"><h3>Flujo AutoTube</h3><span>4 pasos</span></div>
+        <div class="flow"><div><i>01</i><b>Idea</b><span>Tema, nicho o referencia</span></div><div><i>02</i><b>Guion</b><span>IA crea una estructura original</span></div><div><i>03</i><b>Producción</b><span>Visuales + voz + montaje</span></div><div><i>04</i><b>YouTube</b><span>Revisión y publicación</span></div></div>
+      </section>
+
+      <section id="create" class="view"><div class="section-head"><div><h3>Crear nuevo vídeo</h3><p class="muted">Empieza con una idea. Puedes añadir una URL de referencia para analizar el formato sin copiar contenido.</p></div></div>
+        <div class="grid2"><div class="card form-card"><label>Tema del vídeo<input id="topic" placeholder="Ej. 7 hábitos que mejoran tu sueño" /></label><label>URL de referencia <span class="optional">opcional</span><input id="reference" placeholder="https://www.youtube.com/watch?v=…" /></label><div class="row"><label>Duración<select id="duration"><option value="5">5 min</option><option value="8" selected>8 min</option><option value="12">12 min</option><option value="20">20 min</option></select></label><label>Idioma<select id="language"><option value="es" selected>Español</option><option value="en">English</option></select></label></div><button class="primary wide" id="generateBtn">Generar estructura con IA</button></div>
+        <div class="card preview-card"><div class="card-head"><span>PREVISUALIZACIÓN</span><span id="generationState">Esperando</span></div><div id="preview" class="empty"><div class="empty-icon">✦</div><b>Aquí aparecerá tu vídeo</b><p>Genera primero la estructura para revisar el contenido.</p></div></div></div>
+      </section>
+
+      <section id="projects" class="view"><div class="section-head"><div><h3>Proyectos</h3><p class="muted">Tus borradores y vídeos preparados.</p></div></div><div class="card empty-list"><div class="empty-icon">▣</div><b>Aún no tienes proyectos</b><p>Los proyectos creados aparecerán aquí.</p></div></section>
+
+      <section id="automation" class="view"><div class="section-head"><div><h3>Automatización</h3><p class="muted">Programa la producción para que AutoTube trabaje solo.</p></div></div><div class="card automation-card"><div><span class="pill">AUTO-PILOT</span><h3>Publicación diaria</h3><p>Genera un vídeo cada día a una hora determinada. La publicación final queda bajo tu control hasta que actives el modo automático.</p></div><label class="switch"><input type="checkbox" id="autoToggle"><span></span></label></div><div class="grid2"><div class="card"><label>Hora de ejecución<input type="time" value="18:00" /></label></div><div class="card"><label>Zona horaria<select><option>Europe/Madrid</option></select></label></div></div></section>
+
+      <section id="connections" class="view"><div class="section-head"><div><h3>Conexiones & API</h3><p class="muted">Las claves reales se configuran en Render como variables de entorno.</p></div></div><div class="connections-grid"><div class="card connection"><div class="service-icon yt">▶</div><div><b>YouTube</b><span>OAuth · subida de vídeos</span></div><button class="small" id="youtubeConnect2">Conectar</button></div><div class="card connection"><div class="service-icon ai">✦</div><div><b>OpenAI</b><span>Guiones y metadata</span></div><span class="badge" id="openaiBadge">Revisar</span></div><div class="card connection"><div class="service-icon">▧</div><div><b>Pexels</b><span>Vídeo e imágenes</span></div><span class="badge">Opcional</span></div><div class="card connection"><div class="service-icon">♫</div><div><b>ElevenLabs</b><span>Voz sintética</span></div><span class="badge">Opcional</span></div></div><div class="notice">🔒 <b>Seguridad:</b> nunca pongas tus claves API en el código del navegador. Añádelas en <code>Environment</code> de Render.</div></section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body></html>
