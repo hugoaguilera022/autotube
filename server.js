@@ -3,18 +3,96 @@ const express = require('express');
 const path = require('path');
 const { google } = require('googleapis');
 const OpenAI = require('openai');
+const crypto = require('crypto');
 
 const app = express();
 
-// MVP: keep the YouTube OAuth tokens in memory. For production, persist encrypted
-// tokens in a database keyed to the authenticated AutoTube user.
+// YouTube OAuth is persisted in Supabase so Render restarts/redeploys do not disconnect the channel.
+// Tokens are encrypted server-side with AES-256-GCM before being stored.
 let youtubeTokens = null;
 let youtubeProfileCache = null;
+let youtubeLoaded = false;
+
+function supabaseConfigured() {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY && process.env.YOUTUBE_TOKEN_ENCRYPTION_KEY);
+}
+
+function encryptionKey() {
+  const raw = process.env.YOUTUBE_TOKEN_ENCRYPTION_KEY || '';
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, 'hex');
+  return crypto.createHash('sha256').update(raw).digest();
+}
+
+function encryptTokens(tokens) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(tokens), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [iv, tag, encrypted].map(x => x.toString('base64')).join('.');
+}
+
+function decryptTokens(value) {
+  const [iv64, tag64, data64] = String(value || '').split('.');
+  if (!iv64 || !tag64 || !data64) throw new Error('Token cifrado inválido.');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(iv64, 'base64'));
+  decipher.setAuthTag(Buffer.from(tag64, 'base64'));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(data64, 'base64')), decipher.final()]).toString('utf8'));
+}
+
+async function supabaseRequest(path, options = {}) {
+  if (!supabaseConfigured()) return null;
+  const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
+    ...options,
+    headers: {
+      apikey: process.env.SUPABASE_SECRET_KEY,
+      Authorization: `Bearer ${process.env.SUPABASE_SECRET_KEY}`,
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    }
+  });
+  if (!response.ok) throw new Error(`Supabase ${response.status}: ${await response.text()}`);
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+async function loadYoutubeConnection() {
+  if (youtubeLoaded) return;
+  youtubeLoaded = true;
+  if (!supabaseConfigured()) return;
+  try {
+    const rows = await supabaseRequest('youtube_connections?id=eq.default&select=*', { method: 'GET' });
+    const row = rows?.[0];
+    if (row?.tokens_encrypted) youtubeTokens = decryptTokens(row.tokens_encrypted);
+    if (row?.profile) youtubeProfileCache = row.profile;
+  } catch (err) {
+    youtubeLoaded = false;
+    console.error('No se pudo cargar la conexión de YouTube desde Supabase:', err.message);
+  }
+}
+
+async function saveYoutubeConnection() {
+  if (!supabaseConfigured() || !youtubeTokens) return;
+  await supabaseRequest('youtube_connections?on_conflict=id', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({
+      id: 'default',
+      tokens_encrypted: encryptTokens(youtubeTokens),
+      profile: youtubeProfileCache,
+      updated_at: new Date().toISOString()
+    })
+  });
+}
 
 async function getYoutubeProfile() {
+  await loadYoutubeConnection();
   if (!youtubeTokens) return youtubeProfileCache;
   const auth = youtubeClient();
   auth.setCredentials(youtubeTokens);
+  auth.on('tokens', async (newTokens) => {
+    youtubeTokens = { ...youtubeTokens, ...newTokens };
+    try { await saveYoutubeConnection(); } catch (err) { console.error('No se pudo guardar el token actualizado:', err.message); }
+  });
   const youtube = google.youtube({ version: 'v3', auth });
   const response = await youtube.channels.list({
     part: 'snippet,contentDetails,statistics',
@@ -43,7 +121,8 @@ app.get('/api/health', (_req, res) => {
     youtube: Boolean(process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET),
     pexels: Boolean(process.env.PEXELS_API_KEY),
     pixabay: Boolean(process.env.PIXABAY_API_KEY),
-    elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY)
+    elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
+    supabase: supabaseConfigured()
   }});
 });
 
@@ -65,8 +144,11 @@ app.get('/api/youtube/callback', async (req, res) => {
     const { tokens } = await youtubeClient().getToken(req.query.code);
     youtubeTokens = tokens;
     youtubeProfileCache = null;
+    youtubeLoaded = true;
     await getYoutubeProfile();
-    res.send(`<script>window.opener?.postMessage({type:'youtube_connected'}, '*'); window.close();</script><p>YouTube conectado. Puedes cerrar esta ventana.</p>`);
+    await saveYoutubeConnection();
+    const appOrigin = process.env.APP_URL || '*';
+    res.send(`<script>window.opener?.postMessage({type:'youtube_connected'}, '${appOrigin}'); window.close();</script><p>YouTube conectado. Puedes cerrar esta ventana.</p>`);
     console.log('YouTube OAuth completed. Token received:', Boolean(tokens.access_token));
   } catch (err) {
     console.error(err);
@@ -97,10 +179,20 @@ app.get('/api/youtube/profile', async (_req, res) => {
   }
 });
 
-app.post('/api/youtube/disconnect', (_req, res) => {
-  youtubeTokens = null;
-  youtubeProfileCache = null;
-  res.json({ connected: false });
+app.post('/api/youtube/disconnect', async (_req, res) => {
+  try {
+    await loadYoutubeConnection();
+    if (supabaseConfigured()) {
+      await supabaseRequest('youtube_connections?id=eq.default', { method: 'DELETE' });
+    }
+    youtubeTokens = null;
+    youtubeProfileCache = null;
+    youtubeLoaded = true;
+    res.json({ connected: false });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'No se pudo desconectar YouTube.' });
+  }
 });
 
 app.post('/api/ai/outline', async (req, res) => {
