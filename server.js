@@ -642,12 +642,18 @@ async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musi
       const total=Math.min(300,Math.max(30,scenes.reduce((n,x)=>n+(Number(x.duration)||8),0)));
       await fs.writeFile(music,await generateFreeAmbientMusic({durationSeconds:total}));
     }
-    const inputs=['-i',silent,'-stream_loop','-1','-i',music],filters=[],voiceLabels=[];
-    voiceFiles.forEach((v,i)=>{inputs.push('-i',v.file);const delay=Math.round(v.delay*1000);filters.push('['+(i+2)+':a]adelay='+delay+'|'+delay+'[v'+i+']');voiceLabels.push('[v'+i+']');});
-    if(voiceFiles.length){filters.push(voiceLabels.join('')+'amix=inputs='+voiceFiles.length+':duration=longest[narr]');filters.push('[1:a][narr]amix=inputs=2:duration=first:weights=0.2 1[aout]');}
-    else filters.push('[1:a]anull[aout]');
+    // Primera fase: renderizar SOLO el vídeo. La música y la narración se añaden después.
+    // Así el render de MP4 no depende de TTS, música procedural ni mezclas de audio.
     const out=path.join(dir,'autotube-final.mp4');
-    await runFfmpeg(['-y',...inputs,'-filter_complex',filters.join(';'),'-map','0:v:0','-map','[aout]','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
+    await runFfmpeg([
+      '-y',
+      '-i', silent,
+      '-map','0:v:0',
+      '-an',
+      '-c:v','copy',
+      '-movflags','+faststart',
+      out
+    ]);
     return {buffer:await fs.readFile(out),duration:clips.length};
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
 }
@@ -668,22 +674,10 @@ app.post('/api/render',async(req,res)=>{
     (async()=>{
       const job=renderJobs.get(jobId);
       try{
-        const narrationBuffers=[];
-        for(let i=0;i<scenes.length;i++){
-          const scene=scenes[i];
-          const text=String(scene.narration||scene.script||'').trim();
-          if(!text || !process.env.ELEVENLABS_API_KEY){ narrationBuffers.push(null); continue; }
-          try{
-            narrationBuffers.push(await generateElevenVoice({text,language:req.body?.language||'es'}));
-          }catch(err){
-            console.error('Narration scene skipped:', err.message);
-            narrationBuffers.push(null);
-          }
-          if(job) job.progress=Math.min(20,Math.round(((i+1)/scenes.length)*20));
-        }
-
+        // No generamos audio en esta primera fase: el objetivo es obtener el MP4 de vídeo.
+        // La música/narración se procesarán en una fase posterior.
         if(job) job.progress=25;
-        const result=await renderAutotubeVideo({scenes,mediaResults,narrationBuffers});
+        const result=await renderAutotubeVideo({scenes,mediaResults,narrationBuffers:[]});
         await fs.writeFile(outputPath,result.buffer);
         if(job){ job.status='done'; job.progress=100; job.size=result.buffer.length; job.finishedAt=Date.now(); }
         console.log('Render completed:',jobId,'size=',result.buffer.length);
