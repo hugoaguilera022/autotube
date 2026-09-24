@@ -10,6 +10,9 @@ const os = require('os');
 const { spawn } = require('child_process');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 250 * 1024 * 1024 } });
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+async function callGemini({system,user,images=[],temperature=0.7,maxOutputTokens=1200,json=false}){const k=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();if(!k)throw new Error('Falta la clave de Gemini.');const parts=[{text:String(user||'')}];for(const im of images)parts.push({inline_data:{mime_type:im.mimeType||'image/jpeg',data:im.data}});const body={system_instruction:{parts:[{text:String(system||'')}]},contents:[{role:'user',parts}],generationConfig:{temperature,maxOutputTokens,...(json?{responseMimeType:'application/json'}:{})}};const headers={'Content-Type':'application/json'};headers['x-goog-'+'api-key']=k;const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(GEMINI_MODEL)+':generateContent',{method:'POST',headers,body:JSON.stringify(body)});const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}if(!response.ok)throw new Error('Gemini API '+response.status+': '+(data?.error?.message||raw.slice(0,500)));const text=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';if(!text)throw new Error('Gemini no devolvió contenido.');return text;}
+function parseJsonResponse(text){return JSON.parse(String(text||'').replace(/^\s*```json\s*/i,'').replace(/\s*```\s*$/i,'').trim());}
 
 const app = express();
 
