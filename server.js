@@ -60,9 +60,8 @@ async function renderAutotubeVideo({scenes,mediaResults,narrationAudio=[],musicB
       let audioInput=null;
       if(audio){audioInput=path.join(dir,'voice-'+i+'.bin');await fs.writeFile(audioInput,Buffer.isBuffer(audio)?audio:await fs.readFile(audio));const stat=await fs.stat(audioInput);if(!stat.size)throw new Error('La narración de la escena '+(i+1)+' está vacía.');}
       const args=['-y','-stream_loop','-1','-i',input];
-      if(audioInput)args.push('-i',audioInput);
-      args.push('-t',String(duration),'-vf','scale=960:540:force_original_aspect_ratio=increase,crop=960:540,format=yuv420p,fps=20');
-      if(audioInput)args.push('-map','0:v:0','-map','1:a:0','-c:a','aac','-b:a','128k','-shortest'); else args.push('-an');
+      if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
+      args.push('-t',String(duration),'-vf','scale=960:540:force_original_aspect_ratio=increase,crop=960:540,format=yuv420p,fps=20','-map','0:v:0','-map','1:a:0','-c:a','aac','-b:a','128k','-af','apad');
       args.push('-c:v','libx264','-preset','ultrafast','-crf','30','-pix_fmt','yuv420p','-threads','1','-avoid_negative_ts','make_zero',output);
       await runFfmpeg(args);
       const stat=await fs.stat(output);if(!stat.size)throw new Error('FFmpeg creó una escena vacía.');clips.push(output);onProgress(Math.min(80,Math.round(((i+1)/total)*70)+5));
