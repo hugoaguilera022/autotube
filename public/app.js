@@ -162,11 +162,31 @@ async function generateVoiceForScenes(){
 async function renderFinalVideo(){
   const scenes=currentVideoPlan?.scenes||[], mediaResults=currentVideoPlan?.mediaResults||[];
   if(!scenes.length||!mediaResults.length)return alert('Primero genera las escenas y busca los visuales.');
-  const btn=$('#renderVideoBtn'),state=$('#renderState');btn.disabled=true;btn.textContent='Renderizando…';state.textContent='Preparando clips y música…';
+  const btn=$('#renderVideoBtn'),state=$('#renderState');btn.disabled=true;btn.textContent='Renderizando…';state.textContent='Preparando clips…';
   try{
-    const r=await fetch('/api/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenes,mediaResults})});
-    if(!r.ok){let d={};try{d=await r.json()}catch{}throw new Error(d.error||'No se pudo renderizar el vídeo.');}
-    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='autotube-final.mp4';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+    const r=await fetch('/api/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenes,mediaResults,language:currentVideoPlan?.language||'es'})});
+    const d=await r.json().catch(()=>null);
+    if(!r.ok)throw new Error(d?.error||'No se pudo iniciar el render.');
+    const jobId=d?.jobId;
+    if(!jobId)throw new Error('El servidor no devolvió el identificador del render.');
+
+    let finished=null;
+    for(let i=0;i<180;i++){
+      await new Promise(resolve=>setTimeout(resolve,2000));
+      const status=await apiJson('/api/render/'+encodeURIComponent(jobId),{},'el estado del render');
+      if(status.status==='done'){finished=status;break;}
+      if(status.status==='error')throw new Error(status.error||'No se pudo renderizar el vídeo.');
+      const p=Math.max(0,Math.min(99,Number(status.progress)||0));
+      state.textContent=p>0?'Renderizando… '+p+'%':'Renderizando vídeo…';
+      btn.textContent=p>0?'Renderizando '+p+'%':'Renderizando…';
+    }
+    if(!finished)throw new Error('El render está tardando más de lo esperado. Puedes volver a consultar el estado.');
+    state.textContent='Preparando descarga…';
+    const videoResponse=await fetch(finished.downloadUrl);
+    if(!videoResponse.ok)throw new Error('El MP4 terminó de renderizarse, pero no se pudo descargar.');
+    const blob=await videoResponse.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='autotube-final.mp4';document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
     state.textContent='MP4 listo';
   }catch(e){state.textContent='Error';alert(e.message)}
   finally{btn.disabled=false;btn.textContent='🎬 Renderizar MP4'}
