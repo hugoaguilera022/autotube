@@ -13,10 +13,14 @@ let youtubeTokens = null;
 let youtubeProfileCache = null;
 let youtubeLoaded = false;
 
+function cleanEnvValue(value) {
+  return String(value || '').trim().replace(/^(['"])(.*)\\1$/, '$2').trim();
+}
+
 function supabaseEnv() {
   return {
-    url: String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, ''),
-    key: String(process.env.SUPABASE_SECRET_KEY || '').trim()
+    url: cleanEnvValue(process.env.SUPABASE_URL).replace(/\/+$/, ''),
+    key: cleanEnvValue(process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)
   };
 }
 
