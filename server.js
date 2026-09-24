@@ -4,6 +4,7 @@ const path = require('path');
 const { google } = require('googleapis');
 const OpenAI = require('openai');
 const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
@@ -54,19 +55,52 @@ function decryptTokens(value) {
 async function supabaseRequest(path, options = {}) {
   if (!supabaseConfigured()) return null;
   const { url, key } = supabaseEnv();
-  const response = await fetch(url + '/rest/v1/' + path, {
-    ...options,
-    headers: {
-      // New Supabase secret keys (sb_secret_...) are API keys, not JWTs.
-      // They must be sent in the apikey header and never as Bearer tokens.
-      apikey: key,
-      'Content-Type': 'application/json',
-      ...(options.headers || {})
-    }
+
+  // Use the official Supabase server client for secret-key authentication.
+  // It handles the required API-key headers for the current sb_secret_* format.
+  const supabase = createClient(url, key, {
+    auth: { autoRefreshToken: false, persistSession: false }
   });
-  if (!response.ok) throw new Error(`Supabase ${response.status}: ${await response.text()}`);
-  if (response.status === 204) return null;
-  return response.json();
+
+  const match = String(path).match(/^youtube_connections(?:\\?|$)/);
+  if (!match) throw new Error('Ruta Supabase no permitida.');
+
+  const query = String(path).split('?')[1] || '';
+  const params = new URLSearchParams(query);
+  let request = supabase.from('youtube_connections');
+
+  if (params.has('id')) {
+    const value = params.get('id');
+    const id = value.startsWith('eq.') ? value.slice(3) : value;
+    request = request.eq('id', id);
+  }
+  if (params.get('select') === 'id' || params.get('select') === '*') {
+    request = request.select(params.get('select'));
+  } else if (options.method === 'GET') {
+    request = request.select('*');
+  }
+
+  if (options.method === 'GET') {
+    if (params.get('limit')) request = request.limit(Number(params.get('limit')));
+    const result = await request;
+    if (result.error) throw new Error(`Supabase ${result.status || 400}: ${result.error.message}`);
+    return result.data;
+  }
+
+  if (options.method === 'DELETE') {
+    const result = await request.delete();
+    if (result.error) throw new Error(`Supabase ${result.status || 400}: ${result.error.message}`);
+    return result.data;
+  }
+
+  if (options.method === 'POST') {
+    const body = JSON.parse(options.body || '{}');
+    const result = await supabase.from('youtube_connections').upsert(body, { onConflict: 'id', ignoreDuplicates: false });
+    if (result.error) throw new Error(`Supabase ${result.status || 400}: ${result.error.message}`);
+    return result.data;
+  }
+
+  throw new Error('Método Supabase no soportado.');
 }
 
 async function loadYoutubeConnection() {
