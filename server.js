@@ -557,11 +557,12 @@ function runFfmpeg(args){
     p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))));
   });
 }
-async function renderAutotubeVideo({scenes,mediaResults,musicBuffer}){
+async function renderAutotubeVideo({scenes,mediaResults,musicBuffer,narrationBuffers=[]}){
   if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-'));
   try{
     const clips=[];
+    const narrationFiles=[];
     for(let i=0;i<scenes.length;i++){
       const scene=scenes[i], found=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
       const asset=found?.media?.find(x=>x.downloadUrl)?.downloadUrl;
@@ -571,6 +572,7 @@ async function renderAutotubeVideo({scenes,mediaResults,musicBuffer}){
       const duration=Math.max(2,Math.min(120,Number(scene.duration)||8));
       await runFfmpeg(['-y','-stream_loop','-1','-i',input,'-t',String(duration),'-vf',"scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p,fps=30",'-an','-c:v','libx264','-preset','veryfast','-crf','23','-movflags','+faststart',output]);
       clips.push(output);
+      if(narrationBuffers[i]){const nf=path.join(dir,'voice-'+i+'.mp3');await fs.writeFile(nf,narrationBuffers[i]);narrationFiles.push(nf);}
     }
     if(!clips.length)throw new Error('No hay clips seleccionados para renderizar.');
     const list=path.join(dir,'concat.txt');
@@ -585,7 +587,18 @@ async function renderAutotubeVideo({scenes,mediaResults,musicBuffer}){
       await fs.writeFile(audio,music);
     }
     const out=path.join(dir,'autotube-final.mp4');
-    await runFfmpeg(['-y','-i',silent,'-stream_loop','-1','-i',audio,'-map','0:v:0','-map','1:a:0','-shortest','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
+    const inputs=['-i',silent,'-stream_loop','-1','-i',audio];
+    narrationFiles.forEach(f=>inputs.push('-i',f));
+    const maps=['-map','0:v:0'];
+    if(narrationFiles.length){
+      narrationFiles.forEach((_,i)=>{ maps.push('-map',String(i+2)+':a:0'); });
+      maps.push('-filter_complex', narrationFiles.map((_,i)=>'['+(i+2)+':a]adelay='+Math.round((scenes[i]?.startSeconds||scenes.slice(0,i).reduce((n,x)=>n+(Number(x.duration)||8),0))*1000)+'|'+Math.round((scenes[i]?.startSeconds||scenes.slice(0,i).reduce((n,x)=>n+(Number(x.duration)||8),0))*1000)+',apad[a'+i+']').join(';')+';'+narrationFiles.map((_,i)=>'[a'+i+']').join('')+'amix=inputs='+narrationFiles.length+':duration=longest[narr]'),
+      maps.push('-map','[narr]');
+      maps.push('-map','1:a:0');
+      maps.push('-filter_complex','[narr][1:a]amix=inputs=2:duration=longest:weights=1 0.18[aout]');
+      maps.splice(2,0,'-map','[aout]');
+    }else{maps.push('-map','1:a:0');}
+    await runFfmpeg(['-y',...inputs,...maps,'-shortest','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
     return {buffer:await fs.readFile(out),duration:clips.length};
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
 }
@@ -598,6 +611,27 @@ app.post('/api/render',async(req,res)=>{
     res.set({'Content-Type':'video/mp4','Content-Length':String(result.buffer.length),'Content-Disposition':'attachment; filename="autotube-final.mp4"','Cache-Control':'no-store'});
     res.send(result.buffer);
   }catch(err){console.error('Render error:',err);res.status(502).json({error:err.message||'No se pudo renderizar el vídeo.'});}
+});
+
+async function generateElevenVoice({text,voiceId,language='es'}){
+  if(!process.env.ELEVENLABS_API_KEY)throw new Error('ELEVENLABS_API_KEY no está configurada.');
+  const id=String(voiceId||process.env.ELEVENLABS_VOICE_ID||'JBFqnCBsd6RMkjVDRZzb').trim();
+  const response=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+encodeURIComponent(id)+'?output_format=mp3_44100_128',{
+    method:'POST',
+    headers:{'xi-api-key':process.env.ELEVENLABS_API_KEY,'Content-Type':'application/json'},
+    body:JSON.stringify({text:String(text||''),model_id:'eleven_multilingual_v2',language_code:language==='es'?'es':undefined,voice_settings:{stability:0.45,similarity_boost:0.75,style:0.2,use_speaker_boost:true}})
+  });
+  if(!response.ok){const detail=await response.text();throw new Error('ElevenLabs TTS '+response.status+': '+detail.slice(0,500));}
+  return Buffer.from(await response.arrayBuffer());
+}
+app.post('/api/ai/voice',async(req,res)=>{
+  try{
+    const {text='',language='es',voiceId=''}=req.body||{};
+    if(!String(text).trim())return res.status(400).json({error:'No hay texto para narrar.'});
+    const audio=await generateElevenVoice({text,language,voiceId});
+    res.set({'Content-Type':'audio/mpeg','Content-Length':String(audio.length),'Content-Disposition':'inline; filename="autotube-voice.mp3"','Cache-Control':'no-store'});
+    res.send(audio);
+  }catch(err){console.error('ElevenLabs voice error:',err);res.status(502).json({error:err.message||'No se pudo generar la voz.'});}
 });
 
 app.post('/api/ai/music', async (req, res) => {
