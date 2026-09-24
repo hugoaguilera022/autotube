@@ -39,6 +39,59 @@ app.post('/api/ai/outline',async(req,res)=>{const{topic,language='es',duration='
 
 app.post('/api/ai/production-plan',async(req,res)=>{try{const{topic,language='es',duration='8',title='',outline=[],visualIdeas=[],visualReferenceAnalysis=null}=req.body||{};if(!topic)return res.status(400).json({error:'Indica un tema.'});const sceneCount=Math.max(4,Math.min(12,Math.round(Number(duration)/2)));const content=await callGemini({system:'Eres director de producción audiovisual de YouTube. Puedes trabajar con cualquier género, tema o formato de vídeo. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. El género y contenido deben determinarse por el tema y por las referencias proporcionadas; no presupongas naturaleza, paisajes, relajación ni bienestar. Cada escena debe tener number, title, narration, visualPrompt, searchQuery, duration y transition. Si existe visualReferenceAnalysis, úsalo como guía principal de ESTILO VISUAL: paisaje y entorno, iluminación, hora del día, paleta, composición, escala de planos, movimiento de cámara, velocidad/ritmo, presencia o ausencia de personas, textura, profundidad y atmósfera. Mantén esas características de forma consistente entre escenas. Si existe una referencia de YouTube, úsala solo para rasgos generales de formato y temática. NO copies escenas, textos, personajes, encuadres concretos ni contenido identificable. Genera escenas y búsquedas originales que reproduzcan el tipo de experiencia visual, no el vídeo fuente. En visualPrompt describe explícitamente los rasgos de estilo que deben conservarse. En searchQuery incluye las palabras necesarias para encontrar vídeos reales compatibles con ese estilo, además del contenido de la escena. Crea contenido original.',user:JSON.stringify({topic,language,duration,title,outline,visualIdeas,visualReferenceAnalysis,sceneCount,stylePriority:'Cuando haya análisis visual, la similitud buscada es de características audiovisuales generales (ambiente, luz, composición, movimiento y ritmo), no de contenido ni de planos concretos.'}),temperature:0.75,maxOutputTokens:2600,json:true});return res.json(parseJsonResponse(content))}catch(err){console.error('Production plan error:',err);const fallbackCount=Math.max(4,Math.min(12,Math.round(Number(req.body?.duration||8)/2))),fallbackTopic=req.body?.topic||'el tema del vídeo',fallbackScenes=Array.from({length:fallbackCount},(_,i)=>({number:i+1,title:i===0?'Introducción':'Desarrollo · escena '+(i+1),narration:i===0?'Presentación del tema y promesa principal del vídeo.':'Desarrollo del contenido con una explicación clara y visual.',visualPrompt:'Realistic cinematic footage about '+fallbackTopic+', scene '+(i+1)+', natural light, detailed, 16:9, original composition',searchQuery:fallbackTopic,duration:Math.round((Number(req.body?.duration||8)*60)/fallbackCount),transition:'Fundido suave'}));res.json({demo:true,fallback:true,title:req.body?.title||'Vídeo sobre '+fallbackTopic,musicMood:'Ambient cinematográfico',voiceStyle:'Natural y cercana',scenes:fallbackScenes,warning:'La API de IA no respondió. Se ha creado un plan local para que puedas continuar.'})}});
 
+
+function pickElevenVoiceId(voices){
+  const configured=String(process.env.ELEVENLABS_VOICE_ID||'').trim();
+  if(configured)return configured;
+  const list=Array.isArray(voices)?voices:[];
+  return String(list.find(v=>v?.voice_id)?.voice_id||'').trim();
+}
+async function getElevenVoiceId(){
+  const key=String(process.env.ELEVENLABS_API_KEY||'').trim();
+  if(!key)throw new Error('Falta ELEVENLABS_API_KEY.');
+  const configured=String(process.env.ELEVENLABS_VOICE_ID||'').trim();
+  if(configured)return configured;
+  const r=await fetch('https://api.elevenlabs.io/v1/voices',{headers:{'xi-api-key':key}});
+  const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
+  if(!r.ok)throw new Error('ElevenLabs voices '+r.status+': '+(d?.detail?.message||d?.detail||raw.slice(0,300)));
+  const id=pickElevenVoiceId(d?.voices);
+  if(!id)throw new Error('ElevenLabs no devolvió ninguna voz disponible.');
+  return id;
+}
+app.post('/api/ai/voice',async(req,res)=>{
+  try{
+    const text=String(req.body?.text||'').trim();
+    if(!text)return res.status(400).json({error:'La narración está vacía.'});
+    const key=String(process.env.ELEVENLABS_API_KEY||'').trim();
+    if(!key)return res.status(503).json({error:'Falta ELEVENLABS_API_KEY.'});
+    const voiceId=await getElevenVoiceId();
+    const r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+encodeURIComponent(voiceId)+'?output_format=mp3_44100_128',{
+      method:'POST',
+      headers:{'xi-api-key':key,'Content-Type':'application/json','Accept':'audio/mpeg'},
+      body:JSON.stringify({text,model_id:'eleven_multilingual_v2'})
+    });
+    const audio=Buffer.from(await r.arrayBuffer());
+    if(!r.ok)throw new Error('ElevenLabs TTS '+r.status+': '+audio.toString('utf8').slice(0,500));
+    if(!audio.length)throw new Error('ElevenLabs devolvió un audio vacío.');
+    res.set('Content-Type','audio/mpeg');res.set('Content-Length',String(audio.length));res.send(audio);
+  }catch(err){console.error('Voice generation error:',err);res.status(502).json({error:err.message||'No se pudo generar la narración.'})}
+});
+app.post('/api/ai/music',async(req,res)=>{
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-music-'));
+  try{
+    const duration=Math.max(5,Math.min(300,Number(req.body?.durationSeconds)||60));
+    const output=path.join(dir,'music.wav');
+    const mood=String(req.body?.mood||'ambient').replace(/[\r\n"]/g,' ').slice(0,120);
+    const base=220+(Math.abs([...mood].reduce((n,ch)=>n+ch.charCodeAt(0),0))%180);
+    const f1=base,f2=Math.round(base*1.25),f3=Math.round(base*1.5);
+    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i',`sine=frequency=${f1}:sample_rate=44100:duration=${duration}`,'-f','lavfi','-i',`sine=frequency=${f2}:sample_rate=44100:duration=${duration}`,'-f','lavfi','-i',`sine=frequency=${f3}:sample_rate=44100:duration=${duration}`,'-filter_complex','[0:a]volume=0.08[a0];[1:a]volume=0.045[a1];[2:a]volume=0.025[a2];[a0][a1][a2]amix=inputs=3:duration=longest,aresample=44100,afade=t=in:st=0:d=3,afade=t=out:st='+(Math.max(3,duration-3))+':d=3,apad[a]','-map','[a]','-t',String(duration),'-ac','2','-ar','44100','-c:a','pcm_s16le',output]);
+    const audio=await fs.readFile(output);
+    if(!audio.length)throw new Error('La música generada está vacía.');
+    res.set('Content-Type','audio/wav');res.set('Content-Length',String(audio.length));res.send(audio);
+  }catch(err){console.error('Music generation error:',err);res.status(502).json({error:err.message||'No se pudo generar la música.'})}
+  finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+});
+
 async function searchPexels(query){if(!process.env.PEXELS_API_KEY)return[];const r=await fetch('https://api.pexels.com/v1/videos/search?'+new URLSearchParams({query,orientation:'landscape',size:'medium',locale:'es-ES',per_page:'6'}),{headers:{Authorization:process.env.PEXELS_API_KEY}});if(!r.ok)throw new Error('Pexels API '+r.status);const d=await r.json();return(d.videos||[]).map(v=>({provider:'Pexels',id:v.id,title:'Vídeo Pexels',duration:v.duration,thumbnail:v.image,url:v.url,downloadUrl:(v.video_files||[]).filter(x=>x.link).sort((a,b)=>{const sa=(a.width||0)<=1280?0:1,sb=(b.width||0)<=1280?0:1;if(sa!==sb)return sa-sb;return Math.abs((a.width||0)-1280)-Math.abs((b.width||0)-1280)})[0]?.link||''})).filter(x=>x.downloadUrl)}
 async function searchPixabay(query){if(!process.env.PIXABAY_API_KEY)return[];const r=await fetch('https://pixabay.com/api/videos/?'+new URLSearchParams({key:process.env.PIXABAY_API_KEY,q:query,lang:'es',video_type:'film',safesearch:'true',order:'popular',per_page:'6'}));if(!r.ok)throw new Error('Pixabay API '+r.status);const d=await r.json();return(d.hits||[]).map(v=>({provider:'Pixabay',id:v.id,title:'Vídeo Pixabay',duration:v.duration,thumbnail:v.videos?.medium?.thumbnail||v.videos?.small?.thumbnail||'',url:v.pageURL,downloadUrl:v.videos?.medium?.url||v.videos?.small?.url||''})).filter(x=>x.downloadUrl)}
 app.post('/api/media/search',async(req,res)=>{try{const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];if(!scenes.length)return res.status(400).json({error:'No hay escenas para buscar.'});const results=[];for(const scene of scenes.slice(0,12)){const query=String(scene.searchQuery||scene.visualPrompt||scene.title||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim().slice(0,100);const[pexels,pixabay]=await Promise.allSettled([searchPexels(query),searchPixabay(query)]);results.push({number:scene.number,title:scene.title,query,media:[...(pexels.status==='fulfilled'?pexels.value:[]),...(pixabay.status==='fulfilled'?pixabay.value:[])]})}res.json({ok:true,results,credits:{pexels:'Vídeos proporcionados por Pexels',pixabay:'Vídeos proporcionados por Pixabay'}})}catch(err){res.status(502).json({error:err.message||'No se pudieron buscar visuales.'})}});
