@@ -5,6 +5,23 @@ const { google } = require('googleapis');
 const OpenAI = require('openai');
 
 const app = express();
+
+// MVP: keep the YouTube OAuth tokens in memory. For production, persist encrypted
+// tokens in a database keyed to the authenticated AutoTube user.
+let youtubeTokens = null;
+
+async function getYoutubeProfile() {
+  if (!youtubeTokens) return null;
+  const auth = youtubeClient();
+  auth.setCredentials(youtubeTokens);
+  const youtube = google.youtube({ version: 'v3', auth });
+  const response = await youtube.channels.list({
+    part: 'snippet,contentDetails,statistics',
+    mine: true
+  });
+  return response.data.items?.[0] || null;
+}
+
 const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -44,13 +61,42 @@ app.get('/api/youtube/callback', async (req, res) => {
   try {
     if (!req.query.code) return res.status(400).send('Falta el código OAuth.');
     const { tokens } = await youtubeClient().getToken(req.query.code);
-    // Production TODO: persist encrypted tokens in a database keyed to the authenticated AutoTube user.
+    youtubeTokens = tokens;
+    await getYoutubeProfile();
     res.send(`<script>window.opener?.postMessage({type:'youtube_connected'}, '*'); window.close();</script><p>YouTube conectado. Puedes cerrar esta ventana.</p>`);
     console.log('YouTube OAuth completed. Token received:', Boolean(tokens.access_token));
   } catch (err) {
     console.error(err);
     res.status(500).send('No se pudo completar la conexión con YouTube.');
   }
+});
+
+app.get('/api/youtube/profile', async (_req, res) => {
+  try {
+    const profile = await getYoutubeProfile();
+    if (!profile) return res.status(404).json({ connected: false });
+    const snippet = profile.snippet || {};
+    const statistics = profile.statistics || {};
+    res.json({
+      connected: true,
+      channelId: profile.id,
+      title: snippet.title || 'Canal de YouTube',
+      description: snippet.description || '',
+      handle: snippet.customUrl || '',
+      avatar: snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || '',
+      subscribers: statistics.subscriberCount || '0',
+      videos: statistics.videoCount || '0',
+      views: statistics.viewCount || '0'
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(401).json({ connected: false, error: 'No se pudo obtener el perfil de YouTube.' });
+  }
+});
+
+app.post('/api/youtube/disconnect', (_req, res) => {
+  youtubeTokens = null;
+  res.json({ connected: false });
 });
 
 app.post('/api/ai/outline', async (req, res) => {
