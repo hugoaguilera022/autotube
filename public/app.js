@@ -46,22 +46,47 @@ $('#youtubeRefresh').onclick=loadYoutubeProfile;
 $('#youtubeDisconnect').onclick=async()=>{if(!confirm('¿Desconectar este canal de YouTube?'))return;await fetch('/api/youtube/disconnect',{method:'POST'});loadYoutubeProfile();};
 window.addEventListener('message',e=>{if(e.data?.type==='youtube_connected'){alert('YouTube conectado correctamente.');loadYoutubeProfile();}});
 loadYoutubeProfile();
+async function apiJson(url, options={}, label='solicitud'){
+  let r;
+  try{ r=await fetch(url, options); }
+  catch(e){ throw new Error('No se pudo conectar con '+label+'.'); }
+  const raw=await r.text();
+  let d=null;
+  try{ d=raw ? JSON.parse(raw) : null; }
+  catch(e){ throw new Error('Respuesta no válida del servidor ('+r.status+').'); }
+  if(!r.ok) throw new Error(d?.error || 'Error del servidor ('+r.status+').');
+  return d;
+}
+function validateYoutubeReference(value){
+  const raw=String(value||'').trim();
+  if(!raw)return '';
+  try{
+    const u=new URL(raw);
+    const host=u.hostname.toLowerCase();
+    const youtube=host==='youtu.be'||host==='youtube.com'||host==='www.youtube.com'||host.endsWith('.youtube.com');
+    if(!youtube) throw new Error('La URL no pertenece a YouTube.');
+    const watch=host.endsWith('youtube.com')&&u.pathname==='/watch'&&u.searchParams.get('v');
+    const shorts=host.endsWith('youtube.com')&&u.pathname.startsWith('/shorts/');
+    const embed=host.endsWith('youtube.com')&&u.pathname.startsWith('/embed/');
+    const short=host==='youtu.be'&&u.pathname.length>1;
+    if(!(watch||shorts||embed||short)) throw new Error('Introduce una URL de vídeo de YouTube válida.');
+    return u.href;
+  }catch(e){
+    if(e?.message && !/Invalid URL/i.test(e.message)) throw e;
+    throw new Error('La URL de referencia de YouTube no es válida.');
+  }
+}
 async function analyzeUploadedReference(file){
   if(!file)return null;
   const form=new FormData();
   form.append('video',file);
-  const r=await fetch('/api/reference/visual-analysis',{method:'POST',body:form});
-  const d=await r.json();
-  if(!r.ok)throw new Error(d.error||'No se pudo analizar visualmente el vídeo.');
-  return d.analysis||null;
+  const d=await apiJson('/api/reference/visual-analysis',{method:'POST',body:form},'el análisis visual');
+  return d?.analysis||null;
 }
 async function analyzeReferenceForCreation(reference){
-  const value=String(reference||'').trim();
+  const value=validateYoutubeReference(reference);
   if(!value)return null;
-  const r=await fetch('/api/youtube/reference',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:value})});
-  const d=await r.json();
-  if(!r.ok)throw new Error(d.error||'No se pudo analizar la referencia.');
-  return d;
+  return await apiJson('/api/youtube/reference',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:value})},'el análisis de YouTube');
 }
 
 $('#generateBtn').onclick=async()=>{
