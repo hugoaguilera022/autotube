@@ -530,30 +530,33 @@ app.post('/api/ai/production-plan', async (req, res) => {
 });
 
 
-async function generateElevenMusic({ prompt, durationSeconds = 180 }) {
-  if (!process.env.ELEVENLABS_API_KEY) {
-    throw new Error('ELEVENLABS_API_KEY no está configurada.');
-  }
+async function generateFreeAmbientMusic({ durationSeconds = 180, mood = 'ambient cinematográfico relajante' } = {}) {
   const seconds = Math.max(3, Math.min(300, Number(durationSeconds) || 180));
-  const response = await fetch('https://api.elevenlabs.io/v1/music', {
-    method: 'POST',
-    headers: {
-      'xi-api-key': process.env.ELEVENLABS_API_KEY,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      prompt: String(prompt || 'Instrumental ambient cinematic background music for a calm YouTube video, no vocals'),
-      music_length_ms: Math.round(seconds * 1000),
-      model_id: 'music_v2_5',
-      force_instrumental: true,
-      output_format: 'mp3_48000_192'
-    })
-  });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error('ElevenLabs Music API ' + response.status + ': ' + detail.slice(0, 500));
+  const output = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'autotube-music-')), 'ambient.wav');
+  const safeMood = String(mood || '').slice(0, 120);
+  try {
+    // Música procedural generada localmente con FFmpeg: no requiere API externa ni licencia musical.
+    // Usa drones suaves, capas armónicas, modulación lenta y fade in/out para acompañar narración.
+    const filter = [
+      'sine=f=110:d=' + seconds + ',volume=0.075,tremolo=f=0.08:d=0.35[a]',
+      'sine=f=164.81:d=' + seconds + ',volume=0.045,tremolo=f=0.055:d=0.30[b]',
+      'sine=f=220:d=' + seconds + ',volume=0.028,tremolo=f=0.045:d=0.25[c]',
+      'sine=f=55:d=' + seconds + ',volume=0.018,tremolo=f=0.035:d=0.20[d]',
+      '[a][b][c][d]amix=inputs=4:duration=longest:normalize=0,lowpass=f=1200,afade=t=in:st=0:d=4,afade=t=out:st=' + Math.max(0, seconds - 6) + ':d=6,volume=0.8[aout]'
+    ].join(';');
+    await runFfmpeg([
+      '-y',
+      '-filter_complex', filter,
+      '-map', '[aout]',
+      '-ar', '44100',
+      '-ac', '2',
+      '-c:a', 'pcm_s16le',
+      output
+    ]);
+    return Buffer.from(await fs.readFile(output));
+  } finally {
+    await fs.rm(path.dirname(output), { recursive: true, force: true }).catch(() => {});
   }
-  return Buffer.from(await response.arrayBuffer());
 }
 
 function normalizeSearchQuery(value){
@@ -634,7 +637,7 @@ async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musi
     const music=path.join(dir,'music.mp3');
     if(musicBuffer)await fs.writeFile(music,musicBuffer);else{
       const total=Math.min(300,Math.max(30,scenes.reduce((n,x)=>n+(Number(x.duration)||8),0)));
-      await fs.writeFile(music,await generateElevenMusic({prompt:'Instrumental ambient cinematic background music, calm, immersive, subtle evolution, no vocals.',durationSeconds:total}));
+      await fs.writeFile(music,await generateFreeAmbientMusic({durationSeconds:total}));
     }
     const inputs=['-i',silent,'-stream_loop','-1','-i',music],filters=[],voiceLabels=[];
     voiceFiles.forEach((v,i)=>{inputs.push('-i',v.file);const delay=Math.round(v.delay*1000);filters.push('['+(i+2)+':a]adelay='+delay+'|'+delay+'[v'+i+']');voiceLabels.push('[v'+i+']');});
@@ -679,28 +682,18 @@ app.post('/api/ai/voice',async(req,res)=>{
 
 app.post('/api/ai/music', async (req, res) => {
   try {
-    const { mood = 'ambient cinematográfico relajante', topic = 'naturaleza y relajación', durationSeconds = 180 } = req.body || {};
-    if (!process.env.ELEVENLABS_API_KEY) {
-      return res.status(503).json({ error: 'ELEVENLABS_API_KEY no está configurada en Render.' });
-    }
-    const prompt = [
-      'Instrumental background music for an original YouTube video.',
-      'Mood: ' + mood + '.',
-      'Topic: ' + topic + '.',
-      'Cinematic, calm, immersive, subtle evolution, soft textures, no vocals, no spoken words.',
-      'Designed to sit underneath narration without masking speech.'
-    ].join(' ');
-    const audio = await generateElevenMusic({ prompt, durationSeconds });
+    const { mood = 'ambient cinematográfico relajante', durationSeconds = 180 } = req.body || {};
+    const audio = await generateFreeAmbientMusic({ durationSeconds, mood });
     res.set({
-      'Content-Type': 'audio/mpeg',
+      'Content-Type': 'audio/wav',
       'Content-Length': String(audio.length),
-      'Content-Disposition': 'inline; filename="autotube-music.mp3"',
+      'Content-Disposition': 'inline; filename="autotube-free-music.wav"',
       'Cache-Control': 'no-store'
     });
     res.send(audio);
   } catch (err) {
-    console.error('ElevenLabs music error:', err);
-    res.status(502).json({ error: err.message || 'No se pudo generar la música.' });
+    console.error('Free music generation error:', err);
+    res.status(502).json({ error: err.message || 'No se pudo generar la música gratuita.' });
   }
 });
 
