@@ -53,7 +53,7 @@ async function apiJson(url, options={}, label='solicitud'){
   const raw=await r.text();
   let d=null;
   try{ d=raw ? JSON.parse(raw) : null; }
-  catch(e){ throw new Error('Respuesta no válida del servidor ('+r.status+').'); }
+  catch(e){ throw new Error('Respuesta no válida del servidor ('+r.status+') en '+url+'.'); }
   if(!r.ok) throw new Error(d?.error || 'Error del servidor ('+r.status+').');
   return d;
 }
