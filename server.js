@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const { google } = require('googleapis');
-const OpenAI = require('openai');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const ffmpegPath = require('ffmpeg-static');
