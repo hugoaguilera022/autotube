@@ -235,16 +235,22 @@ app.get('/api/youtube/callback', async (req, res) => {
       console.error('YouTube conectado, pero no se pudo guardar en Supabase:', err.message);
     }
 
-    const appOrigin = (process.env.APP_URL || '').replace(/\/+$/, '');
-    if (appOrigin) {
-      const safeOrigin = JSON.stringify(appOrigin);
-      const persistenceNote = persistenceError
-        ? '<p style="font-family:system-ui">La cuenta de YouTube está conectada. La persistencia está pendiente de Supabase.</p>'
-        : '';
-      res.send('<script>if(window.opener){window.opener.postMessage({type:"youtube_connected"},' + safeOrigin + ');window.close();}else{window.location.href=' + safeOrigin + '+"/";}</script><p>YouTube conectado. Volviendo a AutoTube…</p>' + persistenceNote);
-    } else {
-      res.send('<p>YouTube conectado correctamente.</p>' + (persistenceError ? '<p>La persistencia en Supabase necesita revisión.</p>' : ''));
-    }
+    // Always return to the actual AutoTube origin. APP_URL is optional; when Render is
+    // behind a proxy, use the forwarded protocol + host so OAuth never gets stuck on callback.
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const protocol = forwardedProto || req.protocol || 'https';
+    const host = req.get('host');
+    const appOrigin = (process.env.APP_URL || (host ? `${protocol}://${host}` : '')).replace(/\/+$/, '');
+    const safeOrigin = JSON.stringify(appOrigin);
+    const persistenceNote = persistenceError
+      ? '<p style="font-family:system-ui">La cuenta de YouTube está conectada. La persistencia está pendiente de Supabase.</p>'
+      : '';
+    res.send('<script>' +
+      'const target=' + safeOrigin + '+"/";' +
+      'if(window.opener){window.opener.postMessage({type:"youtube_connected"},' + safeOrigin + ');window.opener.location.href=target;window.close();}' +
+      'else{window.location.replace(target);}' +
+      '</script><p style="font-family:system-ui">YouTube conectado. Volviendo a AutoTube…</p>' +
+      persistenceNote);
     console.log('YouTube OAuth completed. Token received:', Boolean(tokens.access_token), 'Persisted:', !persistenceError);
   } catch (err) {
     console.error('YouTube OAuth callback error:', err);
