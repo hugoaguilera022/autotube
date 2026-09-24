@@ -5,8 +5,8 @@
   "description": "AutoTube - AI-assisted YouTube content automation dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "node -r ./render-route.js server.js",
-    "dev": "node -r ./render-route.js --watch server.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
   "engines": {
     "node": "22.x"
