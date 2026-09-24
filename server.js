@@ -767,6 +767,10 @@ app.post('/api/project', (req, res) => {
   res.json(project);
 });
 
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
+});
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 async function verifySupabaseConnection() {
   if (!supabaseConfigured()) {
