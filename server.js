@@ -52,50 +52,51 @@ function decryptTokens(value) {
   return JSON.parse(Buffer.concat([decipher.update(Buffer.from(data64, 'base64')), decipher.final()]).toString('utf8'));
 }
 
-async function supabaseRequest(path, options = {}) {
+async function supabaseRequest(route, options = {}) {
   if (!supabaseConfigured()) return null;
   const { url, key } = supabaseEnv();
 
-  // Use the official Supabase server client for secret-key authentication.
-  // It handles the required API-key headers for the current sb_secret_* format.
   const supabase = createClient(url, key, {
-    auth: { autoRefreshToken: false, persistSession: false }
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false
+    }
   });
 
-  const match = String(path).match(/^youtube_connections(?:\\?|$)/);
-  if (!match) throw new Error('Ruta Supabase no permitida.');
-
-  const query = String(path).split('?')[1] || '';
+  const path = String(route);
+  const query = path.includes('?') ? path.slice(path.indexOf('?') + 1) : '';
   const params = new URLSearchParams(query);
-  let request = supabase.from('youtube_connections');
 
-  if (params.has('id')) {
-    const value = params.get('id');
-    const id = value.startsWith('eq.') ? value.slice(3) : value;
-    request = request.eq('id', id);
-  }
-  if (params.get('select') === 'id' || params.get('select') === '*') {
-    request = request.select(params.get('select'));
-  } else if (options.method === 'GET') {
-    request = request.select('*');
-  }
-
-  if (options.method === 'GET') {
-    if (params.get('limit')) request = request.limit(Number(params.get('limit')));
+  if (path.startsWith('youtube_connections') && options.method === 'GET') {
+    let request = supabase.from('youtube_connections').select(params.get('select') || '*');
+    if (params.has('id')) {
+      const rawId = params.get('id');
+      request = request.eq('id', rawId.startsWith('eq.') ? rawId.slice(3) : rawId);
+    }
+    if (params.has('limit')) request = request.limit(Number(params.get('limit')));
     const result = await request;
     if (result.error) throw new Error(`Supabase ${result.status || 400}: ${result.error.message}`);
     return result.data;
   }
 
-  if (options.method === 'DELETE') {
-    const result = await request.delete();
+  if (path.startsWith('youtube_connections') && options.method === 'DELETE') {
+    let request = supabase.from('youtube_connections').delete();
+    if (params.has('id')) {
+      const rawId = params.get('id');
+      request = request.eq('id', rawId.startsWith('eq.') ? rawId.slice(3) : rawId);
+    }
+    const result = await request;
     if (result.error) throw new Error(`Supabase ${result.status || 400}: ${result.error.message}`);
     return result.data;
   }
 
-  if (options.method === 'POST') {
+  if (path.startsWith('youtube_connections') && options.method === 'POST') {
     const body = JSON.parse(options.body || '{}');
-    const result = await supabase.from('youtube_connections').upsert(body, { onConflict: 'id', ignoreDuplicates: false });
+    const result = await supabase.from('youtube_connections').upsert(body, {
+      onConflict: 'id',
+      ignoreDuplicates: false
+    });
     if (result.error) throw new Error(`Supabase ${result.status || 400}: ${result.error.message}`);
     return result.data;
   }
@@ -172,6 +173,34 @@ app.get('/api/health', (_req, res) => {
     elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
     supabase: supabaseConfigured()
   }});
+});
+
+app.get('/api/supabase/status', async (_req, res) => {
+  if (!supabaseConfigured()) {
+    return res.status(503).json({
+      configured: false,
+      error: 'Faltan SUPABASE_URL, SUPABASE_SECRET_KEY y/o YOUTUBE_TOKEN_ENCRYPTION_KEY.'
+    });
+  }
+  const { url, key } = supabaseEnv();
+  try {
+    const rows = await supabaseRequest('youtube_connections?select=id&limit=1', { method: 'GET' });
+    res.json({
+      configured: true,
+      ok: true,
+      host: new URL(url).host,
+      keyType: key.startsWith('sb_secret_') ? 'secret' : key.startsWith('sb_publishable_') ? 'publishable' : 'legacy/unknown',
+      rows: rows?.length || 0
+    });
+  } catch (err) {
+    res.status(502).json({
+      configured: true,
+      ok: false,
+      host: new URL(url).host,
+      keyType: key.startsWith('sb_secret_') ? 'secret' : key.startsWith('sb_publishable_') ? 'publishable' : 'legacy/unknown',
+      error: err.message
+    });
+  }
 });
 
 app.get('/api/youtube/auth', (_req, res) => {
