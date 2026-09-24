@@ -5,6 +5,10 @@ const { google } = require('googleapis');
 const OpenAI = require('openai');
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
+const ffmpegPath = require('ffmpeg-static');
+const fs = require('fs/promises');
+const os = require('os');
+const { spawn } = require('child_process');
 
 const app = express();
 
@@ -538,6 +542,62 @@ app.post('/api/media/search',async(req,res)=>{
     }
     res.json({ok:true,results,credits:{pexels:'Vídeos proporcionados por Pexels',pixabay:'Vídeos proporcionados por Pixabay'}});
   }catch(err){console.error('Media search error:',err);res.status(502).json({error:err.message||'No se pudieron buscar visuales.'});}
+});
+
+async function downloadToFile(url,file){
+  const r=await fetch(url);
+  if(!r.ok)throw new Error('No se pudo descargar el recurso ('+r.status+').');
+  const buf=Buffer.from(await r.arrayBuffer());
+  await fs.writeFile(file,buf);
+}
+function runFfmpeg(args){
+  return new Promise((resolve,reject)=>{
+    const p=spawn(ffmpegPath,args,{stdio:['ignore','ignore','pipe']});
+    let err='';p.stderr.on('data',d=>{err+=d.toString();if(err.length>12000)err=err.slice(-12000)});
+    p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))));
+  });
+}
+async function renderAutotubeVideo({scenes,mediaResults,musicBuffer}){
+  if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-'));
+  try{
+    const clips=[];
+    for(let i=0;i<scenes.length;i++){
+      const scene=scenes[i], found=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
+      const asset=found?.media?.find(x=>x.downloadUrl)?.downloadUrl;
+      if(!asset)continue;
+      const input=path.join(dir,'in-'+i+'.mp4'), output=path.join(dir,'scene-'+i+'.mp4');
+      await downloadToFile(asset,input);
+      const duration=Math.max(2,Math.min(120,Number(scene.duration)||8));
+      await runFfmpeg(['-y','-stream_loop','-1','-i',input,'-t',String(duration),'-vf',"scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p,fps=30",'-an','-c:v','libx264','-preset','veryfast','-crf','23','-movflags','+faststart',output]);
+      clips.push(output);
+    }
+    if(!clips.length)throw new Error('No hay clips seleccionados para renderizar.');
+    const list=path.join(dir,'concat.txt');
+    await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
+    const silent=path.join(dir,'silent.mp4');
+    await runFfmpeg(['-y','-f','concat','-safe','0','-i',list,'-c','copy',silent]);
+    let audio=path.join(dir,'music.mp3');
+    if(musicBuffer)await fs.writeFile(audio,musicBuffer);
+    else{
+      const prompt='Instrumental ambient cinematic background music, calm and immersive, subtle evolution, no vocals, for an original YouTube relaxation video.';
+      const music=await generateElevenMusic({prompt,durationSeconds:Math.min(300,Math.max(30,scenes.reduce((n,x)=>n+(Number(x.duration)||8),0)))});
+      await fs.writeFile(audio,music);
+    }
+    const out=path.join(dir,'autotube-final.mp4');
+    await runFfmpeg(['-y','-i',silent,'-stream_loop','-1','-i',audio,'-map','0:v:0','-map','1:a:0','-shortest','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
+    return {buffer:await fs.readFile(out),duration:clips.length};
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+}
+app.post('/api/render',async(req,res)=>{
+  try{
+    const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];
+    const mediaResults=Array.isArray(req.body?.mediaResults)?req.body.mediaResults:[];
+    if(!scenes.length)return res.status(400).json({error:'No hay escenas para renderizar.'});
+    const result=await renderAutotubeVideo({scenes,mediaResults});
+    res.set({'Content-Type':'video/mp4','Content-Length':String(result.buffer.length),'Content-Disposition':'attachment; filename="autotube-final.mp4"','Cache-Control':'no-store'});
+    res.send(result.buffer);
+  }catch(err){console.error('Render error:',err);res.status(502).json({error:err.message||'No se pudo renderizar el vídeo.'});}
 });
 
 app.post('/api/ai/music', async (req, res) => {
