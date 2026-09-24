@@ -3,7 +3,24 @@ const views = [...document.querySelectorAll('.view')];
 function go(name){views.forEach(v=>v.classList.toggle('active-view',v.id===name));document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===name));const titles={dashboard:'Tu contenido, automatizado.',create:'Crear un vídeo con IA.',projects:'Tus proyectos.',automation:'Automatiza tu canal.',connections:'Conexiones & API'};$('#pageTitle').textContent=titles[name]||'AutoTube';}
 document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>go(b.dataset.view));document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
 async function health(){try{const r=await fetch('/api/health');const d=await r.json();$('#serverStatus').textContent='Servidor conectado';$('#openaiBadge').textContent=d.configured.openai?'Conectado':'Revisar'}catch{$('#serverStatus').textContent='Servidor no disponible'}}health();
-async function connectYoutube(){try{const r=await fetch('/api/youtube/auth');const d=await r.json();if(!r.ok)return alert(d.error);window.open(d.url,'youtube_oauth','width=620,height=760');}catch(e){alert('No se pudo iniciar la conexión con YouTube.')}}
+async function connectYoutube(){
+  // Open the popup immediately from the user click so Safari/Chrome do not block it.
+  const popup = window.open('about:blank','youtube_oauth','width=620,height=760');
+  try{
+    const r=await fetch('/api/youtube/auth');
+    const d=await r.json();
+    if(!r.ok){
+      if(popup) popup.close();
+      return alert(d.error || 'No se pudo iniciar la conexión con YouTube.');
+    }
+    if(!popup) return alert('El navegador ha bloqueado la ventana de YouTube. Permite ventanas emergentes para AutoTube y vuelve a pulsar Conectar YouTube.');
+    popup.location.href=d.url;
+    popup.focus();
+  }catch(e){
+    if(popup) popup.close();
+    alert('No se pudo iniciar la conexión con YouTube. Revisa que el servidor esté activo.');
+  }
+}
 $('#youtubeBtn').onclick=connectYoutube;$('#youtubeConnect2').onclick=connectYoutube;
 $('#youtubeConnected').onclick=()=>go('connections');
 function updateYoutubeGlobalStatus(connected, profile={}) {
