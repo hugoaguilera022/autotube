@@ -377,6 +377,60 @@ app.post('/api/ai/production-plan', async (req, res) => {
   }
 });
 
+
+async function generateElevenMusic({ prompt, durationSeconds = 180 }) {
+  if (!process.env.ELEVENLABS_API_KEY) {
+    throw new Error('ELEVENLABS_API_KEY no está configurada.');
+  }
+  const seconds = Math.max(3, Math.min(300, Number(durationSeconds) || 180));
+  const response = await fetch('https://api.elevenlabs.io/v1/music', {
+    method: 'POST',
+    headers: {
+      'xi-api-key': process.env.ELEVENLABS_API_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      prompt: String(prompt || 'Instrumental ambient cinematic background music for a calm YouTube video, no vocals'),
+      music_length_ms: Math.round(seconds * 1000),
+      model_id: 'music_v2_5',
+      force_instrumental: true,
+      output_format: 'mp3_48000_192'
+    })
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error('ElevenLabs Music API ' + response.status + ': ' + detail.slice(0, 500));
+  }
+  return Buffer.from(await response.arrayBuffer());
+}
+
+app.post('/api/ai/music', async (req, res) => {
+  try {
+    const { mood = 'ambient cinematográfico relajante', topic = 'naturaleza y relajación', durationSeconds = 180 } = req.body || {};
+    if (!process.env.ELEVENLABS_API_KEY) {
+      return res.status(503).json({ error: 'ELEVENLABS_API_KEY no está configurada en Render.' });
+    }
+    const prompt = [
+      'Instrumental background music for an original YouTube video.',
+      'Mood: ' + mood + '.',
+      'Topic: ' + topic + '.',
+      'Cinematic, calm, immersive, subtle evolution, soft textures, no vocals, no spoken words.',
+      'Designed to sit underneath narration without masking speech.'
+    ].join(' ');
+    const audio = await generateElevenMusic({ prompt, durationSeconds });
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': String(audio.length),
+      'Content-Disposition': 'inline; filename="autotube-music.mp3"',
+      'Cache-Control': 'no-store'
+    });
+    res.send(audio);
+  } catch (err) {
+    console.error('ElevenLabs music error:', err);
+    res.status(502).json({ error: err.message || 'No se pudo generar la música.' });
+  }
+});
+
 app.post('/api/project', (req, res) => {
   const project = { id: `p_${Date.now()}`, createdAt: new Date().toISOString(), status: 'draft', ...req.body };
   res.json(project);
