@@ -35,6 +35,12 @@
         <div class="card preview-card"><div class="card-head"><span>PREVISUALIZACIÓN</span><span id="generationState">Esperando</span></div><div id="preview" class="empty"><div class="empty-icon">✦</div><b>Aquí aparecerá tu vídeo</b><p>Genera primero la estructura para revisar el contenido.</p></div></div></div>
       </section>
 
+      <section id="production" class="view"><div class="section-head"><div><h3>Producción del vídeo</h3><p class="muted">Convierte la estructura en escenas listas para generar visuales, voz, música y montaje.</p></div><span id="productionState">Esperando</span></div>
+        <div class="card production-summary"><div><span class="pill">PLAN DE PRODUCCIÓN</span><h3 id="productionTitle">Preparando vídeo…</h3><p id="productionMeta" class="muted"></p></div><div class="production-actions"><button class="small" id="backToCreate">← Volver</button><button class="primary" id="buildProductionBtn">Generar escenas con IA</button></div></div>
+        <div id="productionProgress" class="card production-progress hidden"><div class="progress-top"><span id="productionProgressLabel">Generando escenas…</span><b id="productionProgressValue">0%</b></div><div class="progress-track"><div id="productionProgressBar"></div></div></div>
+        <div id="scenesList" class="scenes-list"><div class="card empty"><div class="empty-icon">🎬</div><b>Aquí aparecerán las escenas</b><p>Genera el plan de producción para continuar.</p></div></div>
+      </section>
+
       <section id="projects" class="view"><div class="section-head"><div><h3>Proyectos</h3><p class="muted">Tus borradores y vídeos preparados.</p></div></div><div class="card empty-list"><div class="empty-icon">▣</div><b>Aún no tienes proyectos</b><p>Los proyectos creados aparecerán aquí.</p></div></section>
 
       <section id="automation" class="view"><div class="section-head"><div><h3>Automatización</h3><p class="muted">Programa la producción para que AutoTube trabaje solo.</p></div></div><div class="card automation-card"><div><span class="pill">AUTO-PILOT</span><h3>Publicación diaria</h3><p>Genera un vídeo cada día a una hora determinada. La publicación final queda bajo tu control hasta que actives el modo automático.</p></div><label class="switch"><input type="checkbox" id="autoToggle"><span></span></label></div><div class="grid2"><div class="card"><label>Hora de ejecución<input type="time" value="18:00" /></label></div><div class="card"><label>Zona horaria<select><option>Europe/Madrid</option></select></label></div></div></section>
