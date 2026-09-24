@@ -353,7 +353,27 @@ app.post('/api/ai/production-plan', async (req, res) => {
     res.json(JSON.parse(response.choices[0].message.content));
   } catch (err) {
     console.error('Production plan error:', err);
-    res.status(500).json({ error: 'Error generando el plan de producción.' });
+    const fallbackCount = Math.max(4, Math.min(12, Math.round(Number(req.body?.duration || 8) / 2)));
+    const fallbackTopic = req.body?.topic || 'el tema del vídeo';
+    const fallbackScenes = Array.from({ length: fallbackCount }, (_, i) => ({
+      number: i + 1,
+      title: i === 0 ? 'Introducción' : 'Desarrollo · escena ' + (i + 1),
+      narration: i === 0
+        ? 'Presentación del tema y promesa principal del vídeo.'
+        : 'Desarrollo del contenido con una explicación clara y visual.',
+      visualPrompt: 'Realistic cinematic footage about ' + fallbackTopic + ', scene ' + (i + 1) + ', natural light, detailed, 16:9, original composition',
+      duration: Math.round((Number(req.body?.duration || 8) * 60) / fallbackCount),
+      transition: 'Fundido suave'
+    }));
+    res.json({
+      demo: true,
+      fallback: true,
+      title: req.body?.title || 'Vídeo sobre ' + fallbackTopic,
+      musicMood: 'Ambient cinematográfico',
+      voiceStyle: 'Natural y cercana',
+      scenes: fallbackScenes,
+      warning: 'La API de IA no respondió. Se ha creado un plan local para que puedas continuar.'
+    });
   }
 });
 
