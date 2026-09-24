@@ -157,18 +157,32 @@ app.get('/api/youtube/callback', async (req, res) => {
     youtubeProfileCache = null;
     youtubeLoaded = true;
     await getYoutubeProfile();
-    await saveYoutubeConnection();
+
+    // OAuth with Google must not fail just because persistence in Supabase is unavailable.
+    // Keep the connection active in memory and report persistence separately.
+    let persistenceError = null;
+    try {
+      await saveYoutubeConnection();
+    } catch (err) {
+      persistenceError = err.message;
+      console.error('YouTube conectado, pero no se pudo guardar en Supabase:', err.message);
+    }
+
     const appOrigin = (process.env.APP_URL || '').replace(/\/+$/, '');
     if (appOrigin) {
       const safeOrigin = JSON.stringify(appOrigin);
-      res.send('<script>if(window.opener){window.opener.postMessage({type:"youtube_connected"},' + safeOrigin + ');window.close();}else{window.location.href=' + safeOrigin + '+"/";}</script><p>YouTube conectado. Volviendo a AutoTube…</p>');
+      const persistenceNote = persistenceError
+        ? '<p style="font-family:system-ui">La cuenta de YouTube está conectada. La persistencia está pendiente de Supabase.</p>'
+        : '';
+      res.send('<script>if(window.opener){window.opener.postMessage({type:"youtube_connected"},' + safeOrigin + ');window.close();}else{window.location.href=' + safeOrigin + '+"/";}</script><p>YouTube conectado. Volviendo a AutoTube…</p>' + persistenceNote);
     } else {
-      res.send('<p>YouTube conectado correctamente. Puedes volver a AutoTube.</p>');
+      res.send('<p>YouTube conectado correctamente.</p>' + (persistenceError ? '<p>La persistencia en Supabase necesita revisión.</p>' : ''));
     }
-    console.log('YouTube OAuth completed. Token received:', Boolean(tokens.access_token));
+    console.log('YouTube OAuth completed. Token received:', Boolean(tokens.access_token), 'Persisted:', !persistenceError);
   } catch (err) {
-    console.error(err);
-    res.status(500).send('No se pudo completar la conexión con YouTube.');
+    console.error('YouTube OAuth callback error:', err);
+    const detail = err?.response?.data?.error_description || err?.response?.data?.error?.message || err?.message || 'Error desconocido';
+    res.status(500).send('No se pudo completar la conexión con YouTube.<br><small>' + String(detail).replace(/[<>]/g, '') + '</small>');
   }
 });
 
