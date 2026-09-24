@@ -299,7 +299,7 @@ async function analyzeReferenceVideoBuffer(fileBuffer, originalName = 'reference
   if (!process.env['GEM'+'INI_'+'API_'+'KEY']) {
     return {
       demo: true,
-      summary: 'Análisis visual no disponible sin OPENAI_API_KEY.',
+      summary: 'Análisis visual no disponible sin GEMINI_API_KEY.',
       visualStyle: [],
       pacing: 'No disponible',
       composition: 'No disponible',
@@ -473,7 +473,7 @@ app.post('/api/ai/outline', async (req, res) => {
     if (!process.env['GEM'+'INI_'+'API_'+'KEY']) {
       return res.json({ demo: true, title: `Ideas para un vídeo sobre ${topic}`, outline: [
         'Gancho inicial', 'Contexto y promesa', 'Desarrollo en 3 bloques', 'Cierre y llamada a la acción'
-      ], note: 'Conecta OPENAI_API_KEY para generar con IA.' });
+      ], note: 'Conecta GEMINI_API_KEY para generar con IA.' });
     }
     const content = await callGemini({system:'Eres un productor de YouTube. Devuelve JSON con title, hook, outline, visualIdeas, description y tags. No copies textos de otros vídeos.',user:JSON.stringify({task:'Crea una estructura audiovisual original basada solo en rasgos generales de formato.',topic,language,duration,reference:referenceData||(reference?{url:reference}:null),visualReferenceAnalysis}),temperature:0.8,maxOutputTokens:1400,json:true});
     res.json(parseJsonResponse(content));
@@ -489,7 +489,7 @@ app.post('/api/ai/production-plan', async (req, res) => {
     if (!topic) return res.status(400).json({ error: 'Indica un tema.' });
 
     const sceneCount = Math.max(4, Math.min(12, Math.round(Number(duration) / 2)));
-    if (!process.env.OPENAI_API_KEY) {
+    if (!process.env['GEM'+'INI_'+'API_'+'KEY']) {
       const scenes = Array.from({ length: sceneCount }, (_, i) => ({
         number: i + 1,
         title: i === 0 ? 'Introducción' : 'Escena ' + (i + 1),
