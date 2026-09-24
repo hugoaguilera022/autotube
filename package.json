@@ -16,6 +16,7 @@
     "express": "^4.21.2",
     "googleapis": "^144.0.0",
     "openai": "^4.80.1",
-    "@supabase/supabase-js": "^2.57.4"
+    "@supabase/supabase-js": "^2.57.4",
+    "ffmpeg-static": "^5.2.0"
   }
 }
