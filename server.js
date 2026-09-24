@@ -13,8 +13,16 @@ let youtubeTokens = null;
 let youtubeProfileCache = null;
 let youtubeLoaded = false;
 
+function supabaseEnv() {
+  return {
+    url: String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, ''),
+    key: String(process.env.SUPABASE_SECRET_KEY || '').trim()
+  };
+}
+
 function supabaseConfigured() {
-  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY && process.env.YOUTUBE_TOKEN_ENCRYPTION_KEY);
+  const { url, key } = supabaseEnv();
+  return Boolean(url && key && process.env.YOUTUBE_TOKEN_ENCRYPTION_KEY);
 }
 
 function encryptionKey() {
@@ -41,12 +49,13 @@ function decryptTokens(value) {
 
 async function supabaseRequest(path, options = {}) {
   if (!supabaseConfigured()) return null;
-  const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/${path}`, {
+  const { url, key } = supabaseEnv();
+  const response = await fetch(url + '/rest/v1/' + path, {
     ...options,
     headers: {
-      // Supabase secret keys (sb_secret_...) must be sent in the apikey header.
-      // Do not send them as Bearer tokens because they are not JWTs.
-      apikey: process.env.SUPABASE_SECRET_KEY,
+      // New Supabase secret keys (sb_secret_...) are API keys, not JWTs.
+      // They must be sent in the apikey header and never as Bearer tokens.
+      apikey: key,
       'Content-Type': 'application/json',
       ...(options.headers || {})
     }
@@ -226,4 +235,29 @@ app.post('/api/project', (req, res) => {
 });
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-app.listen(PORT, () => console.log(`AutoTube running on port ${PORT}`));
+async function verifySupabaseConnection() {
+  if (!supabaseConfigured()) {
+    console.log('Supabase persistence not configured.');
+    return;
+  }
+  const { url, key } = supabaseEnv();
+  try {
+    await supabaseRequest('youtube_connections?select=id&limit=1', { method: 'GET' });
+    console.log('Supabase connection OK:', {
+      host: new URL(url).host,
+      keyType: key.startsWith('sb_secret_') ? 'secret' : key.startsWith('sb_publishable_') ? 'publishable' : 'legacy/unknown'
+    });
+  } catch (err) {
+    console.error('Supabase connection FAILED:', err.message);
+    console.error('Supabase config:', {
+      host: new URL(url).host,
+      keyType: key.startsWith('sb_secret_') ? 'secret' : key.startsWith('sb_publishable_') ? 'publishable' : 'legacy/unknown',
+      keyLength: key.length
+    });
+  }
+}
+
+app.listen(PORT, () => {
+  console.log(`AutoTube running on port ${PORT}`);
+  verifySupabaseConnection();
+});
