@@ -171,7 +171,7 @@ async function renderFinalVideo(){
     if(!jobId)throw new Error('El servidor no devolvió el identificador del render.');
 
     let finished=null;
-    for(let i=0;i<180;i++){
+    for(let i=0;i<450;i++){
       await new Promise(resolve=>setTimeout(resolve,2000));
       const status=await apiJson('/api/render/'+encodeURIComponent(jobId),{},'el estado del render');
       if(status.status==='done'){finished=status;break;}
