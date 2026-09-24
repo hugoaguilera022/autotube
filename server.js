@@ -15,7 +15,7 @@ let youtubeProfileCache = null;
 let youtubeLoaded = false;
 
 function cleanEnvValue(value) {
-  return String(value || '').replace(/\\s+/g, '').replace(/^(['"])(.*)\\1$/, '$2').trim();
+  return String(value || '').replace(/\s+/g, '').replace(/^(['"])(.*)\\1$/, '$2').trim();
 }
 
 function supabaseEnv() {
