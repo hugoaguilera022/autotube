@@ -423,7 +423,7 @@ app.post('/api/ai/outline', async (req, res) => {
 
 app.post('/api/ai/production-plan', async (req, res) => {
   try {
-    const { topic, language = 'es', duration = '8', title = '', outline = [], visualIdeas = [] } = req.body || {};
+    const { topic, language = 'es', duration = '8', title = '', outline = [], visualIdeas = [], visualReferenceAnalysis = null } = req.body || {};
     if (!topic) return res.status(400).json({ error: 'Indica un tema.' });
 
     const sceneCount = Math.max(4, Math.min(12, Math.round(Number(duration) / 2)));
@@ -446,7 +446,8 @@ app.post('/api/ai/production-plan', async (req, res) => {
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: 'Eres director de producción de YouTube. Crea un plan audiovisual ORIGINAL. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. scenes debe ser un array con number, title, narration, visualPrompt, searchQuery, duration y transition. searchQuery debe ser una consulta corta y concreta para encontrar vídeo de stock horizontal relacionado con la escena. Los visualPrompt deben describir imágenes o vídeo originales y no pedir que se copie material protegido.' },
-        { role: 'user', content: JSON.stringify({ topic, language, duration, title, outline, visualIdeas, sceneCount }) }
+        { role: 'user', content: JSON.stringify({ topic, language, duration, title, outline, visualIdeas,
+  visualReferenceAnalysis, sceneCount }) }
       ]
     });
     res.json(JSON.parse(response.choices[0].message.content));
