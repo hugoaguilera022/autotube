@@ -389,7 +389,7 @@ app.post('/api/youtube/disconnect', async (_req, res) => {
 
 app.post('/api/ai/outline', async (req, res) => {
   try {
-    const { topic, language = 'es', duration = '8', reference = '', referenceData = null } = req.body || {};
+    const { topic, language = 'es', duration = '8', reference = '', referenceData = null, visualReferenceAnalysis = null } = req.body || {};
     if (!topic) return res.status(400).json({ error: 'Indica un tema.' });
     if (!process.env.OPENAI_API_KEY) {
       return res.json({ demo: true, title: `Ideas para un vídeo sobre ${topic}`, outline: [
@@ -406,6 +406,7 @@ app.post('/api/ai/outline', async (req, res) => {
   task: 'Crea una estructura audiovisual original inspirada en las características del vídeo de referencia, sin copiar su guion, frases, escenas, audio, imágenes ni secuencia exacta.',
   topic, language, duration,
   reference: referenceData || (reference ? { url: reference } : null),
+  visualReferenceAnalysis,
   requirements: [
     'Detecta y reproduce solo rasgos generales de formato: temática, ritmo aproximado, tono, tipo de apertura, estructura narrativa, densidad visual y estilo de presentación.',
     'Transforma esas características en una propuesta nueva y diferenciada.',
