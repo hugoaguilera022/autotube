@@ -561,48 +561,35 @@ function runFfmpeg(args){
     p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))));
   });
 }
-async function renderAutotubeVideo({scenes,mediaResults,musicBuffer,narrationBuffers=[]}){
+async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musicBuffer=null}){
   if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-'));
   try{
-    const clips=[];
-    const narrationFiles=[];
+    const clips=[],voiceFiles=[];
     for(let i=0;i<scenes.length;i++){
-      const scene=scenes[i], found=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
-      const asset=found?.media?.find(x=>x.downloadUrl)?.downloadUrl;
+      const scene=scenes[i],found=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i],asset=found?.media?.find(x=>x.downloadUrl)?.downloadUrl;
       if(!asset)continue;
-      const input=path.join(dir,'in-'+i+'.mp4'), output=path.join(dir,'scene-'+i+'.mp4');
+      const input=path.join(dir,'in-'+i+'.mp4'),output=path.join(dir,'scene-'+i+'.mp4');
       await downloadToFile(asset,input);
       const duration=Math.max(2,Math.min(120,Number(scene.duration)||8));
       await runFfmpeg(['-y','-stream_loop','-1','-i',input,'-t',String(duration),'-vf',"scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p,fps=30",'-an','-c:v','libx264','-preset','veryfast','-crf','23','-movflags','+faststart',output]);
       clips.push(output);
-      if(narrationBuffers[i]){const nf=path.join(dir,'voice-'+i+'.mp3');await fs.writeFile(nf,narrationBuffers[i]);narrationFiles.push(nf);}
+      if(narrationBuffers[i]){const vf=path.join(dir,'voice-'+i+'.mp3');await fs.writeFile(vf,narrationBuffers[i]);voiceFiles.push({file:vf,delay:scenes.slice(0,i).reduce((n,x)=>n+(Number(x.duration)||8),0)});}
     }
-    if(!clips.length)throw new Error('No hay clips seleccionados para renderizar.');
-    const list=path.join(dir,'concat.txt');
-    await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
-    const silent=path.join(dir,'silent.mp4');
-    await runFfmpeg(['-y','-f','concat','-safe','0','-i',list,'-c','copy',silent]);
-    let audio=path.join(dir,'music.mp3');
-    if(musicBuffer)await fs.writeFile(audio,musicBuffer);
-    else{
-      const prompt='Instrumental ambient cinematic background music, calm and immersive, subtle evolution, no vocals, for an original YouTube relaxation video.';
-      const music=await generateElevenMusic({prompt,durationSeconds:Math.min(300,Math.max(30,scenes.reduce((n,x)=>n+(Number(x.duration)||8),0)))});
-      await fs.writeFile(audio,music);
+    if(!clips.length)throw new Error('No hay clips de vídeo disponibles para las escenas.');
+    const list=path.join(dir,'concat.txt');await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
+    const silent=path.join(dir,'silent.mp4');await runFfmpeg(['-y','-f','concat','-safe','0','-i',list,'-c','copy',silent]);
+    const music=path.join(dir,'music.mp3');
+    if(musicBuffer)await fs.writeFile(music,musicBuffer);else{
+      const total=Math.min(300,Math.max(30,scenes.reduce((n,x)=>n+(Number(x.duration)||8),0)));
+      await fs.writeFile(music,await generateElevenMusic({prompt:'Instrumental ambient cinematic background music, calm, immersive, subtle evolution, no vocals.',durationSeconds:total}));
     }
+    const inputs=['-i',silent,'-stream_loop','-1','-i',music],filters=[],voiceLabels=[];
+    voiceFiles.forEach((v,i)=>{inputs.push('-i',v.file);const delay=Math.round(v.delay*1000);filters.push('['+(i+2)+':a]adelay='+delay+'|'+delay+'[v'+i+']');voiceLabels.push('[v'+i+']');});
+    if(voiceFiles.length){filters.push(voiceLabels.join('')+'amix=inputs='+voiceFiles.length+':duration=longest[narr]');filters.push('[1:a][narr]amix=inputs=2:duration=first:weights=0.2 1[aout]');}
+    else filters.push('[1:a]anull[aout]');
     const out=path.join(dir,'autotube-final.mp4');
-    const inputs=['-i',silent,'-stream_loop','-1','-i',audio];
-    narrationFiles.forEach(f=>inputs.push('-i',f));
-    const maps=['-map','0:v:0'];
-    if(narrationFiles.length){
-      narrationFiles.forEach((_,i)=>{ maps.push('-map',String(i+2)+':a:0'); });
-      maps.push('-filter_complex', narrationFiles.map((_,i)=>'['+(i+2)+':a]adelay='+Math.round((scenes[i]?.startSeconds||scenes.slice(0,i).reduce((n,x)=>n+(Number(x.duration)||8),0))*1000)+'|'+Math.round((scenes[i]?.startSeconds||scenes.slice(0,i).reduce((n,x)=>n+(Number(x.duration)||8),0))*1000)+',apad[a'+i+']').join(';')+';'+narrationFiles.map((_,i)=>'[a'+i+']').join('')+'amix=inputs='+narrationFiles.length+':duration=longest[narr]'),
-      maps.push('-map','[narr]');
-      maps.push('-map','1:a:0');
-      maps.push('-filter_complex','[narr][1:a]amix=inputs=2:duration=longest:weights=1 0.18[aout]');
-      maps.splice(2,0,'-map','[aout]');
-    }else{maps.push('-map','1:a:0');}
-    await runFfmpeg(['-y',...inputs,...maps,'-shortest','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
+    await runFfmpeg(['-y',...inputs,'-filter_complex',filters.join(';'),'-map','0:v:0','-map','[aout]','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
     return {buffer:await fs.readFile(out),duration:clips.length};
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
 }
@@ -610,13 +597,13 @@ app.post('/api/render',async(req,res)=>{
   try{
     const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];
     const mediaResults=Array.isArray(req.body?.mediaResults)?req.body.mediaResults:[];
-    if(!scenes.length)return res.status(400).json({error:'No hay escenas para renderizar.'});
-    const result=await renderAutotubeVideo({scenes,mediaResults});
-    res.set({'Content-Type':'video/mp4','Content-Length':String(result.buffer.length),'Content-Disposition':'attachment; filename="autotube-final.mp4"','Cache-Control':'no-store'});
-    res.send(result.buffer);
+    if(!scenes.length||!mediaResults.length)return res.status(400).json({error:'Genera las escenas y busca los visuales antes de renderizar.'});
+    const narrationBuffers=[];
+    for(const scene of scenes){const text=String(scene.narration||scene.script||'').trim();narrationBuffers.push(text?await generateElevenVoice({text,language:req.body?.language||'es'}):null);}
+    const result=await renderAutotubeVideo({scenes,mediaResults,narrationBuffers});
+    res.set({'Content-Type':'video/mp4','Content-Length':String(result.buffer.length),'Content-Disposition':'attachment; filename="autotube-final.mp4"','Cache-Control':'no-store'});res.send(result.buffer);
   }catch(err){console.error('Render error:',err);res.status(502).json({error:err.message||'No se pudo renderizar el vídeo.'});}
 });
-
 async function generateElevenVoice({text,voiceId,language='es'}){
   if(!process.env.ELEVENLABS_API_KEY)throw new Error('ELEVENLABS_API_KEY no está configurada.');
   const id=String(voiceId||process.env.ELEVENLABS_VOICE_ID||'JBFqnCBsd6RMkjVDRZzb').trim();
