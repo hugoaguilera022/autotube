@@ -46,13 +46,30 @@ $('#youtubeRefresh').onclick=loadYoutubeProfile;
 $('#youtubeDisconnect').onclick=async()=>{if(!confirm('¿Desconectar este canal de YouTube?'))return;await fetch('/api/youtube/disconnect',{method:'POST'});loadYoutubeProfile();};
 window.addEventListener('message',e=>{if(e.data?.type==='youtube_connected'){alert('YouTube conectado correctamente.');loadYoutubeProfile();}});
 loadYoutubeProfile();
+async function analyzeReferenceForCreation(reference){
+  const value=String(reference||'').trim();
+  if(!value)return null;
+  const r=await fetch('/api/youtube/reference',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:value})});
+  const d=await r.json();
+  if(!r.ok)throw new Error(d.error||'No se pudo analizar la referencia.');
+  return d;
+}
+
 $('#generateBtn').onclick=async()=>{
 const topic=$('#topic').value.trim();if(!topic)return alert('Escribe primero el tema del vídeo.');
 const btn=$('#generateBtn'),state=$('#generationState'),preview=$('#preview');btn.disabled=true;btn.textContent='Generando…';state.textContent='Procesando';
 preview.innerHTML='<div class="empty"><div class="empty-icon">✦</div><b>La IA está preparando la estructura…</b><p>Esto puede tardar unos segundos.</p></div>';
-try{const r=await fetch('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:$('#duration').value,language:$('#language').value,reference:$('#reference').value})});
+try{
+const referenceValue=$('#reference').value.trim();
+let referenceAnalysis=null;
+if(referenceValue){
+  state.textContent='Analizando referencia';
+  preview.innerHTML='<div class="empty"><div class="empty-icon">▶</div><b>Analizando el vídeo de referencia…</b><p>AutoTube extraerá temática y características de formato para crear una propuesta original.</p></div>';
+  referenceAnalysis=await analyzeReferenceForCreation(referenceValue);
+}
+const r=await fetch('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null})});
 const d=await r.json();if(!r.ok)throw new Error(d.error);
-currentVideoPlan={...d,topic,duration:$('#duration').value,language:$('#language').value,reference:$('#reference').value};
+currentVideoPlan={...d,topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null};
 preview.innerHTML='<div style="text-align:left"><span class="pill">'+(d.demo?'DEMO':'IA GENERATIVA')+'</span><h3 style="font-size:21px;margin:14px 0 7px">'+escapeHtml(d.title||'Nuevo vídeo')+'</h3><p class="muted">'+escapeHtml(d.hook||d.note||'Estructura preparada.')+'</p><ol style="color:#cbd0db;line-height:1.8">'+(d.outline||[]).map(x=>'<li>'+escapeHtml(x)+'</li>').join('')+'</ol><button class="primary" id="continueProductionBtn">Continuar a producción →</button></div>';
 state.textContent='Listo';$('#continueProductionBtn').onclick=()=>openProduction(d);}catch(e){state.textContent='Error';preview.innerHTML='<div class="empty"><div class="empty-icon">!</div><b>No se pudo generar</b><p>'+escapeHtml(e.message)+'</p></div>'}finally{btn.disabled=false;btn.textContent='Generar estructura con IA'}};
 function openProduction(plan){currentVideoPlan={...currentVideoPlan,...plan};$('#productionTitle').textContent=plan.title||'Nuevo vídeo';$('#productionMeta').textContent=(plan.outline?.length||0)+' bloques de contenido · '+(plan.duration||$('#duration').value)+' min · '+(plan.language||$('#language').value);$('#productionState').textContent='Listo para producir';$('#scenesList').innerHTML='<div class="card empty"><div class="empty-icon">🎬</div><b>Plan preparado</b><p>Pulsa “Generar escenas con IA” para crear el montaje escena por escena.</p></div>';go('production')}
