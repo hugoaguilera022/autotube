@@ -45,6 +45,47 @@ app.post('/api/media/search',async(req,res)=>{try{const scenes=Array.isArray(req
 
 async function downloadToFile(url,file){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),60000);try{const r=await fetch(url,{signal:controller.signal});if(!r.ok)throw new Error('No se pudo descargar el recurso ('+r.status+').');if(!r.body)throw new Error('La fuente de vídeo no devolvió datos.');const handle=await fs.open(file,'w');try{const reader=r.body.getReader();let total=0;const maxBytes=180*1024*1024;while(true){const part=await reader.read();if(part.done)break;total+=part.value.byteLength;if(total>maxBytes){await reader.cancel().catch(()=>{});throw new Error('El vídeo fuente supera el límite de 180 MB.');}await handle.write(Buffer.from(part.value));}if(total===0)throw new Error('El recurso descargado está vacío.');}finally{await handle.close().catch(()=>{});}}catch(err){if(err?.name==='AbortError')throw new Error('Tiempo de espera agotado al descargar el vídeo.');throw err}finally{clearTimeout(timer)}}
 function runFfmpeg(args){return new Promise((resolve,reject)=>{const p=spawn(ffmpegPath,args,{stdio:['ignore','ignore','pipe']});let err='';p.stderr.on('data',d=>{err+=d.toString();if(err.length>12000)err=err.slice(-12000)});p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))))})}
+app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=>{
+  try{
+    const file=req.file;
+    if(!file||!file.buffer?.length)return res.status(400).json({error:'No se recibió ningún vídeo de referencia.'});
+    const allowed=/^video\/(mp4|quicktime|webm|x-msvideo|mpeg|ogg)$/i.test(String(file.mimetype||''))||/\.(mp4|mov|m4v|webm|avi|mkv|mpeg|mpg)$/i.test(String(file.originalname||''));
+    if(!allowed)return res.status(400).json({error:'El archivo de referencia no parece ser un vídeo compatible.'});
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-'));
+    try{
+      const input=path.join(dir,'reference-video');
+      const framesDir=path.join(dir,'frames');
+      await fs.mkdir(framesDir,{recursive:true});
+      await fs.writeFile(input,file.buffer);
+      const stat=await fs.stat(input);
+      if(!stat.size)throw new Error('El vídeo de referencia está vacío.');
+      await runFfmpeg(['-y','-i',input,'-vf','fps=1/2,scale=768:-2:force_original_aspect_ratio=decrease','-frames:v','6','-q:v','3',path.join(framesDir,'frame-%02d.jpg')]);
+      const files=(await fs.readdir(framesDir)).filter(x=>/^frame-\d+\.jpg$/i.test(x)).sort();
+      if(!files.length)throw new Error('No se pudieron extraer fotogramas del vídeo de referencia.');
+      const images=[];
+      for(const name of files){
+        const data=await fs.readFile(path.join(framesDir,name));
+        if(data.length)images.push({mimeType:'image/jpeg',data:data.toString('base64')});
+      }
+      if(!images.length)throw new Error('Los fotogramas extraídos están vacíos.');
+      const content=await callGemini({
+        system:'Eres un analista audiovisual. Analiza únicamente las características visuales generales de los fotogramas proporcionados. No identifiques ni reproduzcas contenido protegido. Devuelve JSON válido con: environment, lighting, timeOfDay, palette, composition, shotScale, cameraMovement, pacing, people, texture, depth, atmosphere, visualStyle, consistency. Sé concreto y describe rasgos reutilizables para crear un vídeo ORIGINAL de cualquier género.',
+        user:'Analiza estos fotogramas de un vídeo de referencia y resume su lenguaje visual general. No describas escenas concretas como instrucciones para copiarlas; extrae únicamente patrones de estilo, fotografía, composición, ritmo y atmósfera. Responde en JSON.',
+        images,
+        temperature:0.3,
+        maxOutputTokens:1800,
+        json:true
+      });
+      return res.json({ok:true,analysis:parseJsonResponse(content),framesAnalyzed:images.length});
+    }finally{
+      await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+    }
+  }catch(err){
+    console.error('Visual reference analysis error:',err);
+    return res.status(502).json({error:err.message||'No se pudo analizar visualmente el vídeo de referencia.'});
+  }
+});
+
 async function downloadAudioBuffer(buffer,file){await fs.writeFile(file,buffer);const stat=await fs.stat(file);if(!stat.size)throw new Error('El audio generado está vacío.');}
 async function renderAutotubeVideo({scenes,mediaResults,narrationAudio=[],musicBuffer=null,onProgress=()=>{},finalOutputPath}){
   if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
