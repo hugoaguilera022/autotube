@@ -203,6 +203,89 @@ app.get('/api/supabase/status', async (_req, res) => {
   }
 });
 
+
+function extractYoutubeVideoId(input) {
+  const value = String(input || '').trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    if (url.hostname === 'youtu.be') return url.pathname.slice(1).split('/')[0];
+    if (url.hostname.endsWith('youtube.com')) {
+      if (url.pathname === '/watch') return url.searchParams.get('v') || '';
+      if (url.pathname.startsWith('/shorts/')) return url.pathname.split('/')[2] || '';
+      if (url.pathname.startsWith('/embed/')) return url.pathname.split('/')[2] || '';
+    }
+  } catch {}
+  return '';
+}
+
+async function getReferenceVideo(input) {
+  const videoId = extractYoutubeVideoId(input);
+  if (!videoId) throw new Error('La URL de referencia de YouTube no es válida.');
+  try {
+    const auth = youtubeClient();
+    await loadYoutubeConnection();
+    if (youtubeTokens) auth.setCredentials(youtubeTokens);
+    const youtube = google.youtube({ version: 'v3', auth });
+    const response = await youtube.videos.list({
+      part: 'snippet,contentDetails,statistics',
+      id: [videoId]
+    });
+    const video = response.data.items?.[0];
+    if (video) {
+      const snippet = video.snippet || {};
+      const details = video.contentDetails || {};
+      return {
+        videoId,
+        title: snippet.title || '',
+        description: snippet.description || '',
+        channelTitle: snippet.channelTitle || '',
+        publishedAt: snippet.publishedAt || '',
+        tags: snippet.tags || [],
+        categoryId: snippet.categoryId || '',
+        defaultLanguage: snippet.defaultLanguage || snippet.defaultAudioLanguage || '',
+        duration: details.duration || '',
+        definition: details.definition || '',
+        caption: details.caption === 'true',
+        thumbnail: snippet.thumbnails?.high?.url || snippet.thumbnails?.medium?.url || ''
+      };
+    }
+  } catch (err) {
+    console.error('YouTube reference API error:', err.message);
+  }
+
+  const oembed = await fetch('https://www.youtube.com/oembed?url=' + encodeURIComponent(input) + '&format=json');
+  if (!oembed.ok) throw new Error('No se pudo analizar el vídeo de referencia.');
+  const data = await oembed.json();
+  return {
+    videoId,
+    title: data.title || '',
+    channelTitle: data.author_name || '',
+    thumbnail: data.thumbnail_url || ''
+  };
+}
+
+app.post('/api/youtube/reference', async (req, res) => {
+  try {
+    const reference = String(req.body?.reference || '').trim();
+    if (!reference) return res.status(400).json({ error: 'Indica una URL de YouTube.' });
+    const video = await getReferenceVideo(reference);
+    res.json({
+      ok: true,
+      reference,
+      video,
+      analysis: {
+        basis: 'Metadatos públicos del vídeo de referencia',
+        note: 'La referencia se utiliza para extraer características de formato y temática. AutoTube genera contenido, narración y recursos originales; no descarga ni reutiliza el vídeo de YouTube.'
+      }
+    });
+  } catch (err) {
+    console.error('Reference analysis error:', err);
+    res.status(400).json({ error: err.message || 'No se pudo analizar la referencia.' });
+  }
+});
+
+
 app.get('/api/youtube/auth', (_req, res) => {
   if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET) {
     return res.status(503).send('YouTube no está configurado en el servidor.');
@@ -300,7 +383,7 @@ app.post('/api/youtube/disconnect', async (_req, res) => {
 
 app.post('/api/ai/outline', async (req, res) => {
   try {
-    const { topic, language = 'es', duration = '8' } = req.body || {};
+    const { topic, language = 'es', duration = '8', reference = '', referenceData = null } = req.body || {};
     if (!topic) return res.status(400).json({ error: 'Indica un tema.' });
     if (!process.env.OPENAI_API_KEY) {
       return res.json({ demo: true, title: `Ideas para un vídeo sobre ${topic}`, outline: [
@@ -313,7 +396,16 @@ app.post('/api/ai/outline', async (req, res) => {
       temperature: 0.8,
       response_format: { type: 'json_object' },
       messages: [{ role: 'system', content: 'Eres un productor de YouTube. Devuelve JSON con title, hook, outline (array), visualIdeas (array), description y tags (array). No copies textos de otros vídeos.' },
-        { role: 'user', content: `Crea una estructura original para un vídeo de ${duration} minutos sobre: ${topic}. Idioma: ${language}.` }]
+        { role: 'user', content: JSON.stringify({
+  task: 'Crea una estructura audiovisual original inspirada en las características del vídeo de referencia, sin copiar su guion, frases, escenas, audio, imágenes ni secuencia exacta.',
+  topic, language, duration,
+  reference: referenceData || (reference ? { url: reference } : null),
+  requirements: [
+    'Detecta y reproduce solo rasgos generales de formato: temática, ritmo aproximado, tono, tipo de apertura, estructura narrativa, densidad visual y estilo de presentación.',
+    'Transforma esas características en una propuesta nueva y diferenciada.',
+    'Devuelve title, hook, outline, visualIdeas, description y tags.'
+  ]
+}) }]
     });
     res.json(JSON.parse(response.choices[0].message.content));
   } catch (err) {
