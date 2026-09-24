@@ -292,6 +292,116 @@ app.post('/api/youtube/reference', async (req, res) => {
 });
 
 
+
+async function analyzeReferenceVideoBuffer(fileBuffer, originalName = 'reference.mp4') {
+  if (!process.env.OPENAI_API_KEY) {
+    return {
+      demo: true,
+      summary: 'Análisis visual no disponible sin OPENAI_API_KEY.',
+      visualStyle: [],
+      pacing: 'No disponible',
+      composition: 'No disponible',
+      lighting: 'No disponible',
+      color: 'No disponible'
+    };
+  }
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'autotube-reference-'));
+  const input = path.join(dir, 'reference' + path.extname(originalName || '.mp4') || '.mp4');
+  const framesDir = path.join(dir, 'frames');
+  await fs.mkdir(framesDir, { recursive: true });
+
+  try {
+    await fs.writeFile(input, fileBuffer);
+
+    await new Promise((resolve, reject) => {
+      const args = [
+        '-y', '-i', input,
+        '-vf', 'fps=1/15,scale=768:-2',
+        '-frames:v', '8',
+        path.join(framesDir, 'frame-%02d.jpg')
+      ];
+      const p = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+      let err = '';
+      p.stderr.on('data', d => {
+        err += d.toString();
+        if (err.length > 8000) err = err.slice(-8000);
+      });
+      p.on('error', reject);
+      p.on('close', code => code === 0 ? resolve() : reject(new Error('FFmpeg ' + code + ': ' + err.slice(-2000))));
+    });
+
+    const names = (await fs.readdir(framesDir)).filter(x => x.endsWith('.jpg')).sort();
+    if (!names.length) throw new Error('No se pudieron extraer fotogramas del vídeo.');
+
+    const images = [];
+    for (const name of names) {
+      const data = await fs.readFile(path.join(framesDir, name));
+      images.push({
+        type: 'image_url',
+        image_url: { url: 'data:image/jpeg;base64,' + data.toString('base64'), detail: 'low' }
+      });
+    }
+
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.2,
+      max_tokens: 900,
+      messages: [
+        {
+          role: 'system',
+          content: 'Analiza únicamente características visuales generales de un vídeo de referencia. No identifiques ni reproduzcas contenido protegido. Devuelve JSON válido con summary, visualStyle (array), pacing, composition, lighting, color, camera, recurringElements (array) y generationGuidance (array). La finalidad es crear contenido audiovisual nuevo y diferenciado.'
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Analiza estos fotogramas como referencia visual. Describe estilo, composición, ritmo aparente, iluminación, color, cámara y elementos recurrentes. No describas ni copies personas, textos, logotipos, escenas concretas o contenido identificable. Convierte las observaciones en pautas generales para generar un vídeo original.' },
+            ...images
+          ]
+        }
+      ]
+    });
+
+    const content = response.choices?.[0]?.message?.content || '{}';
+    try {
+      return JSON.parse(content);
+    } catch {
+      return {
+        summary: content.slice(0, 2000),
+        visualStyle: [],
+        pacing: '',
+        composition: '',
+        lighting: '',
+        color: '',
+        camera: '',
+        recurringElements: [],
+        generationGuidance: []
+      };
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+app.post('/api/reference/visual-analysis', upload.single('video'), async (req, res) => {
+  try {
+    if (!req.file?.buffer) {
+      return res.status(400).json({ error: 'Sube un vídeo de referencia.' });
+    }
+    const analysis = await analyzeReferenceVideoBuffer(req.file.buffer, req.file.originalname);
+    res.json({
+      ok: true,
+      analysis,
+      note: 'Se han analizado fotogramas del archivo subido para obtener características visuales generales. El contenido generado por AutoTube es original.'
+    });
+  } catch (err) {
+    console.error('Reference visual analysis error:', err);
+    res.status(502).json({ error: err.message || 'No se pudo analizar visualmente el vídeo.' });
+  }
+});
+
+
 app.get('/api/youtube/auth', (_req, res) => {
   if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET) {
     return res.status(503).send('YouTube no está configurado en el servidor.');
