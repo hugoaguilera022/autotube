@@ -29,7 +29,10 @@ async function download(url, file) {
     const r = await fetch(url, { signal: controller.signal, redirect: 'follow' });
     if (!r.ok || !r.body) throw new Error('No se pudo descargar el visual ('+r.status+').');
     const out = fsSync.createWriteStream(file);
-    await Readable.fromWeb(r.body).pipe(out);
+    await new Promise((resolve,reject) => {
+      out.on('finish',resolve); out.on('error',reject);
+      Readable.fromWeb(r.body).on('error',reject).pipe(out);
+    });
     const st = await fs.stat(file);
     if (!st.size) throw new Error('El visual descargado está vacío.');
   } catch (e) {
@@ -46,14 +49,10 @@ function install(app) {
     const scenes = Array.isArray(req.body?.scenes) ? req.body.scenes : [];
     const mediaResults = Array.isArray(req.body?.mediaResults) ? req.body.mediaResults : [];
     if (!scenes.length || !mediaResults.length) return res.status(400).json({ error: 'Genera las escenas y busca los visuales antes de renderizar.' });
-
     const id = 'render_' + Date.now() + '_' + Math.random().toString(16).slice(2, 10);
-    const dir = path.join(root, id);
-    const output = path.join(dir, 'autotube-final.mp4');
+    const dir = path.join(root, id), output = path.join(dir, 'autotube-final.mp4');
     jobs.set(id, { status:'processing', progress:0, output, dir, createdAt:Date.now(), error:null });
     await fs.mkdir(dir, { recursive:true });
-
-    // Return immediately. The browser never waits for FFmpeg, preventing web-service 502s.
     res.status(202).json({ ok:true, jobId:id, status:'processing' });
 
     (async () => {
@@ -61,68 +60,44 @@ function install(app) {
       try {
         const usable = scenes.map((scene, i) => {
           const group = mediaResults.find(x => String(x.number) === String(scene.number)) || mediaResults[i];
-          const asset = group?.media?.find(x => x?.downloadUrl)?.downloadUrl;
-          return { scene, asset };
+          return { scene, asset: group?.media?.find(x => x?.downloadUrl)?.downloadUrl };
         }).filter(x => x.asset);
         if (!usable.length) throw new Error('No hay vídeos descargables para las escenas.');
-
         const clips = [];
         for (let i=0; i<usable.length; i++) {
-          const {scene, asset} = usable[i];
-          const input = path.join(dir, 'source-'+i+'.mp4');
-          const clip = path.join(dir, 'clip-'+i+'.mp4');
-          const duration = Math.max(2, Math.min(180, Number(scene.duration) || 8));
-          await download(asset, input);
-          await ffmpeg([
-            '-y','-hide_banner','-loglevel','error','-i',input,
-            '-t',String(duration),
-            '-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=24,format=yuv420p',
-            '-an','-c:v','libx264','-preset','veryfast','-crf','27','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',clip
-          ]);
-          clips.push(clip);
-          job.progress = Math.round(((i+1)/usable.length)*85);
-          await fs.rm(input,{force:true}).catch(()=>{});
+          const {scene, asset} = usable[i], input=path.join(dir,'source-'+i+'.mp4'), clip=path.join(dir,'clip-'+i+'.mp4');
+          const duration=Math.max(2,Math.min(180,Number(scene.duration)||8));
+          await download(asset,input);
+          await ffmpeg(['-y','-hide_banner','-loglevel','error','-stream_loop','-1','-i',input,'-t',String(duration),'-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=24,format=yuv420p','-an','-c:v','libx264','-preset','veryfast','-crf','27','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',clip]);
+          clips.push(clip); job.progress=Math.round(((i+1)/usable.length)*85); await fs.rm(input,{force:true}).catch(()=>{});
         }
-
-        const list = path.join(dir,'concat.txt');
-        await fs.writeFile(list, clips.map(f => "file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
-        try {
-          await ffmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',output]);
-        } catch {
-          await ffmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c:v','libx264','-preset','veryfast','-crf','27','pix_fmt','yuv420p','-threads','1','-movflags','+faststart',output]);
-        }
-        const st = await fs.stat(output);
-        if (!st.size) throw new Error('FFmpeg terminó sin crear un MP4 válido.');
+        const list=path.join(dir,'concat.txt');
+        await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
+        try { await ffmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',output]); }
+        catch { await ffmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c:v','libx264','-preset','veryfast','-crf','27','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',output]); }
+        const st=await fs.stat(output); if(!st.size)throw new Error('FFmpeg terminó sin crear un MP4 válido.');
         job.status='done'; job.progress=100; job.size=st.size; job.finishedAt=Date.now();
-      } catch (e) {
-        console.error('AutoTube render error', id, e);
-        job.status='error'; job.progress=0; job.error=e.message || 'No se pudo renderizar el MP4.';
-      }
+      } catch(e) { console.error('AutoTube render error',id,e); job.status='error'; job.progress=0; job.error=e.message||'No se pudo renderizar el MP4.'; }
     })();
   });
 
   app.get('/api/render/:jobId', async (req,res) => {
     const job=jobs.get(String(req.params.jobId||''));
-    if(!job) return res.status(404).json({error:'Render no encontrado.'});
-    if(job.status==='processing') return res.json({ok:true,status:'processing',progress:job.progress||0});
-    if(job.status==='error') return res.json({ok:false,status:'error',error:job.error});
-    const st=await fs.stat(job.output).catch(()=>null);
-    if(!st) return res.status(404).json({error:'El MP4 ya no está disponible.'});
+    if(!job)return res.status(404).json({error:'Render no encontrado.'});
+    if(job.status==='processing')return res.json({ok:true,status:'processing',progress:job.progress||0});
+    if(job.status==='error')return res.json({ok:false,status:'error',error:job.error});
+    const st=await fs.stat(job.output).catch(()=>null); if(!st)return res.status(404).json({error:'El MP4 ya no está disponible.'});
     res.json({ok:true,status:'done',progress:100,size:st.size,downloadUrl:'/api/render/'+encodeURIComponent(req.params.jobId)+'/download'});
   });
 
   app.get('/api/render/:jobId/download', async (req,res) => {
     const job=jobs.get(String(req.params.jobId||''));
-    if(!job) return res.status(404).json({error:'Render no encontrado.'});
-    if(job.status!=='done') return res.status(409).json({error:'El MP4 todavía no está listo.'});
-    const st=await fs.stat(job.output).catch(()=>null);
-    if(!st) return res.status(404).json({error:'El MP4 ya no está disponible.'});
+    if(!job)return res.status(404).json({error:'Render no encontrado.'});
+    if(job.status!=='done')return res.status(409).json({error:'El MP4 todavía no está listo.'});
+    const st=await fs.stat(job.output).catch(()=>null); if(!st)return res.status(404).json({error:'El MP4 ya no está disponible.'});
     res.set({'Content-Type':'video/mp4','Content-Length':String(st.size),'Content-Disposition':'attachment; filename="autotube-final.mp4"','Cache-Control':'no-store'});
     res.sendFile(job.output);
   });
 }
-
-function wrappedExpress(...args){ const app=originalExpress(...args); install(app); return app; }
-Object.setPrototypeOf(wrappedExpress, originalExpress);
-Object.assign(wrappedExpress, originalExpress);
-require.cache[expressPath].exports = wrappedExpress;
+function wrappedExpress(...args){const app=originalExpress(...args);install(app);return app;}
+Object.setPrototypeOf(wrappedExpress,originalExpress); Object.assign(wrappedExpress,originalExpress); require.cache[expressPath].exports=wrappedExpress;
