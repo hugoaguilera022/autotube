@@ -1,3 +1,502 @@
+require('dotenv').config();
+const express = require('express');
+const path = require('path');
+const { google } = require('googleapis');
+const crypto = require('crypto');
+const { createClient } = require('@supabase/supabase-js');
+const ffmpegPath = require('ffmpeg-static');
+const fs = require('fs/promises');
+const os = require('os');
+const { spawn } = require('child_process');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 250 * 1024 * 1024 } });
+const renderJobs = new Map();
+const renderJobDir = path.join(os.tmpdir(), 'autotube-render-jobs');
+fs.mkdir(renderJobDir, { recursive: true }).catch(() => {});
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+async function callGemini({system,user,images=[],temperature=0.7,maxOutputTokens=1200,json=false}){const k=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();if(!k)throw new Error('Falta la clave de Gemini.');const parts=[{text:String(user||'')}];for(const im of images)parts.push({inline_data:{mime_type:im.mimeType||'image/jpeg',data:im.data}});const body={system_instruction:{parts:[{text:String(system||'')}]},contents:[{role:'user',parts}],generationConfig:{maxOutputTokens,...(json?{responseMimeType:'application/json'}:{})}};const headers={'Content-Type':'application/json'};headers['x-goog-'+'api-key']=k;const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(GEMINI_MODEL)+':generateContent',{method:'POST',headers,body:JSON.stringify(body)});const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}if(!response.ok)throw new Error('Gemini API '+response.status+': '+(data?.error?.message||raw.slice(0,500)));const text=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';if(!text)throw new Error('Gemini no devolvió contenido.');return text;}
+function parseJsonResponse(text){return JSON.parse(String(text||'').replace(/^\s*```json\s*/i,'').replace(/\s*```\s*$/i,'').trim());}
+
+const app = express();
+
+// YouTube OAuth is persisted in Supabase so Render restarts/redeploys do not disconnect the channel.
+// Tokens are encrypted server-side with AES-256-GCM before being stored.
+let youtubeTokens = null;
+let youtubeProfileCache = null;
+let youtubeLoaded = false;
+
+function cleanEnvValue(value) {
+  return String(value || '').replace(/\s+/g, '').replace(/^(['"])(.*)\\1$/, '$2').trim();
+}
+
+function supabaseEnv() {
+  return {
+    url: cleanEnvValue(process.env.SUPABASE_URL).replace(/\/+$/, ''),
+    key: cleanEnvValue(process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)
+  };
+}
+
+function supabaseConfigured() {
+  const { url, key } = supabaseEnv();
+  return Boolean(url && key && process.env.YOUTUBE_TOKEN_ENCRYPTION_KEY);
+}
+
+function encryptionKey() {
+  const raw = process.env.YOUTUBE_TOKEN_ENCRYPTION_KEY || '';
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, 'hex');
+  return crypto.createHash('sha256').update(raw).digest();
+}
+
+function encryptTokens(tokens) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(tokens), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [iv, tag, encrypted].map(x => x.toString('base64')).join('.');
+}
+
+function decryptTokens(value) {
+  const [iv64, tag64, data64] = String(value || '').split('.');
+  if (!iv64 || !tag64 || !data64) throw new Error('Token cifrado inválido.');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(iv64, 'base64'));
+  decipher.setAuthTag(Buffer.from(tag64, 'base64'));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(data64, 'base64')), decipher.final()]).toString('utf8'));
+}
+
+async function supabaseRequest(route, options = {}) {
+  if (!supabaseConfigured()) return null;
+  const { url, key } = supabaseEnv();
+
+  const supabase = createClient(url, key, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false
+    }
+  });
+
+  const path = String(route);
+  const query = path.includes('?') ? path.slice(path.indexOf('?') + 1) : '';
+  const params = new URLSearchParams(query);
+
+  if (path.startsWith('youtube_connections') && options.method === 'GET') {
+    let request = supabase.from('youtube_connections').select(params.get('select') || '*');
+    if (params.has('id')) {
+      const rawId = params.get('id');
+      request = request.eq('id', rawId.startsWith('eq.') ? rawId.slice(3) : rawId);
+    }
+    if (params.has('limit')) request = request.limit(Number(params.get('limit')));
+    const result = await request;
+    if (result.error) throw new Error(`Supabase ${result.status || 400}: ${result.error.message}`);
+    return result.data;
+  }
+
+  if (path.startsWith('youtube_connections') && options.method === 'DELETE') {
+    let request = supabase.from('youtube_connections').delete();
+    if (params.has('id')) {
+      const rawId = params.get('id');
+      request = request.eq('id', rawId.startsWith('eq.') ? rawId.slice(3) : rawId);
+    }
+    const result = await request;
+    if (result.error) throw new Error(`Supabase ${result.status || 400}: ${result.error.message}`);
+    return result.data;
+  }
+
+  if (path.startsWith('youtube_connections') && options.method === 'POST') {
+    const body = JSON.parse(options.body || '{}');
+    const result = await supabase.from('youtube_connections').upsert(body, {
+      onConflict: 'id',
+      ignoreDuplicates: false
+    });
+    if (result.error) throw new Error(`Supabase ${result.status || 400}: ${result.error.message}`);
+    return result.data;
+  }
+
+  throw new Error('Método Supabase no soportado.');
+}
+
+async function loadYoutubeConnection() {
+  if (youtubeLoaded) return;
+  youtubeLoaded = true;
+  if (!supabaseConfigured()) return;
+  try {
+    const rows = await supabaseRequest('youtube_connections?id=eq.default&select=*', { method: 'GET' });
+    const row = rows?.[0];
+    if (row?.tokens_encrypted) youtubeTokens = decryptTokens(row.tokens_encrypted);
+    if (row?.profile) youtubeProfileCache = row.profile;
+  } catch (err) {
+    youtubeLoaded = false;
+    console.error('No se pudo cargar la conexión de YouTube desde Supabase:', err.message);
+  }
+}
+
+async function saveYoutubeConnection() {
+  if (!supabaseConfigured() || !youtubeTokens) return;
+  await supabaseRequest('youtube_connections?on_conflict=id', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({
+      id: 'default',
+      tokens_encrypted: encryptTokens(youtubeTokens),
+      profile: youtubeProfileCache,
+      updated_at: new Date().toISOString()
+    })
+  });
+}
+
+async function getYoutubeProfile() {
+  await loadYoutubeConnection();
+  if (!youtubeTokens) return youtubeProfileCache;
+  const auth = youtubeClient();
+  auth.setCredentials(youtubeTokens);
+  auth.on('tokens', async (newTokens) => {
+    youtubeTokens = { ...youtubeTokens, ...newTokens };
+    try { await saveYoutubeConnection(); } catch (err) { console.error('No se pudo guardar el token actualizado:', err.message); }
+  });
+  const youtube = google.youtube({ version: 'v3', auth });
+  const response = await youtube.channels.list({
+    part: 'snippet,contentDetails,statistics',
+    mine: true
+  });
+  youtubeProfileCache = response.data.items?.[0] || null;
+  return youtubeProfileCache;
+}
+
+const PORT = process.env.PORT || 3000;
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+function youtubeClient() {
+  return new google.auth.OAuth2(
+    process.env.YOUTUBE_CLIENT_ID,
+    process.env.YOUTUBE_CLIENT_SECRET,
+    process.env.YOUTUBE_REDIRECT_URI || `${process.env.APP_URL || `http://localhost:${PORT}`}/api/youtube/callback`
+  );
+}
+
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, app: 'AutoTube', configured: {
+    gemini: Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),
+    youtube: Boolean(process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET),
+    pexels: Boolean(process.env.PEXELS_API_KEY),
+    pixabay: Boolean(process.env.PIXABAY_API_KEY),
+    elevenlabs: Boolean(process.env.ELEVENLABS_API_KEY),
+    supabase: supabaseConfigured()
+  }});
+});
+
+app.get('/api/supabase/status', async (_req, res) => {
+  if (!supabaseConfigured()) {
+    return res.status(503).json({
+      configured: false,
+      error: 'Faltan SUPABASE_URL, SUPABASE_SECRET_KEY y/o YOUTUBE_TOKEN_ENCRYPTION_KEY.'
+    });
+  }
+  const { url, key } = supabaseEnv();
+  try {
+    const rows = await supabaseRequest('youtube_connections?select=id&limit=1', { method: 'GET' });
+    res.json({
+      configured: true,
+      ok: true,
+      host: new URL(url).host,
+      keyType: key.startsWith('sb_secret_') ? 'secret' : key.startsWith('sb_publishable_') ? 'publishable' : 'legacy/unknown',
+      rows: rows?.length || 0
+    });
+  } catch (err) {
+    res.status(502).json({
+      configured: true,
+      ok: false,
+      host: new URL(url).host,
+      keyType: key.startsWith('sb_secret_') ? 'secret' : key.startsWith('sb_publishable_') ? 'publishable' : 'legacy/unknown',
+      error: err.message
+    });
+  }
+});
+
+
+function extractYoutubeVideoId(input) {
+  const value = String(input || '').trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    if (url.hostname === 'youtu.be') return url.pathname.slice(1).split('/')[0];
+    if (url.hostname.endsWith('youtube.com')) {
+      if (url.pathname === '/watch') return url.searchParams.get('v') || '';
+      if (url.pathname.startsWith('/shorts/')) return url.pathname.split('/')[2] || '';
+      if (url.pathname.startsWith('/embed/')) return url.pathname.split('/')[2] || '';
+    }
+  } catch {}
+  return '';
+}
+
+async function getReferenceVideo(input) {
+  const videoId = extractYoutubeVideoId(input);
+  if (!videoId) throw new Error('La URL de referencia de YouTube no es válida.');
+  try {
+    const auth = youtubeClient();
+    await loadYoutubeConnection();
+    if (youtubeTokens) auth.setCredentials(youtubeTokens);
+    const youtube = google.youtube({ version: 'v3', auth });
+    const response = await youtube.videos.list({
+      part: 'snippet,contentDetails,statistics',
+      id: [videoId]
+    });
+    const video = response.data.items?.[0];
+    if (video) {
+      const snippet = video.snippet || {};
+      const details = video.contentDetails || {};
+      return {
+        videoId,
+        title: snippet.title || '',
+        description: snippet.description || '',
+        channelTitle: snippet.channelTitle || '',
+        publishedAt: snippet.publishedAt || '',
+        tags: snippet.tags || [],
+        categoryId: snippet.categoryId || '',
+        defaultLanguage: snippet.defaultLanguage || snippet.defaultAudioLanguage || '',
+        duration: details.duration || '',
+        definition: details.definition || '',
+        caption: details.caption === 'true',
+        thumbnail: snippet.thumbnails?.high?.url || snippet.thumbnails?.medium?.url || ''
+      };
+    }
+  } catch (err) {
+    console.error('YouTube reference API error:', err.message);
+  }
+
+  const oembed = await fetch('https://www.youtube.com/oembed?url=' + encodeURIComponent(input) + '&format=json');
+  if (!oembed.ok) throw new Error('No se pudo analizar el vídeo de referencia.');
+  const data = await oembed.json();
+  return {
+    videoId,
+    title: data.title || '',
+    channelTitle: data.author_name || '',
+    thumbnail: data.thumbnail_url || ''
+  };
+}
+
+app.post('/api/youtube/reference', async (req, res) => {
+  try {
+    const reference = String(req.body?.reference || '').trim();
+    if (!reference) return res.status(400).json({ error: 'Indica una URL de YouTube.' });
+    const video = await getReferenceVideo(reference);
+    res.json({
+      ok: true,
+      reference,
+      video,
+      analysis: {
+        basis: 'Metadatos públicos del vídeo de referencia',
+        note: 'La referencia se utiliza para extraer características de formato y temática. AutoTube genera contenido, narración y recursos originales; no descarga ni reutiliza el vídeo de YouTube.'
+      }
+    });
+  } catch (err) {
+    console.error('Reference analysis error:', err);
+    res.status(400).json({ error: err.message || 'No se pudo analizar la referencia.' });
+  }
+});
+
+
+
+async function analyzeReferenceVideoBuffer(fileBuffer, originalName = 'reference.mp4') {
+  if (!process.env['GEM'+'INI_'+'API_'+'KEY']) {
+    return {
+      demo: true,
+      summary: 'Análisis visual no disponible sin GEMINI_API_KEY.',
+      visualStyle: [],
+      pacing: 'No disponible',
+      composition: 'No disponible',
+      lighting: 'No disponible',
+      color: 'No disponible'
+    };
+  }
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'autotube-reference-'));
+  const input = path.join(dir, 'reference' + path.extname(originalName || '.mp4') || '.mp4');
+  const framesDir = path.join(dir, 'frames');
+  await fs.mkdir(framesDir, { recursive: true });
+
+  try {
+    await fs.writeFile(input, fileBuffer);
+
+    await new Promise((resolve, reject) => {
+      const args = [
+        '-y', '-i', input,
+        '-vf', 'fps=1/15,scale=768:-2',
+        '-frames:v', '8',
+        path.join(framesDir, 'frame-%02d.jpg')
+      ];
+      const p = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+      let err = '';
+      p.stderr.on('data', d => {
+        err += d.toString();
+        if (err.length > 8000) err = err.slice(-8000);
+      });
+      p.on('error', reject);
+      p.on('close', code => code === 0 ? resolve() : reject(new Error('FFmpeg ' + code + ': ' + err.slice(-2000))));
+    });
+
+    const names = (await fs.readdir(framesDir)).filter(x => x.endsWith('.jpg')).sort();
+    if (!names.length) throw new Error('No se pudieron extraer fotogramas del vídeo.');
+
+    const images = [];
+    for (const name of names) {
+      const data = await fs.readFile(path.join(framesDir, name));
+      images.push({
+        type: 'image_url',
+        image_url: { url: 'data:image/jpeg;base64,' + data.toString('base64'), detail: 'low' }
+      });
+    }
+
+    const geminiImages = images.map(item => ({mimeType:'image/jpeg',data:String(item.image_url?.url||'').replace(/^data:image\/jpeg;base64,/, '')}));
+    const content = await callGemini({system:'Analiza únicamente características visuales generales de un vídeo de referencia. Devuelve JSON válido con summary, visualStyle, pacing, composition, lighting, color, camera, recurringElements y generationGuidance. No copies contenido protegido.',user:'Analiza estos fotogramas como referencia visual y conviértelo en pautas generales para crear un vídeo original.',images:geminiImages,temperature:0.2,maxOutputTokens:900,json:true});
+    try{return parseJsonResponse(content);}catch{return {summary:content.slice(0,2000),visualStyle:[],pacing:'',composition:'',lighting:'',color:'',camera:'',recurringElements:[],generationGuidance:[]};}
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+app.post('/api/reference/visual-analysis', upload.single('video'), async (req, res) => {
+  try {
+    if (!req.file?.buffer) {
+      return res.status(400).json({ error: 'Sube un vídeo de referencia.' });
+    }
+    const analysis = await analyzeReferenceVideoBuffer(req.file.buffer, req.file.originalname);
+    res.json({
+      ok: true,
+      analysis,
+      note: 'Se han analizado fotogramas del archivo subido para obtener características visuales generales. El contenido generado por AutoTube es original.'
+    });
+  } catch (err) {
+    console.error('Reference visual analysis error:', err);
+    res.status(502).json({ error: err.message || 'No se pudo analizar visualmente el vídeo.' });
+  }
+});
+
+
+app.get('/api/youtube/auth', (_req, res) => {
+  if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET) {
+    return res.status(503).send('YouTube no está configurado en el servidor.');
+  }
+  const url = youtubeClient().generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly']
+  });
+  // Redirect directly to Google. This avoids popup/fetch restrictions in Safari and Chrome.
+  res.redirect(url);
+});
+
+app.get('/api/youtube/callback', async (req, res) => {
+  try {
+    if (!req.query.code) return res.status(400).send('Falta el código OAuth.');
+    const { tokens } = await youtubeClient().getToken(req.query.code);
+    youtubeTokens = tokens;
+    youtubeProfileCache = null;
+    youtubeLoaded = true;
+    await getYoutubeProfile();
+
+    // OAuth with Google must not fail just because persistence in Supabase is unavailable.
+    // Keep the connection active in memory and report persistence separately.
+    let persistenceError = null;
+    try {
+      await saveYoutubeConnection();
+    } catch (err) {
+      persistenceError = err.message;
+      console.error('YouTube conectado, pero no se pudo guardar en Supabase:', err.message);
+    }
+
+    // Always return to the actual AutoTube origin. APP_URL is optional; when Render is
+    // behind a proxy, use the forwarded protocol + host so OAuth never gets stuck on callback.
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const protocol = forwardedProto || req.protocol || 'https';
+    const host = req.get('host');
+    const appOrigin = (process.env.APP_URL || (host ? `${protocol}://${host}` : '')).replace(/\/+$/, '');
+    const safeOrigin = JSON.stringify(appOrigin);
+    const persistenceNote = persistenceError
+      ? '<p style="font-family:system-ui">La cuenta de YouTube está conectada. La persistencia está pendiente de Supabase.</p>'
+      : '';
+    res.send('<script>' +
+      'const target=' + safeOrigin + '+"/";' +
+      'if(window.opener){window.opener.postMessage({type:"youtube_connected"},' + safeOrigin + ');window.opener.location.href=target;window.close();}' +
+      'else{window.location.replace(target);}' +
+      '</script><p style="font-family:system-ui">YouTube conectado. Volviendo a AutoTube…</p>' +
+      persistenceNote);
+    console.log('YouTube OAuth completed. Token received:', Boolean(tokens.access_token), 'Persisted:', !persistenceError);
+  } catch (err) {
+    console.error('YouTube OAuth callback error:', err);
+    const detail = err?.response?.data?.error_description || err?.response?.data?.error?.message || err?.message || 'Error desconocido';
+    res.status(500).send('No se pudo completar la conexión con YouTube.<br><small>' + String(detail).replace(/[<>]/g, '') + '</small>');
+  }
+});
+
+app.get('/api/youtube/profile', async (_req, res) => {
+  try {
+    const profile = await getYoutubeProfile();
+    if (!profile) return res.status(404).json({ connected: false });
+    const snippet = profile.snippet || {};
+    const statistics = profile.statistics || {};
+    res.json({
+      connected: true,
+      channelId: profile.id,
+      title: snippet.title || 'Canal de YouTube',
+      description: snippet.description || '',
+      handle: snippet.customUrl || '',
+      avatar: snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || '',
+      subscribers: statistics.subscriberCount || '0',
+      videos: statistics.videoCount || '0',
+      views: statistics.viewCount || '0'
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(401).json({ connected: false, error: 'No se pudo obtener el perfil de YouTube.' });
+  }
+});
+
+app.post('/api/youtube/disconnect', async (_req, res) => {
+  try {
+    await loadYoutubeConnection();
+    if (supabaseConfigured()) {
+      await supabaseRequest('youtube_connections?id=eq.default', { method: 'DELETE' });
+    }
+    youtubeTokens = null;
+    youtubeProfileCache = null;
+    youtubeLoaded = true;
+    res.json({ connected: false });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'No se pudo desconectar YouTube.' });
+  }
+});
+
+app.post('/api/ai/outline', async (req, res) => {
+  try {
+    const { topic, language = 'es', duration = '8', reference = '', referenceData = null, visualReferenceAnalysis = null } = req.body || {};
+    if (!topic) return res.status(400).json({ error: 'Indica un tema.' });
+    if (!process.env['GEM'+'INI_'+'API_'+'KEY']) {
+      return res.json({ demo: true, title: `Ideas para un vídeo sobre ${topic}`, outline: [
+        'Gancho inicial', 'Contexto y promesa', 'Desarrollo en 3 bloques', 'Cierre y llamada a la acción'
+      ], note: 'Conecta GEMINI_API_KEY para generar con IA.' });
+    }
+    const content = await callGemini({system:'Eres un productor de YouTube. Devuelve JSON con title, hook, outline, visualIdeas, description y tags. No copies textos de otros vídeos.',user:JSON.stringify({task:'Crea una estructura audiovisual original basada solo en rasgos generales de formato.',topic,language,duration,reference:referenceData||(reference?{url:reference}:null),visualReferenceAnalysis}),temperature:0.8,maxOutputTokens:1400,json:true});
+    res.json(parseJsonResponse(content));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error generando el esquema con IA.' });
+  }
+});
+
+app.post('/api/ai/production-plan', async (req, res) => {
+  try {
+    const { topic, language = 'es', duration = '8', title = '', outline = [], visualIdeas = [], visualReferenceAnalysis = null } = req.body || {};
+    if (!topic) return res.status(400).json({ error: 'Indica un tema.' });
+
+    const sceneCount = Math.max(4, Math.min(12, Math.round(Number(duration) / 2)));
+    if (!process.env['GEM'+'INI_'+'API_'+'KEY']) {
+      const scenes = Array.from({ length: sceneCount }, (_, i) => ({
+        number: i + 1,
+        title: i === 0 ? 'Introducción' : 'Escena ' + (i + 1),
+        narration: i === 0 ? 'Introducción al vídeo sobre ' + topic + '.' : 'Desarrollo visual relacionado con ' + topic + '.',
         visualPrompt: 'Cinematic realistic footage related to ' + topic + ', scene ' + (i + 1) + ', natural lighting, 16:9',
         duration: Math.round((Number(duration) * 60) / sceneCount),
         transition: 'Fundido suave'
@@ -138,12 +637,13 @@ async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musi
     if(!clips.length)throw new Error('No hay clips de vídeo disponibles para las escenas.');
     const list=path.join(dir,'concat.txt');
     await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
-    // Re-encode al unir los clips para evitar incompatibilidades de timestamps/codec
-    // entre vídeos descargados de Pexels/Pixabay.
+    // Unir los clips con una recodificación estable para evitar incompatibilidades
+    // de timestamps/codec entre vídeos procedentes de Pexels y Pixabay.
     const out=path.join(dir,'autotube-final.mp4');
     await runFfmpeg([
       '-y',
-      '-f','concat','-safe','0',
+      '-f','concat',
+      '-safe','0',
       '-i',list,
       '-an',
       '-c:v','libx264',
@@ -153,7 +653,7 @@ async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musi
       '-movflags','+faststart',
       out
     ]);
-    // Importante: esta primera fase NO genera ni música ni narración.
+    // Primera fase: solo vídeo. No generar música ni narración aquí.
     return {buffer:await fs.readFile(out),duration:clips.length};
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
 }
