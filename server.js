@@ -607,55 +607,99 @@ app.post('/api/media/search',async(req,res)=>{
 });
 
 async function downloadToFile(url,file){
-  const r=await fetch(url);
-  if(!r.ok)throw new Error('No se pudo descargar el recurso ('+r.status+').');
-  const buf=Buffer.from(await r.arrayBuffer());
-  await fs.writeFile(file,buf);
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),45000);
+  try{
+    const r=await fetch(url,{signal:controller.signal});
+    if(!r.ok)throw new Error('No se pudo descargar el recurso ('+r.status+').');
+    const length=Number(r.headers.get('content-length')||0);
+    if(length>120*1024*1024)throw new Error('El recurso de vídeo es demasiado grande para el render.');
+    const buf=Buffer.from(await r.arrayBuffer());
+    if(!buf.length)throw new Error('El recurso descargado está vacío.');
+    if(buf.length>120*1024*1024)throw new Error('El recurso de vídeo es demasiado grande para el render.');
+    await fs.writeFile(file,buf);
+  }catch(err){
+    if(err?.name==='AbortError')throw new Error('Tiempo de espera agotado al descargar el vídeo.');
+    throw err;
+  }finally{clearTimeout(timer);}
 }
 function runFfmpeg(args){
   return new Promise((resolve,reject)=>{
     const p=spawn(ffmpegPath,args,{stdio:['ignore','ignore','pipe']});
-    let err='';p.stderr.on('data',d=>{err+=d.toString();if(err.length>12000)err=err.slice(-12000)});
-    p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))));
+    let err='';
+    p.stderr.on('data',d=>{err+=d.toString();if(err.length>12000)err=err.slice(-12000)});
+    p.on('error',reject);
+    p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))));
   });
 }
-async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musicBuffer=null}){
+async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musicBuffer=null,onProgress=()=>{}}){
   if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-'));
   try{
-    const clips=[],voiceFiles=[];
-    for(let i=0;i<scenes.length;i++){
-      const scene=scenes[i],found=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i],asset=found?.media?.find(x=>x.downloadUrl)?.downloadUrl;
-      if(!asset)continue;
-      const input=path.join(dir,'in-'+i+'.mp4'),output=path.join(dir,'scene-'+i+'.mp4');
-      await downloadToFile(asset,input);
+    const clips=[];
+    const usableScenes=scenes.filter((scene,i)=>{
+      const found=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
+      return Boolean(found?.media?.find(x=>x.downloadUrl)?.downloadUrl);
+    });
+    if(!usableScenes.length)throw new Error('No hay clips de vídeo disponibles para las escenas.');
+    const total=usableScenes.length;
+
+    for(let i=0;i<usableScenes.length;i++){
+      const scene=usableScenes[i];
+      const found=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
+      const asset=found?.media?.find(x=>x.downloadUrl)?.downloadUrl;
+      const input=path.join(dir,'in-'+i+'.mp4');
+      const output=path.join(dir,'scene-'+i+'.mp4');
       const duration=Math.max(2,Math.min(120,Number(scene.duration)||8));
-      await runFfmpeg(['-y','-stream_loop','-1','-i',input,'-t',String(duration),'-vf',"scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p,fps=30",'-an','-c:v','libx264','-preset','veryfast','-crf','23','-movflags','+faststart',output]);
+
+      await downloadToFile(asset,input);
+
+      // Todos los clips se normalizan exactamente igual. Esto permite después
+      // unirlos con "stream copy" sin una segunda recodificación pesada.
+      await runFfmpeg([
+        '-y',
+        '-stream_loop','-1',
+        '-i',input,
+        '-t',String(duration),
+        '-map','0:v:0',
+        '-vf',"scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p,fps=24",
+        '-an',
+        '-c:v','libx264',
+        '-preset','ultrafast',
+        '-crf','28',
+        '-pix_fmt','yuv420p',
+        '-threads','1',
+        '-movflags','+faststart',
+        output
+      ]);
       clips.push(output);
-      if(narrationBuffers[i]){const vf=path.join(dir,'voice-'+i+'.mp3');await fs.writeFile(vf,narrationBuffers[i]);voiceFiles.push({file:vf,delay:scenes.slice(0,i).reduce((n,x)=>n+(Number(x.duration)||8),0)});}
+      onProgress(Math.min(90,Math.round(((i+1)/total)*85)+5));
     }
-    if(!clips.length)throw new Error('No hay clips de vídeo disponibles para las escenas.');
+
     const list=path.join(dir,'concat.txt');
     await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
-    // Unir los clips con una recodificación estable para evitar incompatibilidades
-    // de timestamps/codec entre vídeos procedentes de Pexels y Pixabay.
     const out=path.join(dir,'autotube-final.mp4');
-    await runFfmpeg([
-      '-y',
-      '-f','concat',
-      '-safe','0',
-      '-i',list,
-      '-an',
-      '-c:v','libx264',
-      '-preset','veryfast',
-      '-crf','23',
-      '-pix_fmt','yuv420p',
-      '-movflags','+faststart',
-      out
-    ]);
-    // Primera fase: solo vídeo. No generar música ni narración aquí.
-    return {buffer:await fs.readFile(out),duration:clips.length};
-  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+
+    try{
+      await runFfmpeg([
+        '-y','-f','concat','-safe','0','-i',list,
+        '-c','copy','-movflags','+faststart',out
+      ]);
+    }catch(copyErr){
+      // Fallback para cualquier diferencia de timestamps/MP4 entre versiones de FFmpeg.
+      console.warn('Concat copy falló; usando recodificación final:',copyErr.message);
+      await runFfmpeg([
+        '-y','-f','concat','-safe','0','-i',list,
+        '-an','-c:v','libx264','-preset','ultrafast','-crf','28',
+        '-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',out
+      ]);
+    }
+
+    onProgress(100);
+    return {buffer:await fs.readFile(out),duration:usableScenes.reduce((n,s)=>n+(Number(s.duration)||8),0)};
+  }finally{
+    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
 }
 app.post('/api/render',async(req,res)=>{
   try{
@@ -665,31 +709,42 @@ app.post('/api/render',async(req,res)=>{
 
     const jobId='render_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
     const outputPath=path.join(renderJobDir,jobId+'.mp4');
-    renderJobs.set(jobId,{status:'processing',progress:0,createdAt:Date.now(),outputPath,error:null});
+    renderJobs.set(jobId,{status:'processing',progress:1,createdAt:Date.now(),outputPath,error:null});
 
-    // El render se ejecuta en segundo plano para evitar que Render cierre la petición
-    // por timeout mientras FFmpeg procesa vídeos largos.
+    // El render se ejecuta en segundo plano para que el navegador no mantenga
+    // abierta una petición durante todo el procesamiento de FFmpeg.
     res.status(202).json({ok:true,jobId,status:'processing'});
 
     (async()=>{
       const job=renderJobs.get(jobId);
       try{
-        // No generamos audio en esta primera fase: el objetivo es obtener el MP4 de vídeo.
-        // La música/narración se procesarán en una fase posterior.
-        if(job) job.progress=25;
-        const result=await renderAutotubeVideo({scenes,mediaResults,narrationBuffers:[]});
+        const result=await renderAutotubeVideo({
+          scenes,
+          mediaResults,
+          narrationBuffers:[],
+          onProgress:p=>{if(job)job.progress=p;}
+        });
         await fs.writeFile(outputPath,result.buffer);
-        if(job){ job.status='done'; job.progress=100; job.size=result.buffer.length; job.finishedAt=Date.now(); }
+        if(job){
+          job.status='done';
+          job.progress=100;
+          job.size=result.buffer.length;
+          job.finishedAt=Date.now();
+        }
         console.log('Render completed:',jobId,'size=',result.buffer.length);
       }catch(err){
         console.error('Render error:',jobId,err);
-        if(job){ job.status='error'; job.progress=0; job.error=err.message||'No se pudo renderizar el vídeo.'; }
+        if(job){
+          job.status='error';
+          job.progress=0;
+          job.error=err.message||'No se pudo renderizar el vídeo.';
+        }
         await fs.rm(outputPath,{force:true}).catch(()=>{});
       }
     })();
   }catch(err){
     console.error('Render start error:',err);
-    res.status(502).json({error:err.message||'No se pudo iniciar el render.'});
+    if(!res.headersSent)res.status(500).json({error:err.message||'No se pudo iniciar el render.'});
   }
 });
 
@@ -697,7 +752,7 @@ app.get('/api/render/:jobId',async(req,res)=>{
   const job=renderJobs.get(String(req.params.jobId||''));
   if(!job)return res.status(404).json({error:'Render no encontrado o ya ha expirado.'});
   if(job.status==='processing')return res.json({ok:true,status:'processing',progress:job.progress||0});
-  if(job.status==='error')return res.status(502).json({ok:false,status:'error',error:job.error});
+  if(job.status==='error')return res.json({ok:false,status:'error',error:job.error});
   try{
     const stat=await fs.stat(job.outputPath);
     res.json({ok:true,status:'done',progress:100,size:stat.size,downloadUrl:'/api/render/'+encodeURIComponent(req.params.jobId)+'/download'});
@@ -713,7 +768,12 @@ app.get('/api/render/:jobId/download',async(req,res)=>{
   if(job.status!=='done')return res.status(409).json({error:'El render todavía no está listo.'});
   try{
     const stat=await fs.stat(job.outputPath);
-    res.set({'Content-Type':'video/mp4','Content-Length':String(stat.size),'Content-Disposition':'attachment; filename="autotube-final.mp4"','Cache-Control':'no-store'});
+    res.set({
+      'Content-Type':'video/mp4',
+      'Content-Length':String(stat.size),
+      'Content-Disposition':'attachment; filename="autotube-final.mp4"',
+      'Cache-Control':'no-store'
+    });
     res.sendFile(job.outputPath);
   }catch{
     res.status(404).json({error:'El vídeo renderizado ya no está disponible.'});
