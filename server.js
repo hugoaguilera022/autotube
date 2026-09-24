@@ -347,7 +347,7 @@ async function analyzeReferenceVideoBuffer(fileBuffer, originalName = 'reference
 
     const geminiImages = images.map(item => ({mimeType:'image/jpeg',data:String(item.image_url?.url||'').replace(/^data:image\/jpeg;base64,/, '')}));
     const content = await callGemini({system:'Analiza únicamente características visuales generales de un vídeo de referencia. Devuelve JSON válido con summary, visualStyle, pacing, composition, lighting, color, camera, recurringElements y generationGuidance. No copies contenido protegido.',user:'Analiza estos fotogramas como referencia visual y conviértelo en pautas generales para crear un vídeo original.',images:geminiImages,temperature:0.2,maxOutputTokens:900,json:true});
-    try{return parseJsonResponse(content);}catch{return {summary:content.slice(0,2000),visualStyle:[],pacing:'',composition:'',lighting:'',color:'',camera:'',recurringElements:[],generationGuidance:[]};}    }
+    try{return parseJsonResponse(content);}catch{return {summary:content.slice(0,2000),visualStyle:[],pacing:'',composition:'',lighting:'',color:'',camera:'',recurringElements:[],generationGuidance:[]};}
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
