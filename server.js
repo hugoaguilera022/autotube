@@ -10,6 +10,9 @@ const os = require('os');
 const { spawn } = require('child_process');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 250 * 1024 * 1024 } });
+const renderJobs = new Map();
+const renderJobDir = path.join(os.tmpdir(), 'autotube-render-jobs');
+fs.mkdir(renderJobDir, { recursive: true }).catch(() => {});
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 async function callGemini({system,user,images=[],temperature=0.7,maxOutputTokens=1200,json=false}){const k=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();if(!k)throw new Error('Falta la clave de Gemini.');const parts=[{text:String(user||'')}];for(const im of images)parts.push({inline_data:{mime_type:im.mimeType||'image/jpeg',data:im.data}});const body={system_instruction:{parts:[{text:String(system||'')}]},contents:[{role:'user',parts}],generationConfig:{maxOutputTokens,...(json?{responseMimeType:'application/json'}:{})}};const headers={'Content-Type':'application/json'};headers['x-goog-'+'api-key']=k;const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(GEMINI_MODEL)+':generateContent',{method:'POST',headers,body:JSON.stringify(body)});const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}if(!response.ok)throw new Error('Gemini API '+response.status+': '+(data?.error?.message||raw.slice(0,500)));const text=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';if(!text)throw new Error('Gemini no devolvió contenido.');return text;}
 function parseJsonResponse(text){return JSON.parse(String(text||'').replace(/^\s*```json\s*/i,'').replace(/\s*```\s*$/i,'').trim());}
@@ -653,22 +656,74 @@ app.post('/api/render',async(req,res)=>{
     const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];
     const mediaResults=Array.isArray(req.body?.mediaResults)?req.body.mediaResults:[];
     if(!scenes.length||!mediaResults.length)return res.status(400).json({error:'Genera las escenas y busca los visuales antes de renderizar.'});
-    const narrationBuffers=[];
-    // La narración es opcional durante el render. Si ElevenLabs no está configurado
-    // o falla una escena, el vídeo continúa sin esa pista en lugar de bloquear el MP4.
-    for(const scene of scenes){
-      const text=String(scene.narration||scene.script||'').trim();
-      if(!text || !process.env.ELEVENLABS_API_KEY){ narrationBuffers.push(null); continue; }
+
+    const jobId='render_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+    const outputPath=path.join(renderJobDir,jobId+'.mp4');
+    renderJobs.set(jobId,{status:'processing',progress:0,createdAt:Date.now(),outputPath,error:null});
+
+    // El render se ejecuta en segundo plano para evitar que Render cierre la petición
+    // por timeout mientras FFmpeg procesa vídeos largos.
+    res.status(202).json({ok:true,jobId,status:'processing'});
+
+    (async()=>{
+      const job=renderJobs.get(jobId);
       try{
-        narrationBuffers.push(await generateElevenVoice({text,language:req.body?.language||'es'}));
+        const narrationBuffers=[];
+        for(let i=0;i<scenes.length;i++){
+          const scene=scenes[i];
+          const text=String(scene.narration||scene.script||'').trim();
+          if(!text || !process.env.ELEVENLABS_API_KEY){ narrationBuffers.push(null); continue; }
+          try{
+            narrationBuffers.push(await generateElevenVoice({text,language:req.body?.language||'es'}));
+          }catch(err){
+            console.error('Narration scene skipped:', err.message);
+            narrationBuffers.push(null);
+          }
+          if(job) job.progress=Math.min(20,Math.round(((i+1)/scenes.length)*20));
+        }
+
+        if(job) job.progress=25;
+        const result=await renderAutotubeVideo({scenes,mediaResults,narrationBuffers});
+        await fs.writeFile(outputPath,result.buffer);
+        if(job){ job.status='done'; job.progress=100; job.size=result.buffer.length; job.finishedAt=Date.now(); }
+        console.log('Render completed:',jobId,'size=',result.buffer.length);
       }catch(err){
-        console.error('Narration scene skipped:', err.message);
-        narrationBuffers.push(null);
+        console.error('Render error:',jobId,err);
+        if(job){ job.status='error'; job.progress=0; job.error=err.message||'No se pudo renderizar el vídeo.'; }
+        await fs.rm(outputPath,{force:true}).catch(()=>{});
       }
-    }
-    const result=await renderAutotubeVideo({scenes,mediaResults,narrationBuffers});
-    res.set({'Content-Type':'video/mp4','Content-Length':String(result.buffer.length),'Content-Disposition':'attachment; filename="autotube-final.mp4"','Cache-Control':'no-store'});res.send(result.buffer);
-  }catch(err){console.error('Render error:',err);res.status(502).json({error:err.message||'No se pudo renderizar el vídeo.'});}
+    })();
+  }catch(err){
+    console.error('Render start error:',err);
+    res.status(502).json({error:err.message||'No se pudo iniciar el render.'});
+  }
+});
+
+app.get('/api/render/:jobId',async(req,res)=>{
+  const job=renderJobs.get(String(req.params.jobId||''));
+  if(!job)return res.status(404).json({error:'Render no encontrado o ya ha expirado.'});
+  if(job.status==='processing')return res.json({ok:true,status:'processing',progress:job.progress||0});
+  if(job.status==='error')return res.status(502).json({ok:false,status:'error',error:job.error});
+  try{
+    const stat=await fs.stat(job.outputPath);
+    res.json({ok:true,status:'done',progress:100,size:stat.size,downloadUrl:'/api/render/'+encodeURIComponent(req.params.jobId)+'/download'});
+  }catch{
+    renderJobs.delete(req.params.jobId);
+    return res.status(404).json({error:'El vídeo renderizado ya no está disponible.'});
+  }
+});
+
+app.get('/api/render/:jobId/download',async(req,res)=>{
+  const job=renderJobs.get(String(req.params.jobId||''));
+  if(!job)return res.status(404).json({error:'Render no encontrado o ya ha expirado.'});
+  if(job.status!=='done')return res.status(409).json({error:'El render todavía no está listo.'});
+  try{
+    const stat=await fs.stat(job.outputPath);
+    res.set({'Content-Type':'video/mp4','Content-Length':String(stat.size),'Content-Disposition':'attachment; filename="autotube-final.mp4"','Cache-Control':'no-store'});
+    res.sendFile(job.outputPath);
+  }catch{
+    res.status(404).json({error:'El vídeo renderizado ya no está disponible.'});
+  }
 });
 async function generateElevenVoice({text,voiceId,language='es'}){
   if(!process.env.ELEVENLABS_API_KEY)throw new Error('ELEVENLABS_API_KEY no está configurada.');
