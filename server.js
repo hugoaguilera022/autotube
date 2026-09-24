@@ -138,14 +138,15 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/youtube/auth', (_req, res) => {
   if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET) {
-    return res.status(503).json({ error: 'Configura YOUTUBE_CLIENT_ID y YOUTUBE_CLIENT_SECRET en Render.' });
+    return res.status(503).send('YouTube no está configurado en el servidor.');
   }
   const url = youtubeClient().generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly']
   });
-  res.json({ url });
+  // Redirect directly to Google. This avoids popup/fetch restrictions in Safari and Chrome.
+  res.redirect(url);
 });
 
 app.get('/api/youtube/callback', async (req, res) => {
@@ -157,8 +158,13 @@ app.get('/api/youtube/callback', async (req, res) => {
     youtubeLoaded = true;
     await getYoutubeProfile();
     await saveYoutubeConnection();
-    const appOrigin = process.env.APP_URL || '*';
-    res.send(`<script>window.opener?.postMessage({type:'youtube_connected'}, '${appOrigin}'); window.close();</script><p>YouTube conectado. Puedes cerrar esta ventana.</p>`);
+    const appOrigin = (process.env.APP_URL || '').replace(/\/+$/, '');
+    if (appOrigin) {
+      const safeOrigin = JSON.stringify(appOrigin);
+      res.send('<script>if(window.opener){window.opener.postMessage({type:"youtube_connected"},' + safeOrigin + ');window.close();}else{window.location.href=' + safeOrigin + '+"/";}</script><p>YouTube conectado. Volviendo a AutoTube…</p>');
+    } else {
+      res.send('<p>YouTube conectado correctamente. Puedes volver a AutoTube.</p>');
+    }
     console.log('YouTube OAuth completed. Token received:', Boolean(tokens.access_token));
   } catch (err) {
     console.error(err);
