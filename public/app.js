@@ -137,7 +137,7 @@ async function generateMusic(){
     audio.src=window.currentMusicUrl;audio.classList.remove('hidden');audio.load();
     label.textContent='Música generada · lista para el montaje';state.textContent='Listo';
   }catch(e){state.textContent='Error';label.textContent=e.message;}
-  finally{btn.disabled=false;btn.textContent='Generar música con IA'}
+  finally{btn.disabled=false;btn.textContent='Generar música gratuita'}
 }
 
 async function generateVoiceForScenes(){
