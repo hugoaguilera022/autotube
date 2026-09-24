@@ -174,7 +174,7 @@ function youtubeClient() {
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, app: 'AutoTube', configured: {
-    openai: Boolean(process.env.OPENAI_API_KEY),
+    gemini: Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),
     youtube: Boolean(process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET),
     pexels: Boolean(process.env.PEXELS_API_KEY),
     pixabay: Boolean(process.env.PIXABAY_API_KEY),
@@ -296,7 +296,7 @@ app.post('/api/youtube/reference', async (req, res) => {
 
 
 async function analyzeReferenceVideoBuffer(fileBuffer, originalName = 'reference.mp4') {
-  if (!process.env.OPENAI_API_KEY) {
+  if (!process.env['GEM'+'INI_'+'API_'+'KEY']) {
     return {
       demo: true,
       summary: 'Análisis visual no disponible sin OPENAI_API_KEY.',
@@ -345,42 +345,9 @@ async function analyzeReferenceVideoBuffer(fileBuffer, originalName = 'reference
       });
     }
 
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.2,
-      max_tokens: 900,
-      messages: [
-        {
-          role: 'system',
-          content: 'Analiza únicamente características visuales generales de un vídeo de referencia. No identifiques ni reproduzcas contenido protegido. Devuelve JSON válido con summary, visualStyle (array), pacing, composition, lighting, color, camera, recurringElements (array) y generationGuidance (array). La finalidad es crear contenido audiovisual nuevo y diferenciado.'
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'Analiza estos fotogramas como referencia visual. Describe estilo, composición, ritmo aparente, iluminación, color, cámara y elementos recurrentes. No describas ni copies personas, textos, logotipos, escenas concretas o contenido identificable. Convierte las observaciones en pautas generales para generar un vídeo original.' },
-            ...images
-          ]
-        }
-      ]
-    });
-
-    const content = response.choices?.[0]?.message?.content || '{}';
-    try {
-      return JSON.parse(content);
-    } catch {
-      return {
-        summary: content.slice(0, 2000),
-        visualStyle: [],
-        pacing: '',
-        composition: '',
-        lighting: '',
-        color: '',
-        camera: '',
-        recurringElements: [],
-        generationGuidance: []
-      };
-    }
+    const geminiImages = images.map(item => ({mimeType:'image/jpeg',data:String(item.image_url?.url||'').replace(/^data:image\/jpeg;base64,/, '')}));
+    const content = await callGemini({system:'Analiza únicamente características visuales generales de un vídeo de referencia. Devuelve JSON válido con summary, visualStyle, pacing, composition, lighting, color, camera, recurringElements y generationGuidance. No copies contenido protegido.',user:'Analiza estos fotogramas como referencia visual y conviértelo en pautas generales para crear un vídeo original.',images:geminiImages,temperature:0.2,maxOutputTokens:900,json:true});
+    try{return parseJsonResponse(content);}catch{return {summary:content.slice(0,2000),visualStyle:[],pacing:'',composition:'',lighting:'',color:'',camera:'',recurringElements:[],generationGuidance:[]};}    }
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -503,30 +470,13 @@ app.post('/api/ai/outline', async (req, res) => {
   try {
     const { topic, language = 'es', duration = '8', reference = '', referenceData = null, visualReferenceAnalysis = null } = req.body || {};
     if (!topic) return res.status(400).json({ error: 'Indica un tema.' });
-    if (!process.env.OPENAI_API_KEY) {
+    if (!process.env['GEM'+'INI_'+'API_'+'KEY']) {
       return res.json({ demo: true, title: `Ideas para un vídeo sobre ${topic}`, outline: [
         'Gancho inicial', 'Contexto y promesa', 'Desarrollo en 3 bloques', 'Cierre y llamada a la acción'
       ], note: 'Conecta OPENAI_API_KEY para generar con IA.' });
     }
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.8,
-      response_format: { type: 'json_object' },
-      messages: [{ role: 'system', content: 'Eres un productor de YouTube. Devuelve JSON con title, hook, outline (array), visualIdeas (array), description y tags (array). No copies textos de otros vídeos.' },
-        { role: 'user', content: JSON.stringify({
-  task: 'Crea una estructura audiovisual original inspirada en las características del vídeo de referencia, sin copiar su guion, frases, escenas, audio, imágenes ni secuencia exacta.',
-  topic, language, duration,
-  reference: referenceData || (reference ? { url: reference } : null),
-  visualReferenceAnalysis,
-  requirements: [
-    'Detecta y reproduce solo rasgos generales de formato: temática, ritmo aproximado, tono, tipo de apertura, estructura narrativa, densidad visual y estilo de presentación.',
-    'Transforma esas características en una propuesta nueva y diferenciada.',
-    'Devuelve title, hook, outline, visualIdeas, description y tags.'
-  ]
-}) }]
-    });
-    res.json(JSON.parse(response.choices[0].message.content));
+    const content = await callGemini({system:'Eres un productor de YouTube. Devuelve JSON con title, hook, outline, visualIdeas, description y tags. No copies textos de otros vídeos.',user:JSON.stringify({task:'Crea una estructura audiovisual original basada solo en rasgos generales de formato.',topic,language,duration,reference:referenceData||(reference?{url:reference}:null),visualReferenceAnalysis}),temperature:0.8,maxOutputTokens:1400,json:true});
+    res.json(parseJsonResponse(content));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error generando el esquema con IA.' });
@@ -551,18 +501,8 @@ app.post('/api/ai/production-plan', async (req, res) => {
       return res.json({ demo: true, title: title || 'Vídeo sobre ' + topic, scenes, musicMood: 'Ambient relajante', voiceStyle: 'Natural y cercana' });
     }
 
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.75,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: 'Eres director de producción de YouTube. Crea un plan audiovisual ORIGINAL. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. scenes debe ser un array con number, title, narration, visualPrompt, searchQuery, duration y transition. searchQuery debe ser una consulta corta y concreta para encontrar vídeo de stock horizontal relacionado con la escena. Los visualPrompt deben describir imágenes o vídeo originales y no pedir que se copie material protegido.' },
-        { role: 'user', content: JSON.stringify({ topic, language, duration, title, outline, visualIdeas,
-  visualReferenceAnalysis, sceneCount }) }
-      ]
-    });
-    res.json(JSON.parse(response.choices[0].message.content));
+    const content = await callGemini({system:'Eres director de producción de YouTube. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. Cada escena debe tener number, title, narration, visualPrompt, searchQuery, duration y transition. Crea contenido original.',user:JSON.stringify({topic,language,duration,title,outline,visualIdeas,visualReferenceAnalysis,sceneCount}),temperature:0.75,maxOutputTokens:2600,json:true});
+    res.json(parseJsonResponse(content));
   } catch (err) {
     console.error('Production plan error:', err);
     const fallbackCount = Math.max(4, Math.min(12, Math.round(Number(req.body?.duration || 8) / 2)));
