@@ -632,7 +632,7 @@ function runFfmpeg(args){
     p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))));
   });
 }
-async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musicBuffer=null,onProgress=()=>{}}){
+async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musicBuffer=null,onProgress=()=>{},finalOutputPath}){
   if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-'));
   try{
@@ -695,8 +695,14 @@ async function renderAutotubeVideo({scenes,mediaResults,narrationBuffers=[],musi
       ]);
     }
 
+    if(finalOutputPath){
+      await fs.copyFile(out,finalOutputPath);
+      const stat=await fs.stat(finalOutputPath);
+      onProgress(100);
+      return {outputPath:finalOutputPath,size:stat.size,duration:usableScenes.reduce((n,s)=>n+(Number(s.duration)||8),0)};
+    }
     onProgress(100);
-    return {buffer:await fs.readFile(out),duration:usableScenes.reduce((n,s)=>n+(Number(s.duration)||8),0)};
+    return {outputPath:out,size:(await fs.stat(out)).size,duration:usableScenes.reduce((n,s)=>n+(Number(s.duration)||8),0)};
   }finally{
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
