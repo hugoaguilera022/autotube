@@ -51,12 +51,9 @@ async function getElevenVoiceId(){
   if(!key)throw new Error('Falta ELEVENLABS_API_KEY.');
   const configured=String(process.env.ELEVENLABS_VOICE_ID||'').trim();
   if(configured)return configured;
-  const r=await fetch('https://api.elevenlabs.io/v1/voices',{headers:{'xi-api-key':key}});
-  const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
-  if(!r.ok)throw new Error('ElevenLabs voices '+r.status+': '+(d?.detail?.message||d?.detail||raw.slice(0,300)));
-  const id=pickElevenVoiceId(d?.voices);
-  if(!id)throw new Error('ElevenLabs no devolvió ninguna voz disponible.');
-  return id;
+  // No consultamos /v1/voices porque algunas claves de ElevenLabs no tienen voices_read.
+  // Esta voz pública sirve como fallback para TTS; si el usuario configura ELEVENLABS_VOICE_ID, se usa esa.
+  return '21m00Tcm4TlvDq8ikWAM';
 }
 app.post('/api/ai/voice',async(req,res)=>{
   try{
@@ -192,7 +189,19 @@ app.get('/api/preflight',async(_req,res)=>{
   await run('youtube-reference',async()=>{const u='https://www.youtube.com/watch?v=fXuWQg7uJKg';const r=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(u)+'&format=json');if(!r.ok)throw new Error('YouTube oEmbed '+r.status);const d=await r.json();return{title:d.title||''}});
   await run('pexels',async()=>{if(!process.env.PEXELS_API_KEY)throw new Error('Falta PEXELS_API_KEY.');const rows=await searchPexels('cinematic');if(!rows.length)throw new Error('Pexels no devolvió vídeos.');return{results:rows.length}});
   await run('pixabay',async()=>{if(!process.env.PIXABAY_API_KEY)throw new Error('Falta PIXABAY_API_KEY.');const rows=await searchPixabay('cinematic');if(!rows.length)throw new Error('Pixabay no devolvió vídeos.');return{results:rows.length}});
-  await run('elevenlabs',async()=>{const id=await getElevenVoiceId();return{voiceId:id}});
+  await run('elevenlabs',async()=>{
+    const id=await getElevenVoiceId();
+    const key=String(process.env.ELEVENLABS_API_KEY||'').trim();
+    const r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+encodeURIComponent(id)+'?output_format=mp3_44100_128',{
+      method:'POST',
+      headers:{'xi-api-key':key,'Content-Type':'application/json','Accept':'audio/mpeg'},
+      body:JSON.stringify({text:'Prueba de narración de AutoTube.',model_id:'eleven_multilingual_v2'})
+    });
+    const audio=Buffer.from(await r.arrayBuffer());
+    if(!r.ok)throw new Error('ElevenLabs TTS '+r.status+': '+audio.toString('utf8').slice(0,500));
+    if(!audio.length)throw new Error('ElevenLabs devolvió un audio vacío.');
+    return{voiceId:id,bytes:audio.length};
+  });
   await run('music-ffmpeg',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-music-'));try{const out=path.join(dir,'music.wav');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','sine=frequency=220:sample_rate=44100:duration=2','-f','lavfi','-i','sine=frequency=277:sample_rate=44100:duration=2','-filter_complex','[0:a]volume=0.08[a0];[1:a]volume=0.04[a1];[a0][a1]amix=inputs=2:duration=longest,aresample=44100,apad[a]','-map','[a]','-t','2','-ac','2','-ar','44100','-c:a','pcm_s16le',out]);const st=await fs.stat(out);if(!st.size)throw new Error('La prueba de música produjo un archivo vacío.');return{bytes:st.size}}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
   const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
   await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const clip=rows.find(x=>x.downloadUrl);if(!clip)throw new Error('No hay un clip descargable para la prueba de render.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2}],mediaResults:[{number:1,title:'Preflight',media:[clip]}],narrationAudio:[],musicBuffer:null,finalOutputPath:out});return{bytes:result.size,provider:mediaSource}}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
