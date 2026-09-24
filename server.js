@@ -9,9 +9,10 @@ const app = express();
 // MVP: keep the YouTube OAuth tokens in memory. For production, persist encrypted
 // tokens in a database keyed to the authenticated AutoTube user.
 let youtubeTokens = null;
+let youtubeProfileCache = null;
 
 async function getYoutubeProfile() {
-  if (!youtubeTokens) return null;
+  if (!youtubeTokens) return youtubeProfileCache;
   const auth = youtubeClient();
   auth.setCredentials(youtubeTokens);
   const youtube = google.youtube({ version: 'v3', auth });
@@ -19,7 +20,8 @@ async function getYoutubeProfile() {
     part: 'snippet,contentDetails,statistics',
     mine: true
   });
-  return response.data.items?.[0] || null;
+  youtubeProfileCache = response.data.items?.[0] || null;
+  return youtubeProfileCache;
 }
 
 const PORT = process.env.PORT || 3000;
@@ -62,6 +64,7 @@ app.get('/api/youtube/callback', async (req, res) => {
     if (!req.query.code) return res.status(400).send('Falta el código OAuth.');
     const { tokens } = await youtubeClient().getToken(req.query.code);
     youtubeTokens = tokens;
+    youtubeProfileCache = null;
     await getYoutubeProfile();
     res.send(`<script>window.opener?.postMessage({type:'youtube_connected'}, '*'); window.close();</script><p>YouTube conectado. Puedes cerrar esta ventana.</p>`);
     console.log('YouTube OAuth completed. Token received:', Boolean(tokens.access_token));
@@ -96,6 +99,7 @@ app.get('/api/youtube/profile', async (_req, res) => {
 
 app.post('/api/youtube/disconnect', (_req, res) => {
   youtubeTokens = null;
+  youtubeProfileCache = null;
   res.json({ connected: false });
 });
 
