@@ -83,7 +83,7 @@ if(referenceValue){
   preview.innerHTML='<div class="empty"><div class="empty-icon">▶</div><b>Analizando el vídeo de referencia…</b><p>AutoTube extraerá temática y características de formato para crear una propuesta original.</p></div>';
   referenceAnalysis=await analyzeReferenceForCreation(referenceValue);
 }
-const r=await fetch('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null})});
+const r=await fetch('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis})});
 const d=await r.json();if(!r.ok)throw new Error(d.error);
 currentVideoPlan={...d,topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis};
 preview.innerHTML='<div style="text-align:left"><span class="pill">'+(d.demo?'DEMO':'IA GENERATIVA')+'</span><h3 style="font-size:21px;margin:14px 0 7px">'+escapeHtml(d.title||'Nuevo vídeo')+'</h3><p class="muted">'+escapeHtml(d.hook||d.note||'Estructura preparada.')+'</p><ol style="color:#cbd0db;line-height:1.8">'+(d.outline||[]).map(x=>'<li>'+escapeHtml(x)+'</li>').join('')+'</ol><button class="primary" id="continueProductionBtn">Continuar a producción →</button></div>';
