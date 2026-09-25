@@ -77,8 +77,7 @@ async function uploadGeminiFile(filePath,mimeType){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
   const stat=await fs.stat(filePath);
-  const startResponse=await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files',{
-    method:'POST',
+  const startResponse=await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files',{    method:'POST',
     headers:{
       'x-goog-api-key':key,
       'X-Goog-Upload-Protocol':'resumable',
@@ -157,8 +156,7 @@ async function measureReferenceVisualContinuity(file){
 async function analyzeYoutubeReferenceMedia(url,video){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
-  const referenceUrl=String(url||'').trim();
-  if(!referenceUrl)throw new Error('Falta la URL de YouTube.');
+  const referenceUrl=String(url||'').trim();  if(!referenceUrl)throw new Error('Falta la URL de YouTube.');
   const prompt='Analiza directamente el vídeo público de YouTube indicado con máxima fidelidad audiovisual. Estudia el vídeo completo y separa claramente: (1) imagen y fotografía: composición, encuadre, relación de aspecto, paleta, iluminación, textura, escala de planos, continuidad y si la imagen es constante; (2) movimiento y animación: cámara, zoom, paneo, desplazamiento, parallax, gráficos, texto animado, overlays, partículas, efectos, velocidad de animaciones y transiciones; (3) edición y estructura: apertura, bloques, duración aproximada de cada bloque, frecuencia de cambios, transiciones y ritmo; (4) audio: presencia de voz, tipo de locución, idioma, velocidad, pausas, emoción, música, ambiente, efectos, instrumentación, energía, dinámica, relación voz/música y BPM aproximado. Incluye marcas de tiempo cuando ayuden a describir cambios de estructura o audiovisual. No transcribas letras ni reproduzcas contenido protegido. El objetivo es crear un vídeo ORIGINAL que conserve el tema/tipo de contenido y las características generales de imagen, animación, locución, música, sonido y estructura, sin copiar escenas, guion, planos, personajes, texto ni grabaciones. Determina explícitamente si la imagen permanece esencialmente constante durante todo el vídeo. Devuelve ÚNICAMENTE JSON válido, sin markdown, con exactamente estas claves: videoProfile, animationProfile, audioProfile, structureProfile, generationDirectives. Dentro de videoProfile incluye durationSeconds, constantImage, estimatedSceneCount, sceneChangeRate, cameraMovement, composition, palette, lighting, visualStyle, continuity. Dentro de animationProfile incluye cameraMotion, zoomStyle, panStyle, overlays, textAnimation, effects, transitionStyle, motionIntensity, visualRhythm. Dentro de audioProfile incluye hasSpeech, language, speechRate, pauses, emotion, hasMusic, hasAmbience, hasSoundEffects, musicMood, energy, dynamics, instrumentation, voiceStyle, bpmEstimate, voiceMusicBalance, audioContinuity. Dentro de structureProfile incluye opening, pacing, transitions, segmentCount, segmentDurations, visualContinuity, timestamps. Dentro de generationDirectives incluye useSingleContinuousVisual, preferredSceneCount, preserveVisualContinuity, preserveAudioContinuity, visualSearchStrategy, musicStrategy, narrationStrategy, animationStrategy.';
   const models=['gemini-3.8-flash'];
   let lastError='';
@@ -237,8 +235,7 @@ async function analyzeYoutubeReferenceMedia(url,video){
 
 app.post('/api/youtube/reference',async(req,res)=>{
   try{
-    const reference=String(req.body?.reference||'').trim();
-    if(!reference)return res.status(400).json({error:'Indica una URL de YouTube.'});
+    const reference=String(req.body?.reference||'').trim();    if(!reference)return res.status(400).json({error:'Indica una URL de YouTube.'});
     const video=await getReferenceVideo(reference);
     const referenceStyle=await analyzeYoutubeReferenceMedia(reference,video);
     res.json({
@@ -317,8 +314,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
   if(!scenes.length)throw new Error('El plan de producción no devolvió escenas.');
 
   if(singleVisual){
-    const first=scenes[0];
-    const totalSeconds=Math.max(30,Math.round(Number(duration)*60));
+    const first=scenes[0];    const totalSeconds=Math.max(30,Math.round(Number(duration)*60));
     scenes=[{
       ...first,
       number:1,
@@ -397,8 +393,7 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana'){
   const models=['gemini-3.8-flash-tts','gemini-3.8-flash-lite-tts','gemini-2.5-flash-preview-tts'];
   let lastError='';
   for(const model of models){
-    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
-      method:'POST',
+    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{      method:'POST',
       headers:{'Content-Type':'application/json','x-goog-api-key':key},
       body:JSON.stringify(body)
     });
@@ -477,8 +472,7 @@ app.post('/api/ai/music',async(req,res)=>{
       'Topic: '+topic,
       'Mood: '+mood,
       'Energy: '+String(audioProfile.energy||''),
-      'Dynamics: '+String(audioProfile.dynamics||''),
-      'Instrumentation: '+String(audioProfile.instrumentation||''),
+      'Dynamics: '+String(audioProfile.dynamics||''),      'Instrumentation: '+String(audioProfile.instrumentation||''),
       'Voice/music relationship: '+String(audioProfile.audioContinuity||'continuous'),
       'Estimated BPM: '+String(audioProfile.bpmEstimate||'unknown'),
       'Instrumental only, no vocals.',
@@ -557,8 +551,7 @@ app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=
       await fs.writeFile(input,file.buffer);
       const stat=await fs.stat(input);
       if(!stat.size)throw new Error('El vídeo de referencia está vacío.');
-      try{await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',input,'-map','0:v:0','-an','-sn','-dn','-vf','fps=1/2,scale=768:-2','-frames:v','6','-q:v','3',path.join(framesDir,'frame-%02d.jpg')]);}catch(firstErr){console.warn('Reference frame extraction retry:',firstErr.message);await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',input,'-map','0:v:0','-an','-sn','-dn','-vf','scale=768:-2','-frames:v','1','-q:v','3',path.join(framesDir,'frame-%02d.jpg')]);}
-      const files=(await fs.readdir(framesDir)).filter(x=>/^frame-\d+\.jpg$/i.test(x)).sort();
+      try{await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',input,'-map','0:v:0','-an','-sn','-dn','-vf','fps=1/2,scale=768:-2','-frames:v','6','-q:v','3',path.join(framesDir,'frame-%02d.jpg')]);}catch(firstErr){console.warn('Reference frame extraction retry:',firstErr.message);await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',input,'-map','0:v:0','-an','-sn','-dn','-vf','scale=768:-2','-frames:v','1','-q:v','3',path.join(framesDir,'frame-%02d.jpg')]);}      const files=(await fs.readdir(framesDir)).filter(x=>/^frame-\d+\.jpg$/i.test(x)).sort();
       if(!files.length)throw new Error('No se pudieron extraer fotogramas del vídeo de referencia.');
       const images=[];
       for(const name of files){
@@ -637,8 +630,7 @@ async function validateRenderedMp4(file){
   const text=String(probe||'');
   const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
   const audioLine=(text.split(/\r?\n/).find(line=>/Audio:/i.test(line))||'');
-  const vm=videoLine.match(/(\d{2,5})x(\d{2,5})/);
-  const fm=videoLine.match(/(\d+(?:\.\d+)?)\s*fps/);
+  const vm=videoLine.match(/(\d{2,5})x(\d{2,5})/);  const fm=videoLine.match(/(\d+(?:\.\d+)?)\s*fps/);
   const am=audioLine.match(/Audio:\s*([a-z0-9_]+)/i);
   if(!vm)throw new Error('No se pudo verificar la resolución real del MP4.');
   const width=Number(vm[1]),height=Number(vm[2]);
@@ -666,7 +658,7 @@ async function executePreflight(){
   await run('visual-reference',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-reference-'));try{const input=path.join(dir,'reference.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=5','-t','1','-an','-c:v','libx264','-pix_fmt','yuv420p',input]);const video=await fs.readFile(input);const form=new FormData();form.append('video',new Blob([video],{type:'video/mp4'}),'preflight-reference.mp4');const r=await fetch('http://127.0.0.1:'+PORT+'/api/reference/visual-analysis',{method:'POST',body:form});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'Visual analysis '+r.status);if(!d?.analysis||typeof d.analysis!=='object')throw new Error('El análisis visual no devolvió JSON estructurado.');return{framesAnalyzed:Number(d.framesAnalyzed)||0};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
   await run('production-plan',async()=>{const ref=preflightReferenceVideo||await getReferenceVideo(referenceUrl);const refStyle=preflightReferenceStyle||await analyzeYoutubeReferenceMedia(referenceUrl,ref);const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic:'',referenceTopic:ref.title,language:'es',duration:'2',title:'Preflight original',outline:['Gancho','Contexto','Desarrollo','Cierre'],visualIdeas:['Reference-derived documentary visuals'],visualReferenceAnalysis:refStyle.visualAnalysis,referenceStyle:refStyle})});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'Production plan '+r.status);if(!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error('El plan de producción no devolvió escenas.');return{scenes:d.scenes.length,title:d.title||''}});
   let ttsAudio=null;
-  await run('tts',async()=>{ttsAudio=await generateGeminiTts('Prueba de narración de AutoTube.','es','Natural y cercana');if(!ttsAudio.length)throw new Error('Gemini TTS devolvió audio vacío.');return{provider:'Gemini TTS',bytes:ttsAudio.length}});
+  await run('tts',async()=>{ttsAudio=await generateGeminiTts('Prueba breve de narración.','es','Natural y cercana');if(!ttsAudio.length)throw new Error('Gemini TTS devolvió audio vacío.');return{provider:'Gemini TTS',bytes:ttsAudio.length}});
   let musicBuffer=null;
   await run('music-ffmpeg',async()=>{
     const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/music',{
@@ -676,7 +668,7 @@ async function executePreflight(){
         topic:preflightReferenceVideo?.title||'Preflight',
         mood:preflightReferenceStyle?.visualAnalysis?.audioProfile?.musicMood||'instrumental original',
         audioProfile:preflightReferenceStyle?.visualAnalysis?.audioProfile||{},
-        durationSeconds:30
+        durationSeconds:8
       })
     });
     if(!r.ok){const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}throw new Error(d?.error||'Music API '+r.status);}
@@ -685,7 +677,7 @@ async function executePreflight(){
     return{bytes:musicBuffer.length,provider:r.headers.get('X-AutoTube-Music-Provider')||'Lyria'};
   });
   const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
-  await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const remoteClip=rows.find(x=>x.downloadUrl);if(!remoteClip)throw new Error('No hay un clip descargable para la prueba de render.');if(!ttsAudio||!musicBuffer)throw new Error('Faltan audio de narración o música para la prueba integrada.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const source=path.join(dir,'smoke-source.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=5','-t','2','-an','-c:v','libx264','-pix_fmt','yuv420p',source]);const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2,narration:'Prueba de narración.'}],mediaResults:[{number:1,title:'Preflight',media:[{downloadUrl:source}]}],narrationAudio:[ttsAudio],musicBuffer,finalOutputPath:out});const validated=await validateRenderedMp4(out);return{bytes:result.size,provider:mediaSource,hasNarration:true,hasMusic:true,validatedAudioStream:true,...validated};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
+  await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const remoteClip=rows.find(x=>x.downloadUrl);if(!remoteClip)throw new Error('No hay un clip descargable para la prueba de render.');if(!ttsAudio||!musicBuffer)throw new Error('Faltan audio de narración o música para la prueba integrada.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const source=path.join(dir,'smoke-source.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=5','-t','2','-an','-c:v','libx264','-pix_fmt','yuv420p',source]);const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2,narration:'Prueba breve.'}],mediaResults:[{number:1,title:'Preflight',media:[{downloadUrl:source}]}],narrationAudio:[ttsAudio],musicBuffer,finalOutputPath:out});const validated=await validateRenderedMp4(out);return{bytes:result.size,provider:mediaSource,hasNarration:true,hasMusic:true,validatedAudioStream:true,...validated};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
   await run('render-image-smoke',async()=>{
     if(!musicBuffer||!ttsAudio)throw new Error('Faltan audio de narración o música para la prueba de imagen fija.');
     const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-image-'));
@@ -694,7 +686,7 @@ async function executePreflight(){
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=0x202020:s=320x180','-frames:v','1','-q:v','2',image]);
       const out=path.join(dir,'image-smoke.mp4');
       const result=await renderAutotubeVideo({
-        scenes:[{number:1,title:'Imagen fija',duration:2,narration:'Prueba de imagen fija.',mediaType:'image',constantImage:true}],
+        scenes:[{number:1,title:'Imagen fija',duration:2,narration:'Prueba breve de imagen.',mediaType:'image',constantImage:true}],
         mediaResults:[{number:1,title:'Imagen fija',mediaType:'image',media:[{downloadUrl:image,mediaType:'image'}]}],
         narrationAudio:[ttsAudio],
         musicBuffer,
@@ -717,10 +709,9 @@ app.get('/api/preflight',async(_req,res)=>{
   preflightJobs.set(id,{id,status:'running',startedAt:Date.now(),result:null});
   res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/preflight/'+encodeURIComponent(id),message:'Preflight iniciado. Consulta statusUrl para ver el resultado completo.'});
   executePreflight().then(result=>{const job=preflightJobs.get(id);if(job){job.status=result.ok?'done':'failed';job.result=result;job.finishedAt=Date.now();}}).catch(err=>{const job=preflightJobs.get(id);if(job){job.status='failed';job.result={ok:false,checks:{},failed:[{name:'preflight',error:err.message||String(err)}]};job.finishedAt=Date.now();}});
-});
-app.get('/api/preflight/:jobId',async(req,res)=>{
+});app.get('/api/preflight/:jobId',async(req,res)=>{
   const job=preflightJobs.get(String(req.params.jobId||''));
-  if(!job)return res.status(410).json({ok:false,error:'La instancia se reinició durante el preflight y perdió el estado temporal. No se inició ningún vídeo real. Vuelve a abrir /api/preflight para lanzar una prueba nueva.'});
+  if(!job)return res.status(410).json({ok:false,status:'restart',error:'La instancia se reinició durante el preflight y perdió el estado temporal. No se inició ningún vídeo real. El preflight ha sido optimizado para consumir menos recursos; vuelve a abrir /api/preflight para lanzar una prueba nueva.'});
   if(job.status==='running')return res.status(202).json({ok:false,status:'running',jobId:job.id,elapsedMs:Date.now()-job.startedAt});
   return res.status(job.result?.ok?200:503).json({status:job.status,jobId:job.id,...(job.result||{ok:false,checks:{},failed:[]})});
 });
