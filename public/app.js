@@ -222,7 +222,7 @@ async function generateAiSceneClips(){
     const clipCount=Math.min(8,Math.max(1,scenes.length));
     const clips=[];
     for(let i=0;i<clipCount;i++){
-      const scene=scenes[i];
+      const scene=scenes[Math.min(scenes.length-1,Math.round(i*(scenes.length-1)/Math.max(1,clipCount-1)))];
       state.textContent='Generando vídeo IA '+(i+1)+' de '+clipCount+' (cuota optimizada)…';
       const prompt=[scene.visualPrompt||scene.title||'Cinematic scene','Original AI video, realistic high-quality cinematography, 16:9 landscape, natural motion, coherent camera movement, detailed textures, no text, no logos, no watermark, normal speed.'].join('. ');
       const r=await client.predict('text_to_video',[
