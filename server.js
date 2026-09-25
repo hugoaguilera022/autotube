@@ -195,6 +195,31 @@ app.post('/api/render',upload.fields([{name:'narration',maxCount:12},{name:'musi
 app.get('/api/render/:jobId',async(req,res)=>{const job=renderJobs.get(String(req.params.jobId||''));if(!job)return res.status(404).json({error:'Render no encontrado. El servicio puede haberse reiniciado; inicia un nuevo render.'});if(job.status==='processing')return res.json({ok:true,status:'processing',progress:job.progress||0});if(job.status==='error')return res.json({ok:false,status:'error',error:job.error||'No se pudo renderizar el vídeo.'});try{const stat=await fs.stat(job.outputPath);if(!stat.size)throw new Error('MP4 vacío');res.json({ok:true,status:'done',progress:100,size:stat.size,downloadUrl:'/api/render/'+encodeURIComponent(req.params.jobId)+'/download'})}catch{return res.status(404).json({error:'El vídeo renderizado ya no está disponible. Inicia un nuevo render.'})}});
 app.get('/api/render/:jobId/download',async(req,res)=>{const job=renderJobs.get(String(req.params.jobId||''));if(!job)return res.status(404).json({error:'Render no encontrado.'});if(job.status!=='done')return res.status(409).json({error:'El render todavía no está listo.'});try{await fs.stat(job.outputPath);res.download(job.outputPath,'autotube-final.mp4')}catch{res.status(404).json({error:'El vídeo renderizado ya no está disponible.'})}});
 
+async function validateRenderedMp4(file){
+  const probe=await new Promise((resolve,reject)=>{
+    const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-map','0:a:0','-f','null','-'],{stdio:['ignore','pipe','pipe']});
+    let stderr='';
+    p.stderr.on('data',x=>{stderr+=x.toString()});
+    p.on('error',reject);
+    p.on('close',code=>{
+      if(code!==0)return reject(new Error('FFmpeg no pudo validar el MP4 final: '+stderr.slice(-800)));
+      resolve(stderr);
+    });
+  });
+  const text=String(probe||'');
+  const vm=text.match(/Video:.*?(\\d{2,5})x(\\d{2,5})/);
+  const fm=text.match(/(\\d+(?:\\.\\d+)?)\\s*fps/);
+  const am=text.match(/Audio:.*?\\b(aac)\\b/i);
+  if(!vm)throw new Error('No se pudo verificar la resolución del MP4.');
+  const width=Number(vm[1]),height=Number(vm[2]);
+  const fps=fm?Number(fm[1]):0;
+  const audioCodec=am?'aac':'';
+  if(width!==1920||height!==1080)throw new Error('Resolución real del MP4: '+width+'x'+height+' (se esperaba 1920x1080).');
+  if(!fps||Math.abs(fps-30)>0.5)throw new Error('FPS reales del MP4: '+(fps||'desconocidos')+' (se esperaban 30).');
+  if(audioCodec!=='aac')throw new Error('El MP4 final no contiene una pista AAC válida.');
+  return{width,height,fps,audioCodec};
+}
+
 app.get('/api/preflight',async(_req,res)=>{
   const checks={};
   const run=async(name,fn)=>{const started=Date.now();try{const value=await fn();checks[name]={ok:true,ms:Date.now()-started,...(value&&typeof value==='object'?value:{})};}catch(err){checks[name]={ok:false,ms:Date.now()-started,error:err.message||String(err)};}};
@@ -211,7 +236,7 @@ app.get('/api/preflight',async(_req,res)=>{
   let musicBuffer=null;
   await run('music-ffmpeg',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-music-'));try{const out=path.join(dir,'music.wav');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','sine=frequency=220:sample_rate=44100:duration=2','-f','lavfi','-i','sine=frequency=277:sample_rate=44100:duration=2','-filter_complex','[0:a]volume=0.08[a0];[1:a]volume=0.04[a1];[a0][a1]amix=inputs=2:duration=longest,aresample=44100,apad[a]','-map','[a]','-t','2','-ac','2','-ar','44100','-c:a','pcm_s16le',out]);musicBuffer=await fs.readFile(out);if(!musicBuffer.length)throw new Error('La prueba de música produjo un archivo vacío.');return{bytes:musicBuffer.length};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
   const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
-  await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const clip=rows.find(x=>x.downloadUrl);if(!clip)throw new Error('No hay un clip descargable para la prueba de render.');if(!ttsAudio||!musicBuffer)throw new Error('Faltan audio de narración o música para la prueba integrada.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2,narration:'Prueba de narración.'}],mediaResults:[{number:1,title:'Preflight',media:[clip]}],narrationAudio:[ttsAudio],musicBuffer,finalOutputPath:out});await new Promise((resolve,reject)=>{const p=spawn(ffmpegPath,['-hide_banner','-i',out,'-map','0:v:0','-map','0:a:0','-f','null','-'],{stdio:['ignore','pipe','pipe']});let stderr='';p.stderr.on('data',x=>{stderr+=x.toString()});p.on('error',reject);p.on('close',code=>code===0?resolve(true):reject(new Error('FFmpeg no pudo leer el MP4 final: '+stderr.slice(-500))))});return{bytes:result.size,provider:mediaSource,hasNarration:true,hasMusic:true,validatedAudioStream:true,quality:'1920x1080@30fps'};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
+  await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const clip=rows.find(x=>x.downloadUrl);if(!clip)throw new Error('No hay un clip descargable para la prueba de render.');if(!ttsAudio||!musicBuffer)throw new Error('Faltan audio de narración o música para la prueba integrada.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2,narration:'Prueba de narración.'}],mediaResults:[{number:1,title:'Preflight',media:[clip]}],narrationAudio:[ttsAudio],musicBuffer,finalOutputPath:out});const validated=await validateRenderedMp4(out);return{bytes:result.size,provider:mediaSource,hasNarration:true,hasMusic:true,validatedAudioStream:true,...validated};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
   const failed=Object.entries(checks).filter(([,v])=>!v.ok).map(([k,v])=>({name:k,error:v.error}));
   res.status(failed.length?503:200).json({ok:failed.length===0,checks,failed});
 });
