@@ -104,10 +104,44 @@ async function uploadGeminiFile(filePath,mimeType){
   return{name,uri,mimeType};
 }
 
+async function measureReferenceVisualContinuity(file){
+  const result=await new Promise((resolve,reject)=>{
+    const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-vf','fps=1,scale=320:-2,freezedetect=n=0.001:d=5','-an','-f','null','-'],{stdio:['ignore','pipe','pipe']});
+    let stderr='';
+    p.stderr.on('data',x=>{stderr+=x.toString();if(stderr.length>20000)stderr=stderr.slice(-20000)});
+    p.on('error',reject);
+    p.on('close',code=>{
+      if(code!==0)return reject(new Error('No se pudo medir la continuidad visual del vídeo.'));
+      resolve(stderr);
+    });
+  });
+  const text=String(result||'');
+  const durationMatch=text.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
+  const durationSeconds=durationMatch?Number(durationMatch[1])*3600+Number(durationMatch[2])*60+Number(durationMatch[3]):0;
+  const freezes=[];
+  const re=/freeze_start:\s*([0-9.]+)/g;
+  let m;
+  while((m=re.exec(text)))freezes.push(Number(m[1]));
+  const endRe=/freeze_end:\s*([0-9.]+)/g;
+  const ends=[];
+  while((m=endRe.exec(text)))ends.push(Number(m[1]));
+  let frozenSeconds=0;
+  if(freezes.length){
+    for(let i=0;i<freezes.length;i++){
+      const end=ends[i];
+      if(Number.isFinite(end))frozenSeconds+=Math.max(0,end-freezes[i]);
+      else if(durationSeconds)frozenSeconds+=Math.max(0,durationSeconds-freezes[i]);
+    }
+  }
+  const constantImage=Boolean(durationSeconds&&frozenSeconds/durationSeconds>=0.8);
+  return{durationSeconds,frozenSeconds,freezeRatio:durationSeconds?frozenSeconds/durationSeconds:0,constantImage};
+}
+
 async function analyzeYoutubeReferenceMedia(url,video){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-youtube-reference-'));
   try{
     const downloaded=await downloadYoutubeReference(url,dir);
+    const continuity=await measureReferenceVisualContinuity(downloaded.file);
     const file=await uploadGeminiFile(downloaded.file,'video/mp4');
     const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
     const prompt='Analiza el vídeo completo proporcionado como referencia audiovisual. Debes estudiar tanto imagen como audio y devolver ÚNICAMENTE JSON válido. El objetivo es extraer un perfil de producción reutilizable para crear un vídeo ORIGINAL, no copiar el vídeo. Determina especialmente si la imagen es constante durante todo el vídeo o si hay cambios de plano/escena. Analiza duración, frecuencia de cambios, movimiento de cámara, composición, paleta, iluminación, profundidad, textura, presencia de texto/personas/objetos, ritmo visual, transiciones y continuidad. En audio analiza si hay voz, música, ambiente, efectos, energía, dinámica, carácter, instrumentación perceptible, estilo de voz y una estimación prudente del BPM si es posible. No reproduzcas la letra ni transcribas contenido protegido. Devuelve exactamente estas claves: videoProfile, audioProfile, structureProfile, generationDirectives. Dentro de videoProfile incluye durationSeconds, constantImage, estimatedSceneCount, sceneChangeRate, cameraMovement, composition, palette, lighting, visualStyle, continuity. Dentro de audioProfile incluye hasSpeech, hasMusic, hasAmbience, musicMood, energy, dynamics, instrumentation, voiceStyle, bpmEstimate, audioContinuity. Dentro de structureProfile incluye opening, pacing, transitions, segmentCount, segmentDurations, visualContinuity. Dentro de generationDirectives incluye useSingleContinuousVisual, preferredSceneCount, preserveVisualContinuity, preserveAudioContinuity, visualSearchStrategy, musicStrategy.';
@@ -140,7 +174,8 @@ async function analyzeYoutubeReferenceMedia(url,video){
             referenceFileBytes:downloaded.bytes,
             hasFullVideoAnalysis:true,
             hasAudioAnalysis:true,
-            constantImage:Boolean(vp.constantImage),
+            measuredVisualContinuity:continuity,
+            constantImage:Boolean(continuity.constantImage||vp.constantImage),
             estimatedSceneCount:Number(vp.estimatedSceneCount||sp.segmentCount||0),
             preferredSceneCount:Number(gd.preferredSceneCount||0),
             durationSeconds:Number(vp.durationSeconds||0),
