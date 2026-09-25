@@ -69,13 +69,14 @@ async function downloadYoutubeReference(url,dir){
         extractor_args:strategy.extractor_args,ffmpegLocation:path.dirname(ffmpegPath)
       },{timeout:180000,killSignal:'SIGKILL'});
       const files=await fs.readdir(dir);
-      const videoFile=files.find(name=>/^reference\\.(mp4|mkv|webm|mov)$/i.test(name));
+      const videoFile=files.find(name=>/^reference\\.(mp4|mkv|webm|mov)$/i.test(name)) || files.find(name=>/^reference\\./i.test(name)&&!/\\.(part|ytdl)$/i.test(name));
       if(!videoFile)throw new Error('yt-dlp no produjo un archivo de vídeo.');
       const file=path.join(dir,videoFile),stat=await fs.stat(file);
       if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
       return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1000),strategy:strategy.name};
     }catch(err){
       lastError=String(err?.stderr||err?.message||err||'').slice(-1600);
+      console.warn('YouTube reference download strategy failed:',strategy.name,lastError);
       const files=await fs.readdir(dir).catch(()=>[]);
       for(const name of files.filter(x=>/^reference\\./i.test(x)))await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
     }
