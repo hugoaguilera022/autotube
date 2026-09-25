@@ -1458,18 +1458,30 @@ async function executeUrlToVideo(reference,jobId){
 
     // Render speed: fetch visual + narration for each scene concurrently, while
     // preserving scene order. A single failed provider uses the existing fallback.
-    const resultsByScene=await Promise.all(scenes.map(async(scene)=>{
-      const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
-      let results=await searchPexelsPhotos(query);
-      if(!results.length)results=await searchPixabayImages(query);
-      const media=results.find(x=>x?.downloadUrl);
-      if(!media)throw new Error('No se encontró visual para la escena '+scene.number+'.');
-      const narration=await generateNarrationTts(
-        scene.narration||('Contenido original sobre '+referenceTitle+'.'),
-        'es',audioProfile.voiceStyle||'Natural y cercana',audioProfile
-      );
-      return {scene,media,narration};
-    }));
+    // Keep provider/API and local FFmpeg pressure bounded. Three scenes at a time
+    // is substantially faster than fully sequential preparation without spawning
+    // a dozen TTS/FFmpeg processes on Render Free's single small CPU.
+    const resultsByScene=new Array(scenes.length);
+    const workerCount=Math.min(3,scenes.length);
+    let nextScene=0;
+    async function sceneWorker(){
+      while(true){
+        const index=nextScene++;
+        if(index>=scenes.length)return;
+        const scene=scenes[index];
+        const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
+        let results=await searchPexelsPhotos(query);
+        if(!results.length)results=await searchPixabayImages(query);
+        const media=results.find(x=>x?.downloadUrl);
+        if(!media)throw new Error('No se encontró visual para la escena '+scene.number+'.');
+        const narration=await generateNarrationTts(
+          scene.narration||('Contenido original sobre '+referenceTitle+'.'),
+          'es',audioProfile.voiceStyle||'Natural y cercana',audioProfile
+        );
+        resultsByScene[index]={scene,media,narration};
+      }
+    }
+    await Promise.all(Array.from({length:workerCount},()=>sceneWorker()));
     const mediaResults=resultsByScene.map(({scene,media})=>({
       number:scene.number,
       media:[{...media,mediaType:String(media.mediaType||'image').toLowerCase()}],
