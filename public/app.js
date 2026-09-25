@@ -131,7 +131,9 @@ async function generateMusic(){
   try{
     const r=await fetch('/api/ai/music',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       topic:currentVideoPlan.topic,
-      mood:currentVideoPlan.musicMood||'ambient cinematográfico relajante',
+      mood:currentVideoPlan.musicMood||'instrumental original',
+      topic:currentVideoPlan.topic||'',
+      audioProfile:currentVideoPlan.referenceStyle?.visualAnalysis?.audioProfile||{},
       durationSeconds:Math.min(300,Math.max(30,Number(currentVideoPlan.duration||8)*60))
     })});
     if(!r.ok){let d={};try{d=await r.json()}catch{}throw new Error(d.error||'No se pudo generar la música.');}
