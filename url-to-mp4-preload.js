@@ -147,10 +147,10 @@ function install(){
           const existing=[...jobs.values()].find(j=>j.test===true&&(j.status==='processing'||j.status==='done'));
           if(existing)return res.json({ok:true,jobId:existing.id,status:existing.status,progress:existing.progress||0,statusUrl:'/api/url-to-mp4/'+encodeURIComponent(existing.id)});
           const id='urlmp4_test_'+Date.now();
-          jobs.set(id,{id,status:'processing',progress:1,createdAt:Date.now(),reference:'https://www.youtube.com/watch?v=QcKmagCJiz4',test:true});
+          jobs.set(id,{id,status:'processing',progress:1,createdAt:Date.now(),reference:'https://www.youtube.com/watch?v=dQw4w9WgXcQ',test:true});
           res.status(202).json({ok:true,jobId:id,status:'processing',statusUrl:'/api/url-to-mp4/'+encodeURIComponent(id)});
           (async()=>{
-            const reference='https://www.youtube.com/watch?v=QcKmagCJiz4';
+            const reference='https://www.youtube.com/watch?v=dQw4w9WgXcQ';
             const dir=path.join(os.tmpdir(),'autotube-url-'+id),output=path.join(dir,'autotube-exact.mp4');
             try{
               await fs.mkdir(dir,{recursive:true});
