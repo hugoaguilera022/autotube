@@ -155,68 +155,66 @@ async function measureReferenceVisualContinuity(file){
 }
 
 async function analyzeYoutubeReferenceMedia(url,video){
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-youtube-reference-'));
-  try{
-    const downloaded=await downloadYoutubeReference(url,dir);
-    const continuity=await measureReferenceVisualContinuity(downloaded.file);
-    const file=await uploadGeminiFile(downloaded.file,'video/mp4');
-    const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
-    const prompt='Analiza el vídeo completo proporcionado como referencia audiovisual. Debes estudiar tanto imagen como audio y devolver ÚNICAMENTE JSON válido. El objetivo es extraer un perfil de producción reutilizable para crear un vídeo ORIGINAL, no copiar el vídeo. Determina especialmente si la imagen es constante durante todo el vídeo o si hay cambios de plano/escena. Analiza duración, frecuencia de cambios, movimiento de cámara, composición, paleta, iluminación, profundidad, textura, presencia de texto/personas/objetos, ritmo visual, transiciones y continuidad. En audio analiza si hay voz, música, ambiente, efectos, energía, dinámica, carácter, instrumentación perceptible, estilo de voz y una estimación prudente del BPM si es posible. No reproduzcas la letra ni transcribas contenido protegido. Devuelve exactamente estas claves: videoProfile, audioProfile, structureProfile, generationDirectives. Dentro de videoProfile incluye durationSeconds, constantImage, estimatedSceneCount, sceneChangeRate, cameraMovement, composition, palette, lighting, visualStyle, continuity. Dentro de audioProfile incluye hasSpeech, hasMusic, hasAmbience, musicMood, energy, dynamics, instrumentation, voiceStyle, bpmEstimate, audioContinuity. Dentro de structureProfile incluye opening, pacing, transitions, segmentCount, segmentDurations, visualContinuity. Dentro de generationDirectives incluye useSingleContinuousVisual, preferredSceneCount, preserveVisualContinuity, preserveAudioContinuity, visualSearchStrategy, musicStrategy.';
-    const models=['gemini-3.8-flash','gemini-3.6-flash','gemini-3.5-flash-lite'];
-    let lastError='';
-    for(const model of models){
-      const body={
-        contents:[{role:'user',parts:[
-          {text:prompt},
-          {file_data:{mime_type:file.mimeType,file_uri:file.uri}}
-        ]}],
-        generationConfig:{responseMimeType:'application/json',maxOutputTokens:2600,temperature:0.2}
-      };
-      const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','x-goog-api-key':key},
-        body:JSON.stringify(body)
-      });
-      const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
-      if(r.ok){
-        const text=d?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';
-        if(text){
-          const analysis=parseJsonResponse(text);
-          const vp=analysis?.videoProfile||{},ap=analysis?.audioProfile||{},sp=analysis?.structureProfile||{},gd=analysis?.generationDirectives||{};
-          const constantImage=Boolean(continuity.constantImage||vp.constantImage);
-          vp.constantImage=constantImage;
-          if(!analysis.generationDirectives)analysis.generationDirectives={};
-          analysis.generationDirectives.useSingleContinuousVisual=Boolean(gd.useSingleContinuousVisual||constantImage);
-          analysis.generationDirectives.preferredSceneCount=constantImage?1:Number(gd.preferredSceneCount||vp.estimatedSceneCount||sp.segmentCount||0);
-          analysis.generationDirectives.preserveVisualContinuity=true;
-          if(constantImage)analysis.generationDirectives.visualSearchStrategy='Priorizar una única fotografía/imagen horizontal estable y mantenerla durante toda la duración.';
-          return{
-            visualAnalysis:analysis,
-            visualSource:'youtube-full-video+audio',
-            analysisSource:'yt-dlp+Gemini-video-understanding',
-            thumbnailCount:Number(video?.thumbnails?.length||0),
-            referenceFileBytes:downloaded.bytes,
-            hasFullVideoAnalysis:true,
-            hasAudioAnalysis:true,
-            measuredVisualContinuity:continuity,
-            constantImage,
-            estimatedSceneCount:Number(vp.estimatedSceneCount||sp.segmentCount||0),
-            preferredSceneCount:Number(gd.preferredSceneCount||0),
-            durationSeconds:Number(vp.durationSeconds||0),
-            audioStyle:ap,
-            structure:sp
-          };
-        }
-        lastError='Gemini no devolvió análisis.';
-      }else{
-        lastError='Gemini '+r.status+': '+(d?.error?.message||raw.slice(0,500));
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('Falta GEMINI_API_KEY.');
+  const referenceUrl=String(url||'').trim();
+  if(!referenceUrl)throw new Error('Falta la URL de YouTube.');
+  const prompt='Analiza directamente el vídeo público de YouTube indicado. Estudia TODO lo que puedas de sus flujos visual y sonoro: imagen, movimiento, cambios de plano, continuidad, composición, color, iluminación, presencia de texto/personas/objetos, ritmo visual, transiciones, voz, música, ambiente, efectos, energía, dinámica, instrumentación perceptible, carácter de la voz y BPM aproximado si es posible. No transcribas letras ni reproduzcas contenido protegido. El objetivo es crear un vídeo ORIGINAL que conserve únicamente el tipo de contenido y el lenguaje audiovisual general del referente. Determina explícitamente si la imagen permanece esencialmente constante durante todo el vídeo. Devuelve ÚNICAMENTE JSON válido, sin markdown, con exactamente estas claves: videoProfile, audioProfile, structureProfile, generationDirectives. Dentro de videoProfile incluye durationSeconds, constantImage, estimatedSceneCount, sceneChangeRate, cameraMovement, composition, palette, lighting, visualStyle, continuity. Dentro de audioProfile incluye hasSpeech, hasMusic, hasAmbience, musicMood, energy, dynamics, instrumentation, voiceStyle, bpmEstimate, audioContinuity. Dentro de structureProfile incluye opening, pacing, transitions, segmentCount, segmentDurations, visualContinuity. Dentro de generationDirectives incluye useSingleContinuousVisual, preferredSceneCount, preserveVisualContinuity, preserveAudioContinuity, visualSearchStrategy, musicStrategy.';
+  const models=['gemini-3.8-flash'];
+  let lastError='';
+  for(const model of models){
+    const body={
+      model,
+      input:[
+        {type:'text',text:prompt},
+        {type:'video',uri:referenceUrl}
+      ]
+    };
+    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-goog-api-key':key},
+      body:JSON.stringify(body)
+    });
+    const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
+    if(r.ok){
+      const text=String(d?.output_text||'').trim();
+      if(text){
+        const analysis=parseJsonResponse(text);
+        const vp=analysis?.videoProfile||{},sp=analysis?.structureProfile||{},gd=analysis?.generationDirectives||{};
+        const ap=analysis?.audioProfile||{};
+        const constantImage=Boolean(vp.constantImage||gd.useSingleContinuousVisual&&Number(gd.preferredSceneCount)===1);
+        vp.constantImage=constantImage;
+        vp.durationSeconds=Number(vp.durationSeconds||0);
+        analysis.videoProfile=vp;
+        analysis.audioProfile=ap;
+        analysis.structureProfile=sp;
+        analysis.generationDirectives=gd;
+        analysis.generationDirectives.useSingleContinuousVisual=Boolean(gd.useSingleContinuousVisual||constantImage);
+        analysis.generationDirectives.preferredSceneCount=constantImage?1:Number(gd.preferredSceneCount||vp.estimatedSceneCount||sp.segmentCount||1);
+        analysis.generationDirectives.preserveVisualContinuity=true;
+        analysis.generationDirectives.preserveAudioContinuity=true;
+        if(constantImage)analysis.generationDirectives.visualSearchStrategy='Usar una única imagen/fotografía horizontal estable durante toda la duración; no inventar cambios de escena.';
+        return{
+          visualAnalysis:analysis,
+          visualSource:'youtube-url-direct+Gemini-video-understanding',
+          analysisSource:'Gemini-YouTube-URL',
+          thumbnailCount:Number(video?.thumbnails?.length||0),
+          referenceFileBytes:0,
+          hasFullVideoAnalysis:true,
+          hasAudioAnalysis:true,
+          measuredVisualContinuity:{source:'Gemini video understanding',constantImage},
+          constantImage,
+          estimatedSceneCount:Number(vp.estimatedSceneCount||sp.segmentCount||1),
+          preferredSceneCount:Number(analysis.generationDirectives.preferredSceneCount||1)
+        };
       }
-      if(r.status!==400&&r.status!==404&&r.status!==429&&r.status<500)break;
+      lastError='Gemini no devolvió el análisis del vídeo de YouTube.';
+    }else{
+      lastError='Gemini YouTube '+r.status+': '+(d?.error?.message||raw.slice(0,700));
     }
-    throw new Error(lastError||'Gemini no pudo analizar el vídeo completo.');
-  }finally{
-    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+    if(r.status===429||r.status>=500)break;
   }
+  throw new Error(lastError||'Gemini no pudo analizar el vídeo de YouTube.');
 }
 
 app.post('/api/youtube/reference',async(req,res)=>{
@@ -303,36 +301,22 @@ async function generateLyriaMusic(prompt){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
   const body={
-    contents:[{parts:[{text:String(prompt||'Instrumental original, no vocals.')}]}],
-    generationConfig:{
-      responseModalities:['AUDIO','TEXT'],
-      responseMimeType:'audio/wav'
-    }
+    model:'lyria-3-clip-preview',
+    input:String(prompt||'Instrumental original, no vocals.'),
+    response_format:{type:'audio'}
   };
-  const models=['lyria-3.5','lyria-3-clip-preview'];
-  let lastError='';
-  for(const model of models){
-    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-goog-api-key':key},
-      body:JSON.stringify(body)
-    });
-    const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
-    if(r.ok){
-      const part=d?.candidates?.[0]?.content?.parts?.find(p=>p?.inlineData?.data);
-      const data=part?.inlineData?.data;
-      if(data){
-        const mime=part.inlineData.mimeType||'audio/wav';
-        return{buffer:Buffer.from(data,'base64'),mime};
-      }
-      lastError='Lyria no devolvió audio.';
-    }else{
-      lastError='Lyria '+r.status+': '+(d?.error?.message||raw.slice(0,500));
-    }
-    if(r.status!==400&&r.status!==404&&r.status!==429&&r.status<500)break;
-  }
-  throw new Error(lastError||'Lyria no pudo generar la música.');
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-goog-api-key':key},
+    body:JSON.stringify(body)
+  });
+  const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
+  if(!r.ok)throw new Error('Lyria '+r.status+': '+(d?.error?.message||raw.slice(0,700)));
+  const audio=d?.output_audio;
+  if(!audio?.data)throw new Error('Lyria no devolvió audio.');
+  return{buffer:Buffer.from(audio.data,'base64'),mime:audio.mime_type||'audio/mpeg'};
 }
+
 
 app.post('/api/ai/music',async(req,res)=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-music-'));
