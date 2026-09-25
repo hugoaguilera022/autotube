@@ -39,7 +39,6 @@ async function downloadYoutubeReference(url,dir){
   const output=path.join(dir,'reference.%(ext)s');
   const potScript=path.join(process.cwd(),'.pot-provider','server','build','generate_once.js');
   const pluginDirs=path.join(process.cwd(),'yt-dlp-plugins');
-  const potReady=fsSync.existsSync?false:false;
   const strategies=[
     {name:'mweb_bgutil_pot',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['mweb']},'youtubepot-bgutilscript':{script_path:potScript}},pluginDirs},
     {name:'web_safari_hls',format:'best[protocol^=m3u8]/best[height<=360]',extractor_args:{youtube:{player_client:['web_safari']}}},
