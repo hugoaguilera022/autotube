@@ -393,14 +393,24 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
 }});
 
 
-async function generateGeminiTts(text,language='es',style='Natural y cercana'){
+async function generateGeminiTts(text,language='es',style='Natural y cercana',audioProfile={}){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
   const safeText=String(text||'').trim();
   if(!safeText)throw new Error('La narración está vacía.');
   const lang=String(language||'es').toLowerCase().startsWith('es')?'es-ES':(String(language||'en').toLowerCase().startsWith('en')?'en-US':String(language||'es'));
+  const profile=audioProfile&&typeof audioProfile==='object'?audioProfile:{};
+  const styleGuide=[
+    'Lee exactamente el texto, sin añadir palabras.',
+    'Estilo general: '+String(style||profile.voiceStyle||'Natural y cercana'),
+    profile.speechRate&&('Velocidad: '+String(profile.speechRate)),
+    profile.emotion&&('Emoción: '+String(profile.emotion)),
+    profile.pauses&&('Pausas: '+String(profile.pauses)),
+    profile.dynamics&&('Dinámica vocal: '+String(profile.dynamics)),
+    'Mantén pronunciación clara, ritmo estable y continuidad entre escenas.'
+  ].filter(Boolean).join(' ');
   const body={
-    contents:[{role:'user',parts:[{text:'Lee exactamente el siguiente texto como narración profesional para YouTube. Estilo: '+String(style||'Natural y cercana')+'. No añadas palabras, introducciones ni comentarios.\n\n'+safeText}]}],
+    contents:[{role:'user',parts:[{text:styleGuide+'\n\n'+safeText}]}],
     generationConfig:{
       responseModalities:['AUDIO'],
       responseFormat:{audio:{mimeType:'AUDIO_L16',sampleRate:24000}},
@@ -439,7 +449,7 @@ app.post('/api/ai/voice',async(req,res)=>{
   try{
     const text=String(req.body?.text||'').trim();
     if(!text)return res.status(400).json({error:'La narración está vacía.'});
-    const audio=await generateGeminiTts(text,req.body?.language||'es',req.body?.style||'Natural y cercana');
+    const audio=await generateGeminiTts(text,req.body?.language||'es',req.body?.style||'Natural y cercana',req.body?.audioProfile||{});
     res.set('Content-Type','audio/wav');res.set('Content-Length',String(audio.length));res.send(audio);
   }catch(err){console.error('Gemini TTS error:',err);res.status(502).json({error:err.message||'No se pudo generar la narración.'})}
 });
