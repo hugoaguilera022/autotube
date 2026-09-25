@@ -38,13 +38,17 @@ async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(inpu
 async function downloadYoutubeReference(url,dir){
   const output=path.join(dir,'reference.%(ext)s');
   const strategies=[
-    {name:'web_safari-hls',format:'best[protocol^=m3u8]/best[height<=360]',extractor_args:{youtube:{player_client:['web_safari']}}},
+    {name:'web_safari_hls',format:'best[protocol^=m3u8]/best[height<=360]',extractor_args:{youtube:{player_client:['web_safari']}}},
     {name:'android_vr',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['android_vr']}}},
-    {name:'web_embedded',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['web_embedded']}}}
+    {name:'web_embedded',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['web_embedded']}}},
+    {name:'ios',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['ios']}}},
+    {name:'mweb',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['mweb']}}}
   ];
   let lastError='';
   for(const strategy of strategies){
     try{
+      await fs.rm(dir,{recursive:true,force:false}).catch(()=>{});
+      await fs.mkdir(dir,{recursive:true});
       const result=await youtubedl(url,{
         format:strategy.format,
         mergeOutputFormat:'mp4',
@@ -66,14 +70,12 @@ async function downloadYoutubeReference(url,dir){
       return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1000),strategy:strategy.name};
     }catch(err){
       lastError=String(err?.stderr||err?.message||err||'').slice(-1600);
-      await fs.rm(output.replace('%(ext)s','*'),{force:true}).catch(()=>{});
       const files=await fs.readdir(dir).catch(()=>[]);
       for(const name of files.filter(x=>/^reference\./i.test(x)))await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
     }
   }
-  throw new Error('No se pudo descargar temporalmente el vídeo de YouTube para el análisis audiovisual. Estrategias probadas: web_safari/HLS, android_vr y web_embedded. Último error: '+lastError);
+  throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. Se probaron 5 clientes de yt-dlp. Último error: '+lastError);
 }
-
 async function uploadGeminiFile(filePath,mimeType){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
@@ -153,90 +155,110 @@ async function measureReferenceVisualContinuity(file){
   return{durationSeconds,frozenSeconds,freezeRatio:durationSeconds?frozenSeconds/durationSeconds:0,constantImage};
 }
 
-async function analyzeYoutubeReferenceMedia(url,video){
-  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
-  if(!key)throw new Error('Falta GEMINI_API_KEY.');
-  const referenceUrl=String(url||'').trim();  if(!referenceUrl)throw new Error('Falta la URL de YouTube.');
-  const prompt='Analiza directamente el vídeo público de YouTube indicado con máxima fidelidad audiovisual. Estudia el vídeo completo y separa claramente: (1) imagen y fotografía: composición, encuadre, relación de aspecto, paleta, iluminación, textura, escala de planos, continuidad y si la imagen es constante; (2) movimiento y animación: cámara, zoom, paneo, desplazamiento, parallax, gráficos, texto animado, overlays, partículas, efectos, velocidad de animaciones y transiciones; (3) edición y estructura: apertura, bloques, duración aproximada de cada bloque, frecuencia de cambios, transiciones y ritmo; (4) audio: presencia de voz, tipo de locución, idioma, velocidad, pausas, emoción, música, ambiente, efectos, instrumentación, energía, dinámica, relación voz/música y BPM aproximado. Incluye marcas de tiempo cuando ayuden a describir cambios de estructura o audiovisual. No transcribas letras ni reproduzcas contenido protegido. El objetivo es crear un vídeo ORIGINAL que conserve el tema/tipo de contenido y las características generales de imagen, animación, locución, música, sonido y estructura, sin copiar escenas, guion, planos, personajes, texto ni grabaciones. Determina explícitamente si la imagen permanece esencialmente constante durante todo el vídeo. Devuelve ÚNICAMENTE JSON válido, sin markdown, con exactamente estas claves: videoProfile, animationProfile, audioProfile, structureProfile, generationDirectives. Dentro de videoProfile incluye durationSeconds, constantImage, estimatedSceneCount, sceneChangeRate, cameraMovement, composition, palette, lighting, visualStyle, continuity. Dentro de animationProfile incluye cameraMotion, zoomStyle, panStyle, overlays, textAnimation, effects, transitionStyle, motionIntensity, visualRhythm. Dentro de audioProfile incluye hasSpeech, language, speechRate, pauses, emotion, hasMusic, hasAmbience, hasSoundEffects, musicMood, energy, dynamics, instrumentation, voiceStyle, bpmEstimate, voiceMusicBalance, audioContinuity. Dentro de structureProfile incluye opening, pacing, transitions, segmentCount, segmentDurations, visualContinuity, timestamps y sceneSegments. sceneSegments debe ser un array ordenado que cubra todo el vídeo, con un objeto por segmento que incluya startSeconds,endSeconds,summary,subject,shotScale,composition,cameraMovement,motionIntensity,lighting,palette,transitionIn,transitionOut,audioRole,narrationRole,continuityAnchor y generationPrompt. Los sceneSegments deben describir lo que ocurre en cada tramo temporal del vídeo real y servir como instrucciones específicas para reconstruir una obra ORIGINAL con la misma lógica audiovisual, no como copia de planos. Dentro de generationDirectives incluye useSingleContinuousVisual, preferredSceneCount, preserveVisualContinuity, preserveAudioContinuity, visualSearchStrategy, musicStrategy, narrationStrategy, animationStrategy.';  const models=[...new Set([String(process.env.GEMINI_YOUTUBE_MODEL||'').trim(),'gemini-3.5-flash-lite','gemini-3.6-flash','gemini-3.1-flash-lite','gemini-2.5-flash','gemini-3.8-flash'].filter(Boolean))];
-  let lastError='';
-  for(const model of models){
-    const body={
-      model,
-      input:[
-        {type:'text',text:prompt},
-        {type:'video',uri:referenceUrl,processing:(/^gemini-3\.(5-flash-lite|6-flash|7-flash|8-flash)$/.test(model)?'agentic':'static')}
-      ]
+async function analyzeDownloadedReferenceMedia(file,video){
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-frames-'));
+  try{
+    const probe=await new Promise((resolve,reject)=>{
+      const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-an','-f','null','-'],{stdio:['ignore','pipe','pipe']});
+      let stderr='';
+      p.stderr.on('data',x=>{stderr+=x.toString();if(stderr.length>30000)stderr=stderr.slice(-30000)});
+      p.on('error',reject);
+      p.on('close',code=>code===0?resolve(stderr):reject(new Error('FFmpeg no pudo inspeccionar el vídeo de referencia. '+stderr.slice(-900))));
+    });
+    const probeText=String(probe||'');
+    const dm=probeText.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
+    const durationSeconds=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
+    if(!durationSeconds)throw new Error('No se pudo determinar la duración del vídeo de referencia.');
+
+    const frameCount=Math.min(10,Math.max(5,Math.ceil(durationSeconds/20)));
+    const fps=Math.max(1/60,Math.min(1/3,frameCount/durationSeconds));
+    const pattern=path.join(dir,'frame-%02d.jpg');
+    await runFfmpeg([
+      '-y','-hide_banner','-loglevel','error','-i',file,
+      '-vf',`fps=${fps.toFixed(6)},scale=640:-2:force_original_aspect_ratio=decrease`,
+      '-frames:v',String(frameCount),'-q:v','3',pattern
+    ]);
+    const files=(await fs.readdir(dir)).filter(x=>/^frame-\d+\.jpg$/i.test(x)).sort();
+    if(files.length<3)throw new Error('No se pudieron extraer suficientes fotogramas del vídeo de referencia.');
+
+    const frameSeconds=files.map((_,i)=>Math.min(durationSeconds-0.1,Math.max(0,(i+0.5)*(durationSeconds/files.length))));
+    const images=[];
+    for(const name of files){
+      const data=await fs.readFile(path.join(dir,name));
+      if(data.length)images.push({mimeType:'image/jpeg',data:data.toString('base64')});
+    }
+
+    const prompt='Analiza estos fotogramas extraídos en orden de un vídeo de YouTube. Son muestras temporales del vídeo real, no imágenes de stock. Reconstruye un perfil audiovisual ORIGINAL y fiel al TEMA y al lenguaje visual observado. No copies planos, personajes, texto, guion ni grabaciones. Determina qué aparece realmente, cómo cambia la imagen, encuadre, composición, iluminación, paleta, movimiento, animación y ritmo. Si el vídeo parece mantener una imagen esencialmente constante, indícalo. Devuelve ÚNICAMENTE JSON válido con videoProfile, animationProfile, audioProfile, structureProfile y generationDirectives. videoProfile: durationSeconds,constantImage,estimatedSceneCount,sceneChangeRate,cameraMovement,composition,palette,lighting,visualStyle,continuity. animationProfile: cameraMotion,zoomStyle,panStyle,overlays,textAnimation,effects,transitionStyle,motionIntensity,visualRhythm. audioProfile: hasSpeech,language,speechRate,pauses,emotion,hasMusic,hasAmbience,hasSoundEffects,musicMood,energy,dynamics,instrumentation,voiceStyle,bpmEstimate,voiceMusicBalance,audioContinuity. Como el análisis visual procede de fotogramas, no inventes detalles de audio que no puedan inferirse; usa unknown cuando corresponda. structureProfile: opening,pacing,transitions,segmentCount,segmentDurations,visualContinuity,timestamps,sceneSegments. sceneSegments debe ser un array ordenado que cubra todo el vídeo usando estos tiempos aproximados: '+JSON.stringify(frameSeconds)+'. Cada segmento debe incluir startSeconds,endSeconds,summary,subject,shotScale,composition,cameraMovement,motionIntensity,lighting,palette,transitionIn,transitionOut,audioRole,narrationRole,continuityAnchor,generationPrompt. generationDirectives: useSingleContinuousVisual,preferredSceneCount,preserveVisualContinuity,preserveAudioContinuity,visualSearchStrategy,musicStrategy,narrationStrategy,animationStrategy. El título y metadatos de YouTube son contexto adicional: '+JSON.stringify({title:video?.title||'',description:String(video?.description||'').slice(0,2500),tags:Array.isArray(video?.tags)?video.tags.slice(0,20):[],duration:video?.duration||''})+'.';
+
+    const text=await callGemini({
+      system:'Eres un analista audiovisual profesional. Mantén el tema real de la referencia y no lo conviertas en naturaleza, relajación u otro tema genérico.',
+      user:prompt,
+      images,
+      temperature:0.25,
+      maxOutputTokens:3500,
+      json:true
+    });
+    const analysis=parseJsonResponse(text);
+    const vp=analysis?.videoProfile||{},sp=analysis?.structureProfile||{},gd=analysis?.generationDirectives||{};
+    const ap=analysis?.audioProfile||{},an=analysis?.animationProfile||{};
+    vp.durationSeconds=Number(vp.durationSeconds||durationSeconds)||durationSeconds;
+    const constantImage=Boolean(vp.constantImage||gd.useSingleContinuousVisual);
+    vp.constantImage=constantImage;
+    analysis.videoProfile=vp;
+    analysis.animationProfile=an;
+    analysis.audioProfile=ap;
+    analysis.structureProfile=sp;
+    analysis.generationDirectives=gd;
+    analysis.generationDirectives.useSingleContinuousVisual=constantImage;
+    analysis.generationDirectives.preferredSceneCount=constantImage?1:Number(gd.preferredSceneCount||vp.estimatedSceneCount||sp.segmentCount||Math.min(10,Math.max(4,Math.ceil(durationSeconds/20))));
+    analysis.generationDirectives.preserveVisualContinuity=true;
+    analysis.generationDirectives.preserveAudioContinuity=true;
+    return{
+      visualAnalysis:analysis,
+      visualSource:'youtube-download+sampled-frames+Gemini',
+      analysisSource:'Local-frames',
+      thumbnailCount:Number(video?.thumbnails?.length||0),
+      referenceFileBytes:0,
+      hasFullVideoAnalysis:false,
+      hasAudioAnalysis:Boolean(analysis.audioProfile),
+      hasAnimationAnalysis:Boolean(analysis.animationProfile),
+      hasStructureAnalysis:Boolean(analysis.structureProfile&&Object.keys(analysis.structureProfile).length),
+      measuredVisualContinuity:{source:'FFmpeg/Gemini sampled frames',constantImage},
+      constantImage,
+      estimatedSceneCount:Number(vp.estimatedSceneCount||sp.segmentCount||1),
+      preferredSceneCount:Number(analysis.generationDirectives.preferredSceneCount||1)
     };
-    let r=null,raw='',d=null;
-    for(let attempt=0;attempt<3;attempt++){
-      r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','x-goog-api-key':key},
-        body:JSON.stringify(body)
-      });
-      raw=await r.text();d=null;try{d=raw?JSON.parse(raw):null}catch{}
-      if(r.ok)break;
-      lastError='Gemini YouTube '+r.status+': '+(d?.error?.message||raw.slice(0,700));
-      if(r.status>=500&&attempt<2){await new Promise(resolve=>setTimeout(resolve,5000*(attempt+1)));continue}
-      break;
-    }
-    if(r?.ok){
-      const text=String(
-        d?.output_text ||
-        d?.steps?.filter(s=>s?.type==='model_output')
-          ?.flatMap(s=>Array.isArray(s?.content)?s.content:[])
-          ?.filter(c=>c?.type==='text')
-          ?.map(c=>c.text||'')
-          ?.join('') ||
-        ''
-      ).trim();
-      if(text){
-        const analysis=parseJsonResponse(text);
-        const vp=analysis?.videoProfile||{},sp=analysis?.structureProfile||{},gd=analysis?.generationDirectives||{};
-        const ap=analysis?.audioProfile||{},an=analysis?.animationProfile||{};
-        const constantImage=Boolean(vp.constantImage||gd.useSingleContinuousVisual&&Number(gd.preferredSceneCount)===1);
-        vp.constantImage=constantImage;
-        vp.durationSeconds=Number(vp.durationSeconds||0);
-        analysis.videoProfile=vp;
-        analysis.animationProfile=an;
-        analysis.audioProfile=ap;
-        analysis.structureProfile=sp;
-        analysis.generationDirectives=gd;
-        analysis.generationDirectives.useSingleContinuousVisual=Boolean(gd.useSingleContinuousVisual||constantImage);
-        analysis.generationDirectives.preferredSceneCount=constantImage?1:Number(gd.preferredSceneCount||vp.estimatedSceneCount||sp.segmentCount||1);
-        analysis.generationDirectives.preserveVisualContinuity=true;
-        analysis.generationDirectives.preserveAudioContinuity=true;
-        if(constantImage)analysis.generationDirectives.visualSearchStrategy='Usar una única imagen/fotografía horizontal estable durante toda la duración; no inventar cambios de escena.';
-        return{
-          visualAnalysis:analysis,
-          visualSource:'youtube-url-direct+Gemini-video-understanding',
-          analysisSource:'Gemini-YouTube-URL',
-          thumbnailCount:Number(video?.thumbnails?.length||0),
-          referenceFileBytes:0,
-          hasFullVideoAnalysis:true,
-          hasAudioAnalysis:Boolean(analysis.audioProfile),
-          hasAnimationAnalysis:Boolean(analysis.animationProfile),
-          hasStructureAnalysis:Boolean(analysis.structureProfile&&Object.keys(analysis.structureProfile).length),
-          measuredVisualContinuity:{source:'Gemini video understanding',constantImage},
-          constantImage,
-          estimatedSceneCount:Number(vp.estimatedSceneCount||sp.segmentCount||1),
-          preferredSceneCount:Number(analysis.generationDirectives.preferredSceneCount||1)
-        };
-      }
-      lastError='Gemini no devolvió el análisis del vídeo de YouTube.';
-    }else{
-      lastError='Gemini YouTube '+r.status+': '+(d?.error?.message||raw.slice(0,700));
-    }
-    if(r.status===429||r.status>=500){
-      // A 429/5xx de Gemini es transitorio: agota los reintentos de este
-      // modelo y continúa con el siguiente modelo disponible, sin tocar la
-      // generación de estructura/outline.
-      continue;
-    }
+  }finally{
+    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
-  throw new Error(lastError||'Gemini no pudo analizar el vídeo de YouTube.');
 }
 
+async function analyzeYoutubeReferenceMedia(url,video){
+  const referenceUrl=String(url||'').trim();
+  if(!referenceUrl)throw new Error('Falta la URL de YouTube.');
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-download-'));
+  try{
+    const downloaded=await downloadYoutubeReference(referenceUrl,dir);
+    const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
+    const analyzed=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
+    analyzed.referenceFileBytes=downloaded.bytes;
+    analyzed.downloadStrategy=downloaded.strategy;
+    analyzed.measuredVisualContinuity={
+      ...analyzed.measuredVisualContinuity,
+      ...measured,
+      source:'FFmpeg + Gemini sampled frames'
+    };
+    if(measured.constantImage){
+      analyzed.constantImage=true;
+      analyzed.visualAnalysis.videoProfile.constantImage=true;
+      analyzed.visualAnalysis.generationDirectives.useSingleContinuousVisual=true;
+      analyzed.visualAnalysis.generationDirectives.preferredSceneCount=1;
+    }
+    return analyzed;
+  }finally{
+    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
+}
 const youtubeReferenceJobs=new Map();
 async function executeYoutubeReferenceAnalysis(reference){
   const video=await getReferenceVideo(reference);
@@ -1405,23 +1427,9 @@ async function executeUrlToVideo(reference,jobId){
   try{
     const video=await getReferenceVideo(reference);
     let style={visualAnalysis:{}};
-    try{
-      style=await analyzeYoutubeReferenceMedia(reference,video);
-    }catch(err){
-      // The URL workflow must still be able to render when direct Gemini
-      // video understanding is temporarily unavailable. Metadata remains
-      // enough to keep the subject while the visual generator creates
-      // original footage.
-      console.warn('URL visual analysis fallback:',err.message||err);
-      style={
-        visualAnalysis:{
-          videoProfile:{durationSeconds:0,constantImage:false,estimatedSceneCount:4},
-          animationProfile:{motionIntensity:'moderate',visualRhythm:'cinematic'},
-          audioProfile:{hasSpeech:false,hasMusic:false,hasAmbience:false},
-          structureProfile:{segmentCount:4,sceneSegments:[]},
-          generationDirectives:{preferredSceneCount:4,preserveVisualContinuity:true,preserveAudioContinuity:true}
-        }
-      };
+    style=await analyzeYoutubeReferenceMedia(reference,video);
+    if(!style?.visualAnalysis||!style?.visualAnalysis?.structureProfile){
+      throw new Error('No se pudo obtener un análisis audiovisual suficiente de la referencia. El render se detuvo antes de generar visuales.');
     }
 
     const referenceTitle=String(video?.title||'Contenido original').slice(0,300);
