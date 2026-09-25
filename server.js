@@ -231,24 +231,44 @@ async function analyzeYoutubeReferenceMedia(url,video){
   throw new Error(lastError||'Gemini no pudo analizar el vídeo de YouTube.');
 }
 
+const youtubeReferenceJobs=new Map();
+async function executeYoutubeReferenceAnalysis(reference){
+  const video=await getReferenceVideo(reference);
+  const referenceStyle=await analyzeYoutubeReferenceMedia(reference,video);
+  return {
+    ok:true,
+    reference,
+    video,
+    referenceStyle,
+    analysis:{
+      basis:'URL pública de YouTube analizada directamente por Gemini para obtener información audiovisual y de audio.',
+      note:'AutoTube analiza la URL directamente y no descarga ni reutiliza el vídeo o su audio en el MP4 generado.'
+    }
+  };
+}
 app.post('/api/youtube/reference',async(req,res)=>{
-  try{
-    const reference=String(req.body?.reference||'').trim();    if(!reference)return res.status(400).json({error:'Indica una URL de YouTube.'});
-    const video=await getReferenceVideo(reference);
-    const referenceStyle=await analyzeYoutubeReferenceMedia(reference,video);    res.json({
-      ok:true,
-      reference,
-      video,
-      referenceStyle,
-      analysis:{
-        basis:'URL pública de YouTube analizada directamente por Gemini para obtener información audiovisual y de audio.',
-        note:'AutoTube analiza la URL directamente y no descarga ni reutiliza el vídeo o su audio en el MP4 generado.'
-      }
-    });
-  }catch(err){
+  const reference=String(req.body?.reference||'').trim();
+  if(!reference)return res.status(400).json({error:'Indica una URL de YouTube.'});
+  const existing=[...youtubeReferenceJobs.values()].find(j=>j.status==='running'&&j.reference===reference);
+  if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/youtube/reference/'+encodeURIComponent(existing.id)});
+  const id='ytref_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  youtubeReferenceJobs.set(id,{id,reference,status:'running',startedAt:Date.now(),result:null});
+  res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/youtube/reference/'+encodeURIComponent(id)});
+  executeYoutubeReferenceAnalysis(reference).then(result=>{
+    const job=youtubeReferenceJobs.get(id);
+    if(job){job.status='done';job.result=result;job.finishedAt=Date.now();}
+  }).catch(err=>{
     console.error('YouTube full reference analysis error:',err);
-    res.status(502).json({error:err.message||'No se pudo analizar el vídeo completo de YouTube.'});
-  }
+    const job=youtubeReferenceJobs.get(id);
+    if(job){job.status='error';job.result={ok:false,error:err.message||'No se pudo analizar el vídeo completo de YouTube.'};job.finishedAt=Date.now();}
+  });
+});
+app.get('/api/youtube/reference/:jobId',async(req,res)=>{
+  const job=youtubeReferenceJobs.get(String(req.params.jobId||''));
+  if(!job)return res.status(410).json({ok:false,status:'restart',error:'El análisis de YouTube se perdió porque el servidor se reinició. Vuelve a iniciar el análisis.'});
+  if(job.status==='running')return res.status(202).json({ok:false,status:'running',jobId:job.id,elapsedMs:Date.now()-job.startedAt});
+  if(job.status==='error')return res.status(502).json({ok:false,status:'error',jobId:job.id,error:job.result?.error||'No se pudo analizar el vídeo completo de YouTube.'});
+  return res.json({status:'done',jobId:job.id,...(job.result||{})});
 });
 
 app.post('/api/ai/outline',async(req,res)=>{const{topic,language='es',duration='8',reference='',referenceData=null,visualReferenceAnalysis=null,referenceStyle=null,referenceTopic=''}=req.body||{};const effectiveTopic=String(topic||referenceTopic||referenceData?.title||'').trim();if(!effectiveTopic)return res.status(400).json({error:'Indica un tema o proporciona una referencia de YouTube.'});if(!process.env['GEM'+'INI_'+'API_'+'KEY'])return res.json({demo:true,title:`Ideas para un vídeo sobre ${effectiveTopic}`,outline:['Gancho inicial','Contexto y promesa','Desarrollo en 3 bloques','Cierre y llamada a la acción'],note:'Conecta GEMINI_API_KEY para generar con IA.'});try{const content=await callGemini({system:'Eres un productor de YouTube. Devuelve JSON con title, hook, outline, visualIdeas, description y tags. No copies textos de otros vídeos.',user:JSON.stringify({task:'Crea una estructura audiovisual original sobre el tema indicado. Si referenceTopic contiene el título/tema de la referencia y el usuario no ha proporcionado otro tema, usa ese tema como asunto principal del nuevo vídeo. No sustituyas el tema de la referencia por otro asunto no relacionado.',topic:effectiveTopic,language,duration,reference:referenceData||(reference?{url:reference}:null),visualReferenceAnalysis,referenceStyle}),temperature:0.8,maxOutputTokens:1400,json:true});return res.json(parseJsonResponse(content))}catch(err){console.error('Outline Gemini error:',err);return res.json({demo:true,fallback:true,title:`${effectiveTopic} — The AI Movie`,hook:`Una historia audiovisual original sobre ${effectiveTopic}.`,outline:['Gancho inicial','Contexto y promesa','Desarrollo en 3 bloques','Momento principal','Cierre'],visualIdeas:[`Cinematic realistic footage about ${effectiveTopic}, opening scene, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, development, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, main moment, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, ending, 16:9`],description:`Vídeo original sobre ${effectiveTopic}.`,tags:[effectiveTopic,'AI','YouTube'],warning:'Gemini no respondió correctamente en este intento; se ha creado una estructura local para continuar.'})}});
@@ -869,4 +889,7 @@ app.get('/api/preflight',async(_req,res)=>{
   return res.status(job.result?.ok?200:503).json({status:job.status,jobId:job.id,...(job.result||{ok:false,checks:{},failed:[]})});
 });
 
-app.listen(PORT,()=>console.log(`AutoTube listening on ${PORT}`));
+const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
+httpServer.keepAliveTimeout=120000;
+httpServer.headersTimeout=125000;
+httpServer.requestTimeout=0;
