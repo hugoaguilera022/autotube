@@ -269,8 +269,8 @@ async function executeYoutubeReferenceAnalysis(reference){
     video,
     referenceStyle,
     analysis:{
-      basis:'URL pública de YouTube analizada directamente por Gemini para obtener información audiovisual y de audio.',
-      note:'AutoTube analiza la URL directamente y no descarga ni reutiliza el vídeo o su audio en el MP4 generado.'
+      basis:'URL pública de YouTube validada mediante descarga temporal y análisis de fotogramas con IA.',
+      note:'AutoTube usa la referencia solo para analizar tema y características audiovisuales; el MP4 generado es original y no reutiliza la grabación ni su audio.'
     }
   };
 }
@@ -1425,9 +1425,12 @@ async function executeUrlToVideo(reference,jobId){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-'));
   const job=urlVideoJobs.get(jobId);
   try{
-    const video=await getReferenceVideo(reference);
-    let style={visualAnalysis:{}};
-    style=await analyzeYoutubeReferenceMedia(reference,video);
+    const cachedReference=[...youtubeReferenceJobs.values()]
+      .filter(j=>j.status==='done'&&j.reference===reference&&j.result?.video&&j.result?.referenceStyle)
+      .sort((a,b)=>Number(b.finishedAt||0)-Number(a.finishedAt||0))[0];
+    const useCached=Boolean(cachedReference&&Date.now()-Number(cachedReference.finishedAt||0)<15*60*1000);
+    const video=useCached?cachedReference.result.video:await getReferenceVideo(reference);
+    const style=useCached?cachedReference.result.referenceStyle:await analyzeYoutubeReferenceMedia(reference,video);
     if(!style?.visualAnalysis||!style?.visualAnalysis?.structureProfile){
       throw new Error('No se pudo obtener un análisis audiovisual suficiente de la referencia. El render se detuvo antes de generar visuales.');
     }
