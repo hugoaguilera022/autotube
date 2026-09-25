@@ -1404,19 +1404,36 @@ async function executeUrlToVideo(reference,jobId){
   const job=urlVideoJobs.get(jobId);
   try{
     const video=await getReferenceVideo(reference);
-    const style=await analyzeYoutubeReferenceMedia(reference,video);
+    let style={visualAnalysis:{}};
+    try{
+      style=await analyzeYoutubeReferenceMedia(reference,video);
+    }catch(err){
+      // The URL workflow must still be able to render when direct Gemini
+      // video understanding is temporarily unavailable. Metadata remains
+      // enough to keep the subject while the visual generator creates
+      // original footage.
+      console.warn('URL visual analysis fallback:',err.message||err);
+      style={
+        visualAnalysis:{
+          videoProfile:{durationSeconds:0,constantImage:false,estimatedSceneCount:4},
+          animationProfile:{motionIntensity:'moderate',visualRhythm:'cinematic'},
+          audioProfile:{hasSpeech:false,hasMusic:false,hasAmbience:false},
+          structureProfile:{segmentCount:4,sceneSegments:[]},
+          generationDirectives:{preferredSceneCount:4,preserveVisualContinuity:true,preserveAudioContinuity:true}
+        }
+      };
+    }
+
     const referenceTitle=String(video?.title||'Contenido original').slice(0,300);
     const visualReferenceAnalysis=style?.visualAnalysis||{};
     if(job)job.progress=12;
 
-    // Render test path: visuals only. Music and narration are deliberately
-    // excluded here so a failed audio provider cannot block MP4 rendering.
     const outlineRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         topic:referenceTitle,reference,referenceTopic:referenceTitle,
-        referenceData:{title:referenceTitle,videoId:video?.videoId||'',channelTitle:video?.channelTitle||''},
-        visualReferenceAnalysis,referenceStyle:{visualAnalysis:visualReferenceAnalysis},
+        referenceData:video||{title:referenceTitle},
+        visualReferenceAnalysis,referenceStyle:style,
         language:'es',duration:'1'
       })
     });
@@ -1427,8 +1444,8 @@ async function executeUrlToVideo(reference,jobId){
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         topic:referenceTitle,reference,referenceTopic:referenceTitle,
-        referenceData:{title:referenceTitle,videoId:video?.videoId||'',channelTitle:video?.channelTitle||''},
-        visualReferenceAnalysis,referenceStyle:{visualAnalysis:visualReferenceAnalysis},
+        referenceData:video||{title:referenceTitle},
+        visualReferenceAnalysis,referenceStyle:style,
         language:'es',duration:'1',title:outline?.title||referenceTitle,
         outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
       })
@@ -1438,51 +1455,84 @@ async function executeUrlToVideo(reference,jobId){
       throw new Error(plan?.error||'Plan de producción inválido.');
 
     const scenes=plan.scenes.map((s,i)=>({
-      ...s,number:i+1,duration:Math.max(4,Math.min(30,Number(s.duration)||8)),
+      ...s,number:i+1,duration:Math.max(4,Math.min(20,Number(s.duration)||8)),
       mediaType:'video',constantImage:false
     }));
-    // Keep the first render small and reliable on Render Free.
+
+    // Render a short but complete original remake on the constrained
+    // Render instance. The visual generator is driven by the analyzed
+    // subject/style rather than copying the source recording.
     const maxSeconds=60;
     let used=0;
-    const limited=[];
+    const finalScenes=[];
     for(let i=0;i<scenes.length&&used<maxSeconds;i++){
       const remaining=scenes.length-i-1;
       const room=Math.max(4,maxSeconds-used-Math.max(0,remaining*4));
       const duration=Math.max(4,Math.min(Number(scenes[i].duration)||8,room));
-      limited.push({...scenes[i],duration});
+      finalScenes.push({...scenes[i],duration});
       used+=duration;
+      if(finalScenes.length>=6)break;
     }
-    const finalScenes=limited.length?limited:scenes.slice(0,1);
     if(job)job.progress=30;
 
     const resultsByScene=[];
-    for(const scene of finalScenes){
+    const aiClips=[];
+    for(let i=0;i<finalScenes.length;i++){
+      const scene=finalScenes[i];
       const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
-      let results=await searchPexelsPhotos(query);
-      if(!results.length)results=await searchPixabayImages(query);
-      const media=results.find(x=>x?.downloadUrl);
-      if(!media)throw new Error('No se encontró visual para la escena '+scene.number+'.');
-      resultsByScene.push({
-        number:scene.number,
-        media:[{...media,mediaType:String(media.mediaType||'image').toLowerCase()}],
-        mediaType:String(media.mediaType||'image').toLowerCase()
-      });
-      if(job)job.progress=30+Math.round((resultsByScene.length/finalScenes.length)*30);
+      let media=null;
+      try{
+        const videos=await searchPixabay(query);
+        media=videos.find(x=>x?.downloadUrl)||null;
+      }catch(err){console.warn('Pixabay video search fallback:',err.message||err)}
+      if(!media){
+        try{
+          const images=await searchPexelsPhotos(query);
+          media=images.find(x=>x?.downloadUrl)||null;
+        }catch(err){console.warn('Pexels search fallback:',err.message||err)}
+      }
+      if(!media){
+        try{
+          const images=await searchPixabayImages(query);
+          media=images.find(x=>x?.downloadUrl)||null;
+        }catch(err){console.warn('Pixabay image search fallback:',err.message||err)}
+      }
+
+      if(media){
+        resultsByScene.push({
+          number:scene.number,
+          media:[{...media,mediaType:String(media.mediaType||'video').toLowerCase()}],
+          mediaType:String(media.mediaType||'video').toLowerCase()
+        });
+      }else{
+        // Last visual fallback: generate original motion from the scene
+        // prompt so missing stock credentials never prevent MP4 creation.
+        const generated=await generateFreeLtxVideoClip(
+          String(scene.visualPrompt||scene.title||referenceTitle)+'; original footage; cinematic; 16:9; no text; no logos; do not imitate a specific existing video',
+          dir,
+          {durationSeconds:3,width:512,height:288,improveTexture:false}
+        );
+        aiClips.push({path:generated.outputPath,mediaType:'video'});
+        resultsByScene.push({number:scene.number,media:[],mediaType:'video'});
+      }
+      if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
     }
 
     if(activeRenderJobId && activeRenderJobId!==jobId)
       throw new Error('Ya hay otro render en curso. Espera a que termine.');
     activeRenderJobId=jobId;
+
     const outputPath=path.join(renderJobDir,jobId+'.mp4');
     const result=await renderAutotubeVideo({
       scenes:finalScenes,
       mediaResults:resultsByScene,
-      aiClips:[],
+      aiClips,
       narrationAudio:[],
       musicBuffer:null,
       onProgress:p=>{if(job)job.progress=60+Math.round(Math.max(0,Math.min(100,Number(p)||0))*0.38)},
       finalOutputPath:outputPath
     });
+
     const validation=await validateRenderedMp4(outputPath,result.duration);
     const stat=await fs.stat(outputPath);
     if(!stat.size)throw new Error('El MP4 final está vacío.');
