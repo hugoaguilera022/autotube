@@ -1134,17 +1134,18 @@ async function executeFullPipelineTest(reference){
     });
     const testScene={...(plan.scenes[0]||{}),number:1,duration:3,mediaType:'video',constantImage:false};
     await run('visual-source',async()=>{
-      const ref=style.visualAnalysis||{};
       const query=String(testScene.searchQuery||testScene.title||video.title||'').trim().slice(0,120);
-      const p=await searchPexels(query);
-      const q=p.length?p:await searchPixabay(query);
+      const p=await searchPexelsPhotos(query);
+      const q=p.length?p:await searchPixabayImages(query);
       const media=q.find(x=>x?.downloadUrl);
-      if(!media)throw new Error('No se encontró un visual de respaldo para la referencia.');
+      if(!media)throw new Error('No se encontró una imagen visual de respaldo para la referencia.');
+      const imagePath=path.join(dir,'reference-derived-source.jpg');
+      await downloadToFile(media.downloadUrl,imagePath);
       const sourcePath=path.join(dir,'reference-derived-source.mp4');
-      await downloadToFile(media.downloadUrl,sourcePath);
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',imagePath,'-t','3','-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30','-an','-c:v','libx264','-preset','ultrafast','-crf','28','-threads','1','-pix_fmt','yuv420p',sourcePath]);
       const check=await validateGeneratedVideoClip(sourcePath);
       clip={outputPath:sourcePath,bytes:(await fs.stat(sourcePath)).size,provider:media.provider,status:'complete'};
-      return{provider:media.provider,bytes:clip.bytes,durationSeconds:check.durationSeconds,width:check.width,height:check.height,query};
+      return{provider:media.provider,bytes:clip.bytes,durationSeconds:check.durationSeconds,width:check.width,height:check.height,query,sourceType:'image-to-video'};
     });
     await run('tts',async()=>{
       const ap=style.visualAnalysis?.audioProfile||{};
