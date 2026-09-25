@@ -537,29 +537,45 @@ async function generateLyriaMusic(prompt){
 async function generateFallbackMusic(prompt,durationSeconds,dir,audioProfile={}){
   const duration=Math.max(3,Math.min(300,Number(durationSeconds)||60));
   const output=path.join(dir,'fallback-music.wav');
-  const seed=crypto.createHash('sha256').update(JSON.stringify(audioProfile)+String(prompt||'')).digest();
-  const energyText=String(audioProfile.energy||'').toLowerCase();
-  const moodText=String(audioProfile.musicMood||audioProfile.musicMoodDescription||'').toLowerCase();
-  const dynamicsText=String(audioProfile.dynamics||'').toLowerCase();
-  const bpmMatch=String(audioProfile.bpmEstimate||'').match(/(\\d{2,3})/);
-  const bpm=Math.max(45,Math.min(140,Number(bpmMatch?.[1]||72)));
-  const highEnergy=/high|alta|intensa|intenso|energetic|rápid|fast/.test(energyText+' '+dynamicsText+' '+moodText);
-  const lowEnergy=/low|baja|suave|calm|slow|tranquil|ambient|relax|mister|dark|sombr/.test(energyText+' '+dynamicsText+' '+moodText);
-  const baseRoot=lowEnergy?82:(highEnergy?123:98);
-  const root=baseRoot+(seed[0]%5)*5;
-  const fifth=Math.round(root*1.5),octave=root*2,sub=Math.max(45,Math.round(root/2));
-  const pulseFreq=Math.max(48,Math.min(140,Math.round(55*bpm/72)));
-  const bassVol=lowEnergy?0.075:0.105;
-  const midVol=lowEnergy?0.045:0.065;
-  const highVol=lowEnergy?0.022:0.040;
-  const pulseVol=highEnergy?0.035:0.018;
-  const filter='[0:a]volume='+bassVol+',lowpass=f=850[bass];[1:a]volume='+midVol+',lowpass=f=1700[mid];[2:a]volume='+highVol+',lowpass=f=3000[high];[3:a]volume=0.014,highpass=f=6500[air];[4:a]volume='+pulseVol+',lowpass=f=1200[pulse];[bass][mid][high][air][pulse]amix=inputs=5:duration=longest:dropout_transition=2,aresample=44100,afade=t=in:st=0:d=3,afade=t=out:st='+Math.max(3,duration-3)+':d=3,volume=0.9[a]';
-  await runFfmpeg(['-y','-f','lavfi','-i','sine=frequency='+root+':sample_rate=44100:duration='+duration,'-f','lavfi','-i','sine=frequency='+fifth+':sample_rate=44100:duration='+duration,'-f','lavfi','-i','sine=frequency='+octave+':sample_rate=44100:duration='+duration,'-f','lavfi','-i','anoisesrc=color=pink:amplitude=0.012:sample_rate=44100:duration='+duration,'-f','lavfi','-i','sine=frequency='+Math.max(55,root/2)+':sample_rate=44100:duration='+duration,'-filter_complex',filter,'-map','[a]','-ar','44100','-ac','2','-c:a','pcm_s16le',output]);
+  const profile=audioProfile&&typeof audioProfile==='object'?audioProfile:{};
+  const seed=crypto.createHash('sha256').update(JSON.stringify(profile)+String(prompt||'')).digest();
+  const text=Object.values(profile).map(v=>String(v||'')).join(' ').toLowerCase();
+  const bpmMatch=String(profile.bpmEstimate||'').match(/\\d{2,3}/);
+  const bpm=Math.max(45,Math.min(180,Number(bpmMatch?.[0]||96)));
+  const beat=60/bpm,bar=beat*4;
+  const high=/high|alta|intens|energet|rápid|fast|upbeat|exciting/.test(text);
+  const low=/low|baja|suave|calm|slow|tranquil|ambient|relax|sombr|mister/.test(text);
+  const energy=high?1.15:(low?0.62:0.88);
+  const root=55+(seed[0]%18)*2;
+  const fifth=Math.round(root*1.5),third=Math.round(root*1.25),octave=root*2;
+  const pulse=1/Math.max(0.25,beat);
+  const kickAmp=(0.055*energy).toFixed(3);
+  const bassAmp=(0.075*energy).toFixed(3);
+  const padAmp=(0.045*energy).toFixed(3);
+  const airAmp=(0.012*energy).toFixed(3);
+  const gate=Math.max(0.08,Math.min(0.5,beat*0.45));
+  const pattern=[
+    'aevalsrc=if(lt(mod(t,'+bar.toFixed(4)+'),' + (beat*0.35).toFixed(4)+'),sin(2*PI*'+Math.round(root*2)+ '*t)*'+kickAmp+',0):s=44100:d='+duration,
+    'sine=frequency='+root+':sample_rate=44100:duration='+duration,
+    'sine=frequency='+third+':sample_rate=44100:duration='+duration,
+    'sine=frequency='+fifth+':sample_rate=44100:duration='+duration,
+    'anoisesrc=color=pink:amplitude='+airAmp+':sample_rate=44100:duration='+duration
+  ];
+  const filter='[0:a]lowpass=f=180,aresample=44100[kick];'+
+    '[1:a]volume='+bassAmp+',lowpass=f=500[bass];'+
+    '[2:a]volume='+padAmp+',lowpass=f=1200[mid];'+
+    '[3:a]volume='+padAmp+',lowpass=f=2200[harm];'+
+    '[4:a]highpass=f=5000,volume='+airAmp+'[air];'+
+    '[kick][bass][mid][harm][air]amix=inputs=5:duration=longest:dropout_transition=1,'+
+    'tremolo=f='+pulse.toFixed(4)+':d=0.35,aresample=44100,'+
+    'afade=t=in:st=0:d='+Math.min(3,duration/3)+','+
+    'afade=t=out:st='+Math.max(0,duration-Math.min(3,duration/3))+':d='+Math.min(3,duration/3)+
+    ',loudnorm=I=-20:LRA=8:TP=-2[a]';
+  await runFfmpeg(['-y','-f','lavfi','-i',pattern[0],'-f','lavfi','-i',pattern[1],'-f','lavfi','-i',pattern[2],'-f','lavfi','-i',pattern[3],'-f','lavfi','-i',pattern[4],'-filter_complex',filter,'-map','[a]','-ar','44100','-ac','2','-c:a','pcm_s16le',output]);
   const audio=await fs.readFile(output);
   if(!audio.length)throw new Error('La música de respaldo está vacía.');
-  return{buffer:audio,mime:'audio/wav',provider:'FFmpeg procedural reference-style fallback'};
+  return{buffer:audio,mime:'audio/wav',provider:'FFmpeg structured reference-audio fallback'};
 }
-
 
 const musicJobs=new Map();
 
