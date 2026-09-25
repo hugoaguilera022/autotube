@@ -677,48 +677,45 @@ async function validateRenderedMp4(file){
 }
 
 
-async function generateVeoVideoClip(prompt,dir,options={}){
-  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
-  if(!key)throw new Error('Falta GEMINI_API_KEY.');
-  const model=String(options.model||process.env.VEO_MODEL||'veo-3.1-generate-preview').trim();
-  const base='https://generativelanguage.googleapis.com/v1beta';
-  const body={
-    instances:[{prompt:String(prompt||'').trim()}],
-    parameters:{
-      aspectRatio:String(options.aspectRatio||'16:9'),
-      resolution:String(options.resolution||'720p'),
-    }
-  };
-  const start=await fetch(base+'/models/'+encodeURIComponent(model)+':predictLongRunning',{
-    method:'POST',
-    headers:{'x-goog-api-key':key,'Content-Type':'application/json'},
-    body:JSON.stringify(body)
+async function generateMagicHourVideoClip(prompt,dir,options={}){
+  const key=String(process.env.MAGIC_HOUR_API_KEY||'').trim();
+  if(!key)throw new Error('Falta MAGIC_HOUR_API_KEY. Crea una clave gratuita de Magic Hour y añádela a Render.');
+  const {Client}=require('magic-hour');
+  const client=new Client({token:key});
+  const duration=Math.max(3,Math.min(60,Number(options.durationSeconds)||5));
+  const resolution=String(options.resolution||'480p');
+  const aspectRatio=String(options.aspectRatio||'16:9');
+  const model=String(options.model||'ltx-2.5');
+  const name=String(options.name||'AutoTube AI video').slice(0,120);
+  const result=await client.v1.textToVideo.generate({
+    aspectRatio,
+    endSeconds:duration,
+    model,
+    name,
+    resolution,
+    audio:Boolean(options.audio),
+    style:{prompt:String(prompt||'').trim()}
+  },{
+    waitForCompletion:true,
+    downloadOutputs:true,
+    downloadDirectory:dir
   });
-  const raw=await start.text();
-  let data=null;try{data=raw?JSON.parse(raw):null}catch{}
-  if(!start.ok)throw new Error('Veo '+start.status+': '+(data?.error?.message||raw.slice(0,700)));
-  const operationName=String(data?.name||'').trim();
-  if(!operationName)throw new Error('Veo no devolvió una operación de generación.');
-  let status=data;
-  for(let attempt=0;attempt<36;attempt++){
-    if(status?.done)break;
-    await new Promise(resolve=>setTimeout(resolve,5000));
-    const poll=await fetch(base+'/'+operationName,{headers:{'x-goog-api-key':key}});
-    const pollRaw=await poll.text();let pollData=null;try{pollData=pollRaw?JSON.parse(pollRaw):null}catch{}
-    if(!poll.ok)throw new Error('Veo no pudo consultar la operación ('+poll.status+'): '+(pollData?.error?.message||pollRaw.slice(0,500)));
-    status=pollData;
-    if(status?.error)throw new Error('Veo terminó con error: '+(status.error.message||JSON.stringify(status.error)));
+  const candidates=Array.isArray(result?.downloadedPaths)?result.downloadedPaths:[];
+  let output=candidates.find(x=>/\\.(mp4|webm|mov)$/i.test(String(x||'')));
+  if(!output&&result?.downloads){
+    const urls=Array.isArray(result.downloads)?result.downloads:Object.values(result.downloads||{});
+    const url=urls.find(x=>/https?:\\/\\//i.test(String(x||'')));
+    if(url){
+      const response=await fetch(String(url));
+      if(!response.ok)throw new Error('Magic Hour no pudo descargar el vídeo generado ('+response.status+').');
+      output=path.join(dir,'magichour-generated.mp4');
+      await fs.writeFile(output,Buffer.from(await response.arrayBuffer()));
+    }
   }
-  if(!status?.done)throw new Error('Veo no terminó la generación dentro del tiempo de prueba.');
-  const videoUri=String(status?.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri||'').trim();
-  if(!videoUri)throw new Error('Veo terminó pero no devolvió la URI del vídeo generado.');
-  const response=await fetch(videoUri,{headers:{'x-goog-api-key':key}});
-  if(!response.ok)throw new Error('No se pudo descargar el vídeo generado por Veo ('+response.status+').');
-  const buffer=Buffer.from(await response.arrayBuffer());
-  if(buffer.length<100000)throw new Error('Veo devolvió un archivo demasiado pequeño para ser un vídeo válido.');
-  const output=path.join(dir,'veo-generated.mp4');
-  await fs.writeFile(output,buffer);
-  return{outputPath:output,bytes:buffer.length,model,operationName,videoUri};
+  if(!output)throw new Error('Magic Hour terminó la generación pero no devolvió un archivo descargable.');
+  const stat=await fs.stat(output);
+  if(!stat.size)throw new Error('Magic Hour devolvió un vídeo vacío.');
+  return{outputPath:output,bytes:stat.size,provider:'Magic Hour',model,durationSeconds:duration,creditsCharged:Number(result?.creditsCharged||0),status:String(result?.status||'complete')};
 }
 
 async function validateGeneratedVideoClip(file){
@@ -733,41 +730,24 @@ async function validateGeneratedVideoClip(file){
     });
   });
   const text=String(result||'');
-  const dm=text.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
+  const dm=text.match(/Duration:\\s*(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)/i);
   const durationSeconds=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
-  const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
-  const vm=videoLine.match(/Video:\s*([^,]+)/i);
-  const dimensions=videoLine.match(/(\d{2,5})x(\d{2,5})/);
-  if(!durationSeconds||durationSeconds<6)throw new Error('El clip IA tiene una duración inválida: '+durationSeconds+' s.');
+  const videoLine=(text.split(/\\r?\\n/).find(line=>/Video:/i.test(line))||'');
+  const vm=videoLine.match(/Video:\\s*([^,]+)/i);
+  const dimensions=videoLine.match(/(\\d{2,5})x(\\d{2,5})/);
+  if(!durationSeconds||durationSeconds<3)throw new Error('El clip IA tiene una duración inválida: '+durationSeconds+' s.');
   if(!vm)throw new Error('El archivo generado no contiene un stream de vídeo válido.');
-  return{
-    ok:true,
-    durationSeconds,
-    videoCodec:String(vm[1]||'').trim(),
-    width:dimensions?Number(dimensions[1]):0,
-    height:dimensions?Number(dimensions[2]):0
-  };
+  return{ok:true,durationSeconds,videoCodec:String(vm[1]||'').trim(),width:dimensions?Number(dimensions[1]):0,height:dimensions?Number(dimensions[2]):0};
 }
 
 async function runVideoAiSmokeTest(){
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-veo-test-'));
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-video-test-'));
   try{
-    const prompt='Original cinematic documentary video, 16:9 landscape. A remote unexplored snowy mountain range in the Himalayas at dawn, dramatic clouds moving slowly across the peaks, subtle aerial camera push-in, realistic natural lighting, deep blue and cold tones, atmospheric mist, high-detail professional documentary cinematography. No text, no logos, no copyrighted characters, no imitation of any specific existing video.';
-    const generated=await generateVeoVideoClip(prompt,dir,{resolution:'720p'});
+    const prompt='Original cinematic documentary video, 16:9 landscape. A remote unexplored snowy mountain range in the Himalayas at dawn, clouds moving naturally across the peaks, subtle aerial camera push-in, realistic lighting, atmospheric mist, professional documentary cinematography. No text, no logos, no copyrighted characters, no imitation of any specific existing video.';
+    const generated=await generateMagicHourVideoClip(prompt,dir,{durationSeconds:5,resolution:'480p',aspectRatio:'16:9',model:'ltx-2.5',audio:true,name:'AutoTube free AI video smoke test'});
     const validation=await validateGeneratedVideoClip(generated.outputPath);
-    return{
-      ok:Boolean(validation.ok),
-      provider:'Google Veo 3.1',
-      model:generated.model,
-      bytes:generated.bytes,
-      durationSeconds:validation.durationSeconds,
-      width:validation.width,
-      height:validation.height,
-      videoCodec:validation.videoCodec
-    };
-  }finally{
-    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
-  }
+    return{ok:Boolean(validation.ok),provider:generated.provider,model:generated.model,bytes:generated.bytes,durationSeconds:validation.durationSeconds,width:validation.width,height:validation.height,videoCodec:validation.videoCodec,creditsCharged:generated.creditsCharged,status:generated.status};
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
 }
 
 const videoAiTestJobs=new Map();
