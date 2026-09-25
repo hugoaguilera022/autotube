@@ -207,16 +207,18 @@ async function validateRenderedMp4(file){
     });
   });
   const text=String(probe||'');
-  const vm=text.match(/Video:.*?(\\d{2,5})x(\\d{2,5})/);
-  const fm=text.match(/(\\d+(?:\\.\\d+)?)\\s*fps/);
-  const am=text.match(/Audio:.*?\\b(aac)\\b/i);
-  if(!vm)throw new Error('No se pudo verificar la resolución del MP4.');
+  const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
+  const audioLine=(text.split(/\r?\n/).find(line=>/Audio:/i.test(line))||'');
+  const vm=videoLine.match(/(\d{2,5})x(\d{2,5})/);
+  const fm=videoLine.match(/(\d+(?:\.\d+)?)\s*fps/);
+  const am=audioLine.match(/Audio:\s*([a-z0-9_]+)/i);
+  if(!vm)throw new Error('No se pudo verificar la resolución real del MP4.');
   const width=Number(vm[1]),height=Number(vm[2]);
   const fps=fm?Number(fm[1]):0;
-  const audioCodec=am?'aac':'';
+  const audioCodec=am?String(am[1]).toLowerCase():'';
   if(width!==1920||height!==1080)throw new Error('Resolución real del MP4: '+width+'x'+height+' (se esperaba 1920x1080).');
   if(!fps||Math.abs(fps-30)>0.5)throw new Error('FPS reales del MP4: '+(fps||'desconocidos')+' (se esperaban 30).');
-  if(audioCodec!=='aac')throw new Error('El MP4 final no contiene una pista AAC válida.');
+  if(audioCodec!=='aac')throw new Error('Códec de audio real del MP4: '+(audioCodec||'desconocido')+' (se esperaba AAC).');
   return{width,height,fps,audioCodec};
 }
 
