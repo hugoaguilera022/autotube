@@ -31,7 +31,7 @@ async function saveYoutubeConnection(){if(!supabaseConfigured()||!youtubeTokens)
 const PORT=process.env.PORT||3000;function youtubeClient(){return new google.auth.OAuth2(process.env.YOUTUBE_CLIENT_ID,process.env.YOUTUBE_CLIENT_SECRET,process.env.YOUTUBE_REDIRECT_URI||`${process.env.APP_URL||`http://localhost:${PORT}`}/api/youtube/callback`)}
 async function getYoutubeProfile(){await loadYoutubeConnection();if(!youtubeTokens)return youtubeProfileCache;const auth=youtubeClient();auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.channels.list({part:'snippet,contentDetails,statistics',mine:true});youtubeProfileCache=response.data.items?.[0]||null;return youtubeProfileCache}
 app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true}));app.use(express.static(path.join(__dirname,'public')));
-app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),magicHour:Boolean(process.env.MAGIC_HOUR_API_KEY),youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
+app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
 function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
 async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
 async function downloadYoutubeReference(url,dir){
@@ -677,45 +677,40 @@ async function validateRenderedMp4(file){
 }
 
 
-async function generateMagicHourVideoClip(prompt,dir,options={}){
-  const key=String(process.env.MAGIC_HOUR_API_KEY||'').trim();
-  if(!key)throw new Error('Falta MAGIC_HOUR_API_KEY. Crea una clave gratuita de Magic Hour y añádela a Render.');
-  const {Client}=require('magic-hour');
-  const client=new Client({token:key});
-  const duration=Math.max(3,Math.min(60,Number(options.durationSeconds)||5));
-  const resolution=String(options.resolution||'480p');
-  const aspectRatio=String(options.aspectRatio||'16:9');
-  const model=String(options.model||'ltx-2.5');
-  const name=String(options.name||'AutoTube AI video').slice(0,120);
-  const result=await client.v1.textToVideo.generate({
-    aspectRatio,
-    endSeconds:duration,
-    model,
-    name,
-    resolution,
-    audio:Boolean(options.audio),
-    style:{prompt:String(prompt||'').trim()}
-  },{
-    waitForCompletion:true,
-    downloadOutputs:true,
-    downloadDirectory:dir
+async function generateFreeLtxVideoClip(prompt,dir,options={}) {
+  const {Client}=require('@gradio/client');
+  const space=String(process.env.LTX_SPACE||'Lightricks/ltx-video-distilled').trim();
+  const duration=Math.max(0.3,Math.min(8.5,Number(options.durationSeconds)||5));
+  const width=Math.max(256,Math.min(1280,Math.round((Number(options.width)||704)/32)*32));
+  const height=Math.max(256,Math.min(1280,Math.round((Number(options.height)||512)/32)*32));
+  const negativePrompt=String(options.negativePrompt||'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos').trim();
+  const app=await Client.connect(space);
+  const result=await app.predict('/text_to_video',{
+    prompt:String(prompt||'').trim(),
+    negative_prompt:negativePrompt,
+    image_n:null,
+    video_n:null,
+    height,
+    width,
+    mode:'text-to-video',
+    duration,
+    frames_to_use:9,
+    seed:Math.floor(Math.random()*4294967295),
+    randomize_seed:true,
+    guidance_scale:Number(options.guidanceScale||3),
+    improve_texture:Boolean(options.improveTexture??false)
   });
-  const candidates=Array.isArray(result?.downloadedPaths)?result.downloadedPaths:[];
-  let output=candidates.find(x=>{const v=String(x||'').toLowerCase();return v.endsWith('.mp4')||v.endsWith('.webm')||v.endsWith('.mov');});
-  if(!output&&result?.downloads){
-    const urls=Array.isArray(result.downloads)?result.downloads:Object.values(result.downloads||{});
-    const url=urls.find(x=>/^https?:/.test(String(x||'')));
-    if(url){
-      const response=await fetch(String(url));
-      if(!response.ok)throw new Error('Magic Hour no pudo descargar el vídeo generado ('+response.status+').');
-      output=path.join(dir,'magichour-generated.mp4');
-      await fs.writeFile(output,Buffer.from(await response.arrayBuffer()));
-    }
-  }
-  if(!output)throw new Error('Magic Hour terminó la generación pero no devolvió un archivo descargable.');
-  const stat=await fs.stat(output);
-  if(!stat.size)throw new Error('Magic Hour devolvió un vídeo vacío.');
-  return{outputPath:output,bytes:stat.size,provider:'Magic Hour',model,durationSeconds:duration,creditsCharged:Number(result?.creditsCharged||0),status:String(result?.status||'complete')};
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!url)throw new Error('LTX/ZeroGPU terminó la generación pero no devolvió el vídeo.');
+  const response=await fetch(String(url));
+  if(!response.ok)throw new Error('LTX/ZeroGPU no pudo descargar el vídeo generado ('+response.status+').');
+  const outputPath=path.join(dir,'ltx-generated.mp4');
+  await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+  const stat=await fs.stat(outputPath);
+  if(!stat.size)throw new Error('LTX/ZeroGPU devolvió un vídeo vacío.');
+  return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX Video',model:'LTX Video 0.9.8 distilled',durationSeconds:duration,status:'complete'};
 }
 
 async function validateGeneratedVideoClip(file){
@@ -744,9 +739,9 @@ async function runVideoAiSmokeTest(){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-video-test-'));
   try{
     const prompt='Original cinematic documentary video, 16:9 landscape. A remote unexplored snowy mountain range in the Himalayas at dawn, clouds moving naturally across the peaks, subtle aerial camera push-in, realistic lighting, atmospheric mist, professional documentary cinematography. No text, no logos, no copyrighted characters, no imitation of any specific existing video.';
-    const generated=await generateMagicHourVideoClip(prompt,dir,{durationSeconds:5,resolution:'480p',aspectRatio:'16:9',model:'ltx-2.5',audio:true,name:'AutoTube free AI video smoke test'});
+    const generated=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:2,width:704,height:512,improveTexture:false});
     const validation=await validateGeneratedVideoClip(generated.outputPath);
-    return{ok:Boolean(validation.ok),provider:generated.provider,model:generated.model,bytes:generated.bytes,durationSeconds:validation.durationSeconds,width:validation.width,height:validation.height,videoCodec:validation.videoCodec,creditsCharged:generated.creditsCharged,status:generated.status};
+    return{ok:Boolean(validation.ok),provider:generated.provider,model:generated.model,bytes:generated.bytes,durationSeconds:validation.durationSeconds,width:validation.width,height:validation.height,videoCodec:validation.videoCodec,status:generated.status};
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
 }
 
