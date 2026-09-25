@@ -730,11 +730,11 @@ async function validateGeneratedVideoClip(file){
     });
   });
   const text=String(result||'');
-  const dm=text.match(/Duration:\\s*(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)/i);
+  const dm=text.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
   const durationSeconds=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
-  const videoLine=(text.split(/\\r?\\n/).find(line=>/Video:/i.test(line))||'');
-  const vm=videoLine.match(/Video:\\s*([^,]+)/i);
-  const dimensions=videoLine.match(/(\\d{2,5})x(\\d{2,5})/);
+  const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
+  const vm=videoLine.match(/Video:\s*([^,]+)/i);
+  const dimensions=videoLine.match(/(\d{2,5})x(\d{2,5})/);
   if(!durationSeconds||durationSeconds<3)throw new Error('El clip IA tiene una duración inválida: '+durationSeconds+' s.');
   if(!vm)throw new Error('El archivo generado no contiene un stream de vídeo válido.');
   return{ok:true,durationSeconds,videoCodec:String(vm[1]||'').trim(),width:dimensions?Number(dimensions[1]):0,height:dimensions?Number(dimensions[2]):0};
