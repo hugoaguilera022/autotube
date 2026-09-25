@@ -247,7 +247,7 @@ async function generateAiSceneClips(){
       ].filter(Boolean).join('; ');
       const previousScene=scenes[i-1];
       const nextScene=scenes[i+1];
-      const segment=scene.referenceSegment||refAnalysis?.structureProfile?.sceneSegments?.[Math.min(i,(refAnalysis?.structureProfile?.sceneSegments?.length||1)-1)]||null;
+      const segment=scene.referenceSegment||refAnalysis?.structureProfile?.sceneSegments?.[Math.min((refAnalysis?.structureProfile?.sceneSegments?.length||1)-1,Math.round(i*((refAnalysis?.structureProfile?.sceneSegments?.length||1)-1)/Math.max(1,scenes.length-1)))]||null;
       const segmentDNA=segment?[
         segment.startSeconds!=null&&('reference time range: '+segment.startSeconds+'s-'+segment.endSeconds+'s'),
         segment.summary&&('reference segment summary: '+segment.summary),
