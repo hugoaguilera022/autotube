@@ -1498,6 +1498,22 @@ async function executeUrlToVideo(reference,jobId){
         }catch(err){console.warn('Pixabay image search fallback:',err.message||err)}
       }
 
+      // A visual search hit is not enough: verify that the asset can actually
+      // be downloaded before handing it to FFmpeg. A dead CDN URL must never
+      // abort the whole job; fall through to the next provider or LTX.
+      if(media?.downloadUrl){
+        try{
+          const probePath=path.join(dir,'source-probe-'+i+'.bin');
+          await downloadToFile(media.downloadUrl,probePath);
+          const probeStat=await fs.stat(probePath);
+          await fs.rm(probePath,{force:true}).catch(()=>{});
+          if(!probeStat.size)throw new Error('Fuente visual vacía.');
+        }catch(err){
+          console.warn('Visual source unusable; using next fallback:',query,err.message||err);
+          media=null;
+        }
+      }
+
       if(media){
         resultsByScene.push({
           number:scene.number,
