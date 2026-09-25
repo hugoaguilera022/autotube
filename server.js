@@ -101,9 +101,22 @@ async function downloadYoutubeReference(url,dir){
       await fs.rm(dir,{recursive:true,force:false}).catch(()=>{});
       await fs.mkdir(dir,{recursive:true});
       const result=await youtubedl(url,{format:strategy.format,mergeOutputFormat:'mp4',output,noPlaylist:true,noWarnings:true,noCheckCertificates:true,restrictFilenames:true,preferFreeFormats:false,extractor_args:strategy.extractor_args,ffmpegLocation:path.dirname(ffmpegPath)},{timeout:180000,killSignal:'SIGKILL'});
-      const files=await fs.readdir(dir);
-      const videoFile=files.find(name=>/^reference\\.(mp4|mkv|webm|mov)$/i.test(name));
-      if(!videoFile)throw new Error('yt-dlp no produjo un archivo de vídeo.');
+      let files=await fs.readdir(dir);
+      let videoFile=files.find(name=>/^reference\\.(mp4|mkv|webm|mov)$/i.test(name));
+      if(!videoFile){
+        const videoPart=files.find(name=>/^reference\\.(?:f\\d+\\.)?(mp4|mkv|webm|mov)$/i.test(name));
+        const audioPart=files.find(name=>/^reference\\.(?:f\\d+\\.)?(m4a|mp3|aac|opus|webm|wav)$/i.test(name) && name!==videoPart);
+        if(videoPart&&audioPart){
+          const merged=path.join(dir,'reference.mp4');
+          await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',path.join(dir,videoPart),'-i',path.join(dir,audioPart),'-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','veryfast','-crf','23','-c:a','aac','-b:a','160k','-movflags','+faststart',merged]);
+          videoFile='reference.mp4';
+        }
+      }
+      if(!videoFile){
+        const anyVideo=files.find(name=>/^reference\\..*\\.(mp4|mkv|webm|mov)$/i.test(name));
+        if(anyVideo)videoFile=anyVideo;
+      }
+      if(!videoFile)throw new Error('yt-dlp no produjo un archivo de vídeo. Archivos temporales: '+files.filter(name=>/^reference\\./i.test(name)).join(', '));
       const file=path.join(dir,videoFile);
       const stat=await fs.stat(file);
       if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
