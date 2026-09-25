@@ -16,7 +16,7 @@ let activeRenderJobId = null;
 const renderJobDir = path.join(os.tmpdir(), 'autotube-render-jobs');
 fs.mkdir(renderJobDir, { recursive: true }).catch(() => {});
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
-async function callGemini({system,user,images=[],temperature=0.7,maxOutputTokens=1200,json=false}){const k=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();if(!k)throw new Error('Falta la clave de Gemini.');const parts=[{text:String(user||'')}];for(const im of images)parts.push({inline_data:{mime_type:im.mimeType||'image/jpeg',data:im.data}});const headers={'Content-Type':'application/json'};headers['x-goog-'+'api-key']=k;const models=[...new Set([String(GEMINI_MODEL||'').trim(),'gemini-3.5-flash-lite','gemini-3.1-flash-lite'].filter(Boolean))];let lastError='';for(const model of models){for(const structured of (json?[true,false]:[false])){const body={system_instruction:{parts:[{text:String(system||'')}]},contents:[{role:'user',parts}],generationConfig:{maxOutputTokens,...(structured?{responseMimeType:'application/json'}:{})}};const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers,body:JSON.stringify(body)});const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}if(response.ok){const text=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';if(text)return text;lastError='Gemini no devolvió contenido.';continue}const message=data?.error?.message||raw.slice(0,500)||'Error desconocido';lastError='Gemini '+response.status+': '+message;if(response.status===429||response.status>=500)break;if(response.status===400&&structured)continue;if(response.status===404||/model|not found|unsupported/i.test(message))break;break}}throw new Error(lastError||'Gemini no pudo procesar la solicitud.');}
+async function callGemini({system,user,images=[],files=[],temperature=0.7,maxOutputTokens=1200,json=false}){const k=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();if(!k)throw new Error('Falta la clave de Gemini.');const parts=[{text:String(user||'')}];for(const im of images)parts.push({inline_data:{mime_type:im.mimeType||'image/jpeg',data:im.data}});for(const file of files){if(file?.uri)parts.push({file_data:{mime_type:file.mimeType||'application/octet-stream',file_uri:file.uri}});}const headers={'Content-Type':'application/json'};headers['x-goog-'+'api-key']=k;const models=[...new Set([String(GEMINI_MODEL||'').trim(),'gemini-3.5-flash-lite','gemini-3.1-flash-lite'].filter(Boolean))];let lastError='';for(const model of models){for(const structured of (json?[true,false]:[false])){const body={system_instruction:{parts:[{text:String(system||'')}]},contents:[{role:'user',parts}],generationConfig:{maxOutputTokens,...(structured?{responseMimeType:'application/json'}:{})}};const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers,body:JSON.stringify(body)});const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}if(response.ok){const text=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';if(text)return text;lastError='Gemini no devolvió contenido.';continue}const message=data?.error?.message||raw.slice(0,500)||'Error desconocido';lastError='Gemini '+response.status+': '+message;if(response.status===429||response.status>=500)break;if(response.status===400&&structured)continue;if(response.status===404||/model|not found|unsupported/i.test(message))break;break}}throw new Error(lastError||'Gemini no pudo procesar la solicitud.');}
 function parseJsonResponse(text){const raw=String(text||'').replace(/^\s*```(?:json)?\s*/i,'').replace(/\s*```\s*$/i,'').trim();let candidate=raw;const first=Math.min(...['{','['].map(ch=>{const i=raw.indexOf(ch);return i<0?Infinity:i}));const last=Math.max(raw.lastIndexOf('}'),raw.lastIndexOf(']'));if(Number.isFinite(first)&&last>=first)candidate=raw.slice(first,last+1);try{return JSON.parse(candidate)}catch(err){const repaired=candidate.replace(/,\s*([}\]])/g,'$1');try{return JSON.parse(repaired)}catch(_){throw new Error('Respuesta JSON inválida de Gemini: '+(err.message||String(err)))}}}
 const app=express();
 let youtubeTokens=null,youtubeProfileCache=null,youtubeLoaded=false;
@@ -188,6 +188,32 @@ async function analyzeDownloadedReferenceMedia(file,video){
       if(data.length)images.push({mimeType:'image/jpeg',data:data.toString('base64')});
     }
 
+    let audioAnalysis=null;
+    const audioPath=path.join(dir,'reference-audio.wav');
+    try{
+      await runFfmpeg([
+        '-y','-hide_banner','-loglevel','error','-i',file,
+        '-vn','-sn','-dn','-ac','1','-ar','16000','-t','180',
+        '-c:a','pcm_s16le',audioPath
+      ]);
+      const audioStat=await fs.stat(audioPath);
+      if(audioStat.size>20000&&audioStat.size<25*1024*1024){
+        const audioFile=await uploadGeminiFile(audioPath,'audio/wav');
+        const audioPrompt='Analiza el audio real de esta referencia de YouTube. No reproduzcas ni copies la grabación. Devuelve SOLO JSON válido con: hasSpeech,hasMusic,hasAmbience,hasSoundEffects,language,speechRate,pauses,emotion,voiceStyle,musicMood,energy,dynamics,instrumentation,bpmEstimate,voiceMusicBalance,audioContinuity,speechConfidence,musicConfidence,ambienceConfidence. Determina de forma explícita si hay voz humana, música, ambas o ninguna. Si hay voz pero no música, hasMusic=false. Si hay música pero no voz, hasSpeech=false. Si hay ambas, marca ambas true. Usa unknown solo cuando realmente no pueda determinarse.';
+        const audioText=await callGemini({
+          system:'Eres un analista de audio profesional. Clasifica el audio real proporcionado sin inventar contenido.',
+          user:audioPrompt,
+          files:[audioFile],
+          temperature:0.1,
+          maxOutputTokens:1200,
+          json:true
+        });
+        audioAnalysis=parseJsonResponse(audioText);
+      }
+    }catch(err){
+      console.warn('Audio reference analysis fallback:',err.message||err);
+    }
+
     const prompt='Analiza estos fotogramas extraídos en orden de un vídeo de YouTube. Son muestras temporales del vídeo real, no imágenes de stock. Reconstruye un perfil audiovisual ORIGINAL y fiel al TEMA y al lenguaje visual observado. No copies planos, personajes, texto, guion ni grabaciones. Determina qué aparece realmente, cómo cambia la imagen, encuadre, composición, iluminación, paleta, movimiento, animación y ritmo. Si el vídeo parece mantener una imagen esencialmente constante, indícalo. Devuelve ÚNICAMENTE JSON válido con videoProfile, animationProfile, audioProfile, structureProfile y generationDirectives. videoProfile: durationSeconds,constantImage,estimatedSceneCount,sceneChangeRate,cameraMovement,composition,palette,lighting,visualStyle,continuity. animationProfile: cameraMotion,zoomStyle,panStyle,overlays,textAnimation,effects,transitionStyle,motionIntensity,visualRhythm. audioProfile: hasSpeech,language,speechRate,pauses,emotion,hasMusic,hasAmbience,hasSoundEffects,musicMood,energy,dynamics,instrumentation,voiceStyle,bpmEstimate,voiceMusicBalance,audioContinuity. Como el análisis visual procede de fotogramas, no inventes detalles de audio que no puedan inferirse; usa unknown cuando corresponda. structureProfile: opening,pacing,transitions,segmentCount,segmentDurations,visualContinuity,timestamps,sceneSegments. sceneSegments debe ser un array ordenado que cubra todo el vídeo usando estos tiempos aproximados: '+JSON.stringify(frameSeconds)+'. Cada segmento debe incluir startSeconds,endSeconds,summary,subject,shotScale,composition,cameraMovement,motionIntensity,lighting,palette,transitionIn,transitionOut,audioRole,narrationRole,continuityAnchor,generationPrompt. generationDirectives: useSingleContinuousVisual,preferredSceneCount,preserveVisualContinuity,preserveAudioContinuity,visualSearchStrategy,musicStrategy,narrationStrategy,animationStrategy. El título y metadatos de YouTube son contexto adicional: '+JSON.stringify({title:video?.title||'',description:String(video?.description||'').slice(0,2500),tags:Array.isArray(video?.tags)?video.tags.slice(0,20):[],duration:video?.duration||''})+'.';
 
     const text=await callGemini({
@@ -200,7 +226,13 @@ async function analyzeDownloadedReferenceMedia(file,video){
     });
     const analysis=parseJsonResponse(text);
     const vp=analysis?.videoProfile||{},sp=analysis?.structureProfile||{},gd=analysis?.generationDirectives||{};
-    const ap=analysis?.audioProfile||{},an=analysis?.animationProfile||{};
+    const ap={...(analysis?.audioProfile||{}),...(audioAnalysis||{})},an=analysis?.animationProfile||{};
+    if(audioAnalysis){
+      ap.hasSpeech=Boolean(audioAnalysis.hasSpeech);
+      ap.hasMusic=Boolean(audioAnalysis.hasMusic);
+      ap.hasAmbience=Boolean(audioAnalysis.hasAmbience);
+      ap.hasSoundEffects=Boolean(audioAnalysis.hasSoundEffects);
+    }
     vp.durationSeconds=Number(vp.durationSeconds||durationSeconds)||durationSeconds;
     const constantImage=Boolean(vp.constantImage||gd.useSingleContinuousVisual);
     vp.constantImage=constantImage;
@@ -220,7 +252,8 @@ async function analyzeDownloadedReferenceMedia(file,video){
       thumbnailCount:Number(video?.thumbnails?.length||0),
       referenceFileBytes:0,
       hasFullVideoAnalysis:false,
-      hasAudioAnalysis:Boolean(analysis.audioProfile),
+      hasAudioAnalysis:Boolean(audioAnalysis||analysis.audioProfile),
+      audioAnalysisSource:audioAnalysis?'Gemini audio file analysis':'visual inference only',
       hasAnimationAnalysis:Boolean(analysis.animationProfile),
       hasStructureAnalysis:Boolean(analysis.structureProfile&&Object.keys(analysis.structureProfile).length),
       measuredVisualContinuity:{source:'FFmpeg/Gemini sampled frames',constantImage},
