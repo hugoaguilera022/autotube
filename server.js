@@ -64,14 +64,16 @@ async function downloadYoutubeReference(url,dir){
         const status=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId));
         const data=await status.json().catch(()=>null);
         if(data?.status==='done'&&data?.downloadUrl){
-          const dl=await fetch(base+String(data.downloadUrl));
-          if(dl.ok){
-            const bytes=Buffer.from(await dl.arrayBuffer());
-            if(bytes.length){
+          const internal=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId)+'/internal-path');
+          const internalData=await internal.json().catch(()=>null);
+          if(internal.ok&&internalData?.path){
+            const sourcePath=String(internalData.path);
+            const stat=await fs.stat(sourcePath);
+            if(stat.size){
               const file=path.join(dir,'reference.mp4');
-              await fs.writeFile(file,bytes);
-              const stat=await fs.stat(file);
-              if(stat.size)return{file,bytes:stat.size,ytDlpOutput:'Internal exact URL->MP4 pipeline',strategy:'exact-url-to-mp4'};
+              await fs.copyFile(sourcePath,file);
+              const copied=await fs.stat(file);
+              if(copied.size)return{file,bytes:copied.size,ytDlpOutput:'Internal exact URL->MP4 pipeline',strategy:'exact-url-to-mp4'};
             }
           }
           break;
