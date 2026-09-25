@@ -98,6 +98,7 @@ const referenceValue=$('#reference').value.trim();
 const referenceFile=$('#referenceVideo')?.files?.[0]||null;
 let referenceAnalysis=null;
 let visualReferenceAnalysis=null;
+let referenceStyle=null;
 if(referenceFile){
   state.textContent='Analizando fotogramas reales';
   preview.innerHTML='<div class="empty"><div class="empty-icon">◉</div><b>La IA está analizando el vídeo de referencia…</b><p>Extrayendo fotogramas para detectar composición, ritmo y estilo visual.</p></div>';
@@ -107,9 +108,11 @@ if(referenceValue){
   state.textContent='Analizando referencia';
   preview.innerHTML='<div class="empty"><div class="empty-icon">▶</div><b>Analizando el vídeo de referencia…</b><p>AutoTube extraerá temática y características de formato para crear una propuesta original.</p></div>';
   referenceAnalysis=await analyzeReferenceForCreation(referenceValue);
+  referenceStyle=referenceAnalysis?.referenceStyle||null;
+  if(!visualReferenceAnalysis) visualReferenceAnalysis=referenceStyle?.visualAnalysis||null;
 }
-const d=await apiJson('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis})},'la generación de la estructura');
-currentVideoPlan={...d,topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis};
+const d=await apiJson('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis,referenceStyle})},'la generación de la estructura');
+currentVideoPlan={...d,topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis,referenceStyle};
 preview.innerHTML='<div style="text-align:left"><span class="pill">'+(d.demo?'DEMO':'IA GENERATIVA')+'</span><h3 style="font-size:21px;margin:14px 0 7px">'+escapeHtml(d.title||'Nuevo vídeo')+'</h3><p class="muted">'+escapeHtml(d.hook||d.note||'Estructura preparada.')+'</p><ol style="color:#cbd0db;line-height:1.8">'+(d.outline||[]).map(x=>'<li>'+escapeHtml(x)+'</li>').join('')+'</ol><button class="primary" id="continueProductionBtn">Continuar a producción →</button></div>';
 state.textContent='Listo';$('#continueProductionBtn').onclick=()=>openProduction(d);}catch(e){state.textContent='Error';preview.innerHTML='<div class="empty"><div class="empty-icon">!</div><b>No se pudo generar</b><p>'+escapeHtml(e.message)+'</p></div>'}finally{btn.disabled=false;btn.textContent='Generar estructura con IA'}};
 function openProduction(plan){currentVideoPlan={...currentVideoPlan,...plan};$('#productionTitle').textContent=plan.title||'Nuevo vídeo';$('#productionMeta').textContent=(plan.outline?.length||0)+' bloques de contenido · '+(plan.duration||$('#duration').value)+' min · '+(plan.language||$('#language').value);$('#productionState').textContent='Listo para producir';$('#scenesList').innerHTML='<div class="card empty"><div class="empty-icon">🎬</div><b>Plan preparado</b><p>Pulsa “Generar escenas con IA” para crear el montaje escena por escena.</p></div>';go('production')}
