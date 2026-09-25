@@ -3,7 +3,7 @@ let currentVideoPlan = null;
 const views = [...document.querySelectorAll('.view')];
 function go(name){views.forEach(v=>v.classList.toggle('active-view',v.id===name));document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===name));const titles={dashboard:'Tu contenido, automatizado.',create:'Crear un vídeo con IA.',production:'Producción del vídeo',projects:'Tus proyectos.',automation:'Automatiza tu canal.',connections:'Conexiones & API'};$('#pageTitle').textContent=titles[name]||'AutoTube';}
 document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>go(b.dataset.view));document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
-async function health(){try{const r=await fetch('/api/health');const d=await r.json();$('#serverStatus').textContent='Servidor conectado';$('#openaiBadge').textContent=d.configured.openai?'Conectado':'Revisar'}catch{$('#serverStatus').textContent='Servidor no disponible'}}health();
+async function health(){try{const r=await fetch('/api/health');const d=await r.json();$('#serverStatus').textContent='Servidor conectado';$('#openaiBadge').textContent=d.configured.gemini?'Conectado':'Revisar'}catch{$('#serverStatus').textContent='Servidor no disponible'}}health();
 function connectYoutube(){
   // Navegación directa: Google OAuth se abre en la misma pestaña y Safari no puede bloquearla.
   window.location.href='/api/youtube/auth';
@@ -164,7 +164,7 @@ async function renderFinalVideo(){
   if(!scenes.length||!mediaResults.length)return alert('Primero genera las escenas y busca los visuales.');
   const btn=$('#renderVideoBtn'),state=$('#renderState');btn.disabled=true;btn.textContent='Renderizando…';state.textContent='Preparando clips…';
   try{
-    const form=new FormData();form.append('scenes',JSON.stringify(scenes));form.append('mediaResults',JSON.stringify(mediaResults));form.append('language',currentVideoPlan?.language||'es');for(const url of (currentVideoPlan?.narrationAudio||[])){const rr=await fetch(url);if(!rr.ok)throw new Error('No se pudo preparar una narración para el montaje.');form.append('narration',await rr.blob(),'narration.mp3')}if(currentVideoPlan?.musicUrl){const rr=await fetch(currentVideoPlan.musicUrl);if(!rr.ok)throw new Error('No se pudo preparar la música para el montaje.');form.append('music',await rr.blob(),'music.wav')}const r=await fetch('/api/render',{method:'POST',body:form});
+    const form=new FormData();form.append('scenes',JSON.stringify(scenes));form.append('mediaResults',JSON.stringify(mediaResults));form.append('language',currentVideoPlan?.language||'es');for(const url of (currentVideoPlan?.narrationAudio||[]).filter(Boolean)){const rr=await fetch(url);if(!rr.ok)throw new Error('No se pudo preparar una narración para el montaje.');form.append('narration',await rr.blob(),'narration.wav')}if(currentVideoPlan?.musicUrl){const rr=await fetch(currentVideoPlan.musicUrl);if(!rr.ok)throw new Error('No se pudo preparar la música para el montaje.');form.append('music',await rr.blob(),'music.wav')}const r=await fetch('/api/render',{method:'POST',body:form});
     const d=await r.json().catch(()=>null);
     if(!r.ok)throw new Error(d?.error||'No se pudo iniciar el render.');
     const jobId=d?.jobId;
