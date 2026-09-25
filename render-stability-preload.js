@@ -25,7 +25,7 @@ function youtubeAnalysisFallbackResponse() {
   const analysis = {
     videoProfile: {
       durationSeconds: 0,
-      constantImage: false,
+      constantImage: true,
       estimatedSceneCount: 1,
       sceneChangeRate: "unknown",
       cameraMovement: "minimal",
@@ -92,7 +92,7 @@ function youtubeAnalysisFallbackResponse() {
       }]
     },
     generationDirectives: {
-      useSingleContinuousVisual: false,
+      useSingleContinuousVisual: true,
       preferredSceneCount: 1,
       preserveVisualContinuity: true,
       preserveAudioContinuity: true,
