@@ -21,6 +21,6 @@
     "multer": "^2.0.2",
     "youtube-dl-exec": "^3.1.15",
     "@gradio/client": "^1.17.0",
-    "jsonrepair": "^3.13.1"
+    "jsonrepair": "^3.13.0"
   }
 }
