@@ -127,7 +127,7 @@ state.textContent='Listo';$('#continueProductionBtn').onclick=()=>openProduction
 function openProduction(plan){currentVideoPlan={...currentVideoPlan,...plan};$('#productionTitle').textContent=plan.title||'Nuevo vídeo';const metaDuration=currentVideoPlan?.referenceDurationSeconds?Math.ceil(Number(currentVideoPlan.referenceDurationSeconds)/60):(plan.duration||$('#duration').value);$('#productionMeta').textContent=(plan.outline?.length||0)+' bloques de contenido · '+metaDuration+' min · '+(plan.language||$('#language').value);$('#productionState').textContent='Listo para producir';$('#scenesList').innerHTML='<div class="card empty"><div class="empty-icon">🎬</div><b>Plan preparado</b><p>Pulsa “Generar escenas con IA” para crear el montaje escena por escena.</p></div>';go('production')}
 $('#backToCreate').onclick=()=>go('create');
 $('#generateMusicBtn').onclick=generateMusic;
-$('#findMediaBtn').onclick=loadSceneMedia;
+$('#findMediaBtn').onclick=loadSceneMedia;$('#generateAiVideoBtn').onclick=generateAiSceneClips;
 $('#generateVoiceBtn').onclick=generateVoiceForScenes;
 $('#renderVideoBtn').onclick=renderFinalVideo;
 $('#buildProductionBtn').onclick=async()=>{if(!currentVideoPlan?.topic)return alert('Primero genera la estructura del vídeo.');const btn=$('#buildProductionBtn'),progress=$('#productionProgress'),bar=$('#productionProgressBar'),value=$('#productionProgressValue'),label=$('#productionProgressLabel');btn.disabled=true;btn.textContent='Generando…';progress.classList.remove('hidden');$('#productionState').textContent='Produciendo';bar.style.width='12%';value.textContent='12%';label.textContent='Analizando estructura…';try{await new Promise(r=>setTimeout(r,350));bar.style.width='35%';value.textContent='35%';label.textContent='Diseñando escenas…';const d=await apiJson('/api/ai/production-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(currentVideoPlan)},'la generación de escenas');currentVideoPlan={...currentVideoPlan,...d};bar.style.width='78%';value.textContent='78%';label.textContent='Preparando narración y visuales…';renderScenes(d);await new Promise(r=>setTimeout(r,250));bar.style.width='100%';value.textContent='100%';label.textContent='Plan de producción listo';$('#productionState').textContent='Listo';}catch(e){$('#productionState').textContent='Error';label.textContent='Error';$('#scenesList').innerHTML='<div class="card empty"><div class="empty-icon">!</div><b>No se pudo generar</b><p>'+escapeHtml(e.message)+'</p></div>'}finally{btn.disabled=false;btn.textContent='Regenerar escenas con IA'}};
@@ -174,11 +174,11 @@ async function generateVoiceForScenes(){
 }
 
 async function renderFinalVideo(){
-  const scenes=currentVideoPlan?.scenes||[], mediaResults=currentVideoPlan?.mediaResults||[];
-  if(!scenes.length||!mediaResults.length)return alert('Primero genera las escenas y busca los visuales.');
-  const btn=$('#renderVideoBtn'),state=$('#renderState');btn.disabled=true;btn.textContent='Renderizando…';state.textContent='Preparando clips…';
+  const scenes=currentVideoPlan?.scenes||[], mediaResults=currentVideoPlan?.mediaResults||[], aiClips=currentVideoPlan?.aiClips||[];
+  if(!scenes.length||(!mediaResults.length&&!aiClips.length))return alert('Primero genera los vídeos IA de las escenas o busca visuales de respaldo.');
+  const btn=$('#renderVideoBtn'),state=$('#renderState');btn.disabled=true;btn.textContent='Renderizando…';state.textContent=aiClips.length?'Preparando vídeos IA…':'Preparando clips…';
   try{
-    const form=new FormData();form.append('scenes',JSON.stringify(scenes));form.append('mediaResults',JSON.stringify(mediaResults));form.append('language',currentVideoPlan?.language||'es');for(const url of (currentVideoPlan?.narrationAudio||[]).filter(Boolean)){const rr=await fetch(url);if(!rr.ok)throw new Error('No se pudo preparar una narración para el montaje.');form.append('narration',await rr.blob(),'narration.wav')}if(currentVideoPlan?.musicUrl){const rr=await fetch(currentVideoPlan.musicUrl);if(!rr.ok)throw new Error('No se pudo preparar la música para el montaje.');form.append('music',await rr.blob(),'music.wav')}const r=await fetch('/api/render',{method:'POST',body:form});
+    const form=new FormData();form.append('scenes',JSON.stringify(scenes));form.append('mediaResults',JSON.stringify(mediaResults));for(const clip of aiClips){form.append('aiClips',clip,clip.name||'ai-scene.mp4')}form.append('language',currentVideoPlan?.language||'es');for(const url of (currentVideoPlan?.narrationAudio||[]).filter(Boolean)){const rr=await fetch(url);if(!rr.ok)throw new Error('No se pudo preparar una narración para el montaje.');form.append('narration',await rr.blob(),'narration.wav')}if(currentVideoPlan?.musicUrl){const rr=await fetch(currentVideoPlan.musicUrl);if(!rr.ok)throw new Error('No se pudo preparar la música para el montaje.');form.append('music',await rr.blob(),'music.wav')}const r=await fetch('/api/render',{method:'POST',body:form});
     const d=await r.json().catch(()=>null);
     if(!r.ok)throw new Error(d?.error||'No se pudo iniciar el render.');
     const jobId=d?.jobId;
@@ -206,6 +206,42 @@ async function renderFinalVideo(){
   finally{btn.disabled=false;btn.textContent='🎬 Renderizar MP4'}
 }
 
+async function generateAiSceneClips(){
+  const scenes=currentVideoPlan?.scenes||[];
+  if(!scenes.length)return alert('Primero genera las escenas.');
+  const btn=$('#generateAiVideoBtn'),state=$('#mediaState');
+  btn.disabled=true;btn.textContent='Generando vídeos IA…';state.textContent='Conectando con Hugging Face ZeroGPU';
+  try{
+    const mod=await import('https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js');
+    const Client=mod.Client;
+    const client=await Client.connect('Lightricks/ltx-video-distilled');
+    const clips=[];
+    for(let i=0;i<scenes.length;i++){
+      const scene=scenes[i];
+      state.textContent='Generando vídeo IA '+(i+1)+' de '+scenes.length+'…';
+      const prompt=[scene.visualPrompt||scene.title||'Cinematic scene', 'Original AI video, realistic high-quality cinematography, 16:9 landscape, natural motion, coherent camera movement, detailed textures, no text, no logos, no watermark.'].join('. ');
+      const r=await client.predict('text_to_video',[
+        prompt,
+        'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos, watermark',
+        null,null,704,1216,'text-to-video',Math.min(8.5,Math.max(3.2,Number(scene.duration)||8)),97,Math.floor(Math.random()*4294967295),true,3,false
+      ]);
+      const o=r?.data?.[0];
+      const u=typeof o==='string'?o:(o?.url||o?.path||o?.video?.url||'');
+      if(!u)throw new Error('LTX no devolvió el vídeo de la escena '+(i+1)+'.');
+      const rr=await fetch(u);
+      if(!rr.ok)throw new Error('No se pudo descargar el vídeo IA de la escena '+(i+1)+'.');
+      clips.push(new File([await rr.blob()],'ai-scene-'+(i+1)+'.mp4',{type:'video/mp4'}));
+    }
+    currentVideoPlan.aiClips=clips;
+    state.textContent='✓ '+clips.length+' vídeos IA listos para el montaje';
+    renderAiClipResults(clips);
+  }catch(e){state.textContent='Error';alert(e?.message||String(e))}
+  finally{btn.disabled=false;btn.textContent='🎥 Generar vídeos IA de las escenas'}
+}
+function renderAiClipResults(clips){
+  const box=$('#mediaResults');if(!box)return;
+  box.innerHTML='<div class="card"><div class="section-head"><h3>Vídeos IA generados</h3><span>Fuente: LTX Video · ZeroGPU</span></div>'+clips.map((f,i)=>'<div style="display:flex;gap:12px;align-items:center;padding:8px 0;border-top:1px solid #252a33"><b>Escena '+(i+1)+'</b><span class="muted">'+Math.round(f.size/1024)+' KB · 1216×704</span></div>').join('')+'</div>';
+}
 async function loadSceneMedia(){
   const scenes=currentVideoPlan?.scenes||[];
   if(!scenes.length)return alert('Primero genera las escenas.');
