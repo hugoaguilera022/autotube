@@ -1103,10 +1103,17 @@ async function executeFullPipelineTest(reference){
   const checks={};
   const run=async(name,fn)=>{
     const t=Date.now();
-    try{const value=await fn();checks[name]={ok:true,ms:Date.now()-t,...(value&&typeof value==='object'?value:{})};}
-    catch(err){checks[name]={ok:false,ms:Date.now()-t,error:err.message||String(err)};throw err;}
+    try{
+      const value=await fn();
+      checks[name]={ok:true,ms:Date.now()-t,...(value&&typeof value==='object'?value:{})};
+      return value;
+    }catch(err){
+      checks[name]={ok:false,ms:Date.now()-t,error:err.message||String(err)};
+      throw err;
+    }
   };
   try{
+    // Keep only the small fields needed by later stages. The full Gemini analysis can be large.
     let video=null,style=null,outline=null,plan=null,narration=null,music=null,clip=null,render=null,validation=null;
     await run('youtube-analysis',async()=>{
       video=await getReferenceVideo(reference);
@@ -1114,27 +1121,57 @@ async function executeFullPipelineTest(reference){
       if(!video?.title||!style?.visualAnalysis)throw new Error('No se obtuvo un perfil audiovisual completo de YouTube.');
       return{title:video.title,hasFullVideoAnalysis:Boolean(style.hasFullVideoAnalysis),hasAudioProfile:Boolean(style.hasAudioAnalysis),estimatedSceneCount:Number(style.estimatedSceneCount||0)};
     });
+
+    const referenceTitle=String(video.title||'Contenido original').slice(0,300);
+    const referenceStyle=style;
+    const visualReferenceAnalysis=style.visualAnalysis;
+    const audioProfile=style.visualAnalysis?.audioProfile&&typeof style.visualAnalysis.audioProfile==='object'
+      ? {...style.visualAnalysis.audioProfile}
+      : {};
+
     await run('outline',async()=>{
-      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-        topic:video.title,reference,referenceTopic:video.title,referenceData:video,visualReferenceAnalysis:style.visualAnalysis,referenceStyle:style,language:'es',duration:'1'
-      })});
+      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          topic:referenceTitle,reference,referenceTopic:referenceTitle,
+          referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
+          visualReferenceAnalysis,referenceStyle,language:'es',duration:'1'
+        })
+      });
       const d=await r.json();
       if(!r.ok)throw new Error(d?.error||'Outline '+r.status);
       outline=d;
       return{title:d.title||'',blocks:Array.isArray(d.outline)?d.outline.length:0};
     });
+
     await run('production-plan',async()=>{
-      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-        topic:video.title,reference,referenceTopic:video.title,referenceData:video,visualReferenceAnalysis:style.visualAnalysis,referenceStyle:style,language:'es',duration:'1',title:outline?.title||video.title,outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
-      })});
+      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          topic:referenceTitle,reference,referenceTopic:referenceTitle,
+          referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
+          visualReferenceAnalysis,referenceStyle,language:'es',duration:'1',
+          title:outline?.title||referenceTitle,outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
+        })
+      });
       const d=await r.json();
       if(!r.ok||!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error(d?.error||'Production plan inválido.');
       plan=d;
       return{scenes:d.scenes.length,title:d.title||''};
     });
+
+    // Release the large reference-analysis objects before media/audio/render work.
+    video=null;
+    style=null;
+    outline=null;
+
     const testScene={...(plan.scenes[0]||{}),number:1,duration:3,mediaType:'video',constantImage:false};
+    plan=null;
+
     await run('visual-source',async()=>{
-      const query=String(testScene.searchQuery||testScene.title||video.title||'').trim().slice(0,120);
+      const query=String(testScene.searchQuery||testScene.title||referenceTitle||'').trim().slice(0,120);
       const p=await searchPexelsPhotos(query);
       const q=p.length?p:await searchPixabayImages(query);
       const media=q.find(x=>x?.downloadUrl);
@@ -1143,27 +1180,49 @@ async function executeFullPipelineTest(reference){
       await downloadToFile(media.downloadUrl,imagePath);
       const sourcePath=path.join(dir,'reference-derived-source.mp4');
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',imagePath,'-t','3','-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30','-an','-c:v','libx264','-preset','ultrafast','-crf','28','-threads','1','-pix_fmt','yuv420p',sourcePath]);
+      await fs.rm(imagePath,{force:true}).catch(()=>{});
       const check=await validateGeneratedVideoClip(sourcePath);
       clip={outputPath:sourcePath,bytes:(await fs.stat(sourcePath)).size,provider:media.provider,status:'complete'};
       return{provider:media.provider,bytes:clip.bytes,durationSeconds:check.durationSeconds,width:check.width,height:check.height,query,sourceType:'image-to-video'};
     });
+
     await run('tts',async()=>{
-      const ap=style.visualAnalysis?.audioProfile||{};
-      narration=await generateGeminiTts(testScene.narration||('Contenido original sobre '+video.title+'.'),'es',style.visualAnalysis?.audioProfile?.voiceStyle||'Natural y cercana',ap);
+      narration=await generateGeminiTts(
+        testScene.narration||('Contenido original sobre '+referenceTitle+'.'),
+        'es',
+        audioProfile.voiceStyle||'Natural y cercana',
+        audioProfile
+      );
       return{bytes:narration.length};
     });
+
     await run('music',async()=>{
-      music=await generateFallbackMusic('Original instrumental background. '+JSON.stringify(style.visualAnalysis?.audioProfile||{}),10,dir,style.visualAnalysis?.audioProfile||{});
+      music=await generateFallbackMusic(
+        'Original instrumental background. '+JSON.stringify(audioProfile),
+        10,dir,audioProfile
+      );
       return{provider:music.provider,bytes:music.buffer.length};
     });
+
     await run('render',async()=>{
       const output=path.join(dir,'full-test.mp4');
-      render=await renderAutotubeVideo({scenes:[testScene],aiClips:[{path:clip.outputPath}],narrationAudio:[narration],musicBuffer:music.buffer,onProgress:()=>{},finalOutputPath:output});
+      render=await renderAutotubeVideo({
+        scenes:[testScene],
+        aiClips:[{path:clip.outputPath}],
+        narrationAudio:[narration],
+        musicBuffer:music.buffer,
+        onProgress:()=>{},
+        finalOutputPath:output
+      });
       validation=await validateRenderedMp4(output,3);
       return{bytes:render.size,...validation};
     });
-    return{ok:true,elapsedMs:Date.now()-started,reference:{url:reference,title:video.title},checks};
-  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+
+    return{ok:true,elapsedMs:Date.now()-started,reference:{url:reference,title:referenceTitle},checks};
+  }finally{
+    video=null;style=null;outline=null;plan=null;narration=null;music=null;clip=null;render=null;validation=null;
+    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
 }
 app.get('/api/full-pipeline-test',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
