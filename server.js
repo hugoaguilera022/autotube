@@ -409,17 +409,17 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana',au
     profile.dynamics&&('Dinámica vocal: '+String(profile.dynamics)),
     'Mantén pronunciación clara, ritmo estable y continuidad entre escenas.'
   ].filter(Boolean).join(' ');
-  const models=['gemini-3.8-flash-tts','gemini-3.8-flash-lite-tts','gemini-2.5-flash-preview-tts'];
+  const models=['gemini-3.8-flash-tts','gemini-3.8-flash-lite-tts'];
   let lastError='';
   for(const model of models){
-    // Gemini 3.8 TTS accepts complete WAV on unary requests; the legacy 2.5 TTS model
-    // requires headerless L16 PCM. Keep the model-specific format so fallback works.
-    const isLegacy25=model==='gemini-2.5-flash-preview-tts';
+    // Gemini 3.8 TTS unary requests return complete WAV audio.
+    // Do not fall back to Gemini 2.5 Preview TTS: its legacy audio-format
+    // negotiation is rejected by the currently deployed API.
     const body={
       contents:[{role:'user',parts:[{text:styleGuide+'\n\n'+safeText}]}],
       generationConfig:{
         responseModalities:['AUDIO'],
-        responseFormat:{audio:{mimeType:isLegacy25?'AUDIO_L16':'AUDIO_WAV',sampleRate:24000}},
+        responseFormat:{audio:{mimeType:'AUDIO_WAV',sampleRate:24000}},
         speechConfig:{voiceConfig:{voice:'Kore'},languageCode:lang}
       }
     };
