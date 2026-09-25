@@ -701,10 +701,10 @@ async function generateMagicHourVideoClip(prompt,dir,options={}){
     downloadDirectory:dir
   });
   const candidates=Array.isArray(result?.downloadedPaths)?result.downloadedPaths:[];
-  let output=candidates.find(x=>/\\.(mp4|webm|mov)$/i.test(String(x||'')));
+  let output=candidates.find(x=>{const v=String(x||'').toLowerCase();return v.endsWith('.mp4')||v.endsWith('.webm')||v.endsWith('.mov');});
   if(!output&&result?.downloads){
     const urls=Array.isArray(result.downloads)?result.downloads:Object.values(result.downloads||{});
-    const url=urls.find(x=>/https?:\\/\\//i.test(String(x||'')));
+    const url=urls.find(x=>/^https?:/.test(String(x||'')));
     if(url){
       const response=await fetch(String(url));
       if(!response.ok)throw new Error('Magic Hour no pudo descargar el vídeo generado ('+response.status+').');
