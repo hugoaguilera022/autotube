@@ -687,7 +687,6 @@ async function generateVeoVideoClip(prompt,dir,options={}){
     parameters:{
       aspectRatio:String(options.aspectRatio||'16:9'),
       resolution:String(options.resolution||'720p'),
-      numberOfVideos:1
     }
   };
   const start=await fetch(base+'/models/'+encodeURIComponent(model)+':predictLongRunning',{
