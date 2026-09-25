@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node -r ./youtube-routes-preload.js -r ./render-stability-preload.js server.js",
-    "dev": "node -r ./youtube-routes-preload.js -r ./render-stability-preload.js --watch server.js"
+    "dev": "node -r ./youtube-routes-preload.js -r ./render-stability-preload.js --watch server.js",
+    "postinstall": "node setup-pot-provider.js"
   },
   "engines": {
     "node": "22.x"
