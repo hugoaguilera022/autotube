@@ -13,4 +13,7 @@ run('git',['clone','--depth','1','https://github.com/Brainicism/bgutil-ytdlp-pot
 run('npm',['ci'],path.join(providerRoot,'server'));
 run('npx',['tsc'],path.join(providerRoot,'server'));
 fs.cpSync(path.join(providerRoot,'plugin'),pluginRoot,{recursive:true});
+const binPlugins=path.join(root,'node_modules','youtube-dl-exec','bin','yt-dlp-plugins');
+fs.mkdirSync(binPlugins,{recursive:true});
+run('zip',['-qr',path.join(binPlugins,'bgutil-ytdlp-pot-provider.zip'),'.'],pluginRoot);
 console.log('AutoTube PO token provider installed');
