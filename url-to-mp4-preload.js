@@ -174,6 +174,12 @@ function install(){
           })();
         });
       }
+      app.get('/api/url-to-mp4/:jobId/internal-path',async(req,res)=>{
+        const j=jobs.get(String(req.params.jobId||''));
+        if(!j||j.status!=='done'||!j.outputPath)return res.status(404).json({ok:false,error:'MP4 interno no disponible.'});
+        try{await fs.stat(j.outputPath);res.json({ok:true,path:j.outputPath,size:j.size,mode:j.mode,final:j.final});}
+        catch{res.status(404).json({ok:false,error:'MP4 interno ya no está disponible.'})}
+      });
       app.get('/api/url-to-mp4/:jobId',async(req,res)=>{
         const j=jobs.get(String(req.params.jobId||''));
         if(!j)return res.status(404).json({error:'Trabajo no encontrado. Render puede haberse reiniciado.'});
