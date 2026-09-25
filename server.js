@@ -801,9 +801,11 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       if(isImage)args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
       args.push('-t',String(duration),
-        '-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p,fps=30',
+        // Render at 720p on Render Free to stay safely below the 512 MB
+        // instance memory ceiling. The source is still cropped to 16:9.
+        '-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p,fps=30',
         '-map','0:v:0','-map','1:a:0',
-        '-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-threads','1',
+        '-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-threads','1',
         '-c:a','aac','-b:a','192k','-ar','44100','-ac','2','-af','apad',
         '-avoid_negative_ts','make_zero',output);
       await runFfmpeg(args);
