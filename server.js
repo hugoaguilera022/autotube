@@ -740,7 +740,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       args.push('-t',String(duration),
         '-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p,fps=30',
         '-map','0:v:0','-map','1:a:0',
-        '-c:v','libx264','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1',
+        '-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-threads','1',
         '-c:a','aac','-b:a','192k','-ar','44100','-ac','2','-af','apad',
         '-avoid_negative_ts','make_zero',output);
       await runFfmpeg(args);
@@ -756,7 +756,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',videoOnly]);
     }catch(copyErr){
       console.warn('Concat copy falló; usando recodificación final:',copyErr.message);
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c:v','libx264','-c:a','aac','-ar','44100','-ac','2','-b:a','192k','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',videoOnly]);
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c:v','libx264','-c:a','aac','-ar','44100','-ac','2','-b:a','192k','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',videoOnly]);
     }
     let out=videoOnly;
     if(musicBuffer){
@@ -788,7 +788,7 @@ app.get('/api/render/:jobId/download',async(req,res)=>{const job=renderJobs.get(
 
 async function validateRenderedMp4(file,expectedDuration=0){
   const probe=await new Promise((resolve,reject)=>{
-    const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-map','0:a:0','-f','null','-'],{stdio:['ignore','pipe','pipe']});
+    const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-map','0:a:0','-c','copy','-f','null','-'],{stdio:['ignore','pipe','pipe']});
     let stderr='';
     p.stderr.on('data',x=>{stderr+=x.toString()});
     p.on('error',reject);
