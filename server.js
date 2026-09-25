@@ -507,7 +507,29 @@ async function searchPexels(query){if(!process.env.PEXELS_API_KEY)return[];const
 async function searchPexelsPhotos(query){if(!process.env.PEXELS_API_KEY)return[];const r=await fetch('https://api.pexels.com/v1/search?'+new URLSearchParams({query,orientation:'landscape',size:'large',locale:'es-ES',per_page:'6'}),{headers:{Authorization:process.env.PEXELS_API_KEY}});if(!r.ok)throw new Error('Pexels Photos API '+r.status);const d=await r.json();return(d.photos||[]).map(v=>({provider:'Pexels',id:v.id,title:'Imagen Pexels',duration:0,thumbnail:v.src?.medium||v.src?.small||'',url:v.url,downloadUrl:v.src?.large2x||v.src?.large||v.src?.original||'',mediaType:'image'})).filter(x=>x.downloadUrl)}
 async function searchPixabay(query){if(!process.env.PIXABAY_API_KEY)return[];const r=await fetch('https://pixabay.com/api/videos/?'+new URLSearchParams({key:process.env.PIXABAY_API_KEY,q:query,lang:'es',video_type:'film',safesearch:'true',order:'popular',per_page:'6'}));if(!r.ok)throw new Error('Pixabay API '+r.status);const d=await r.json();return(d.hits||[]).map(v=>({provider:'Pixabay',id:v.id,title:'Vídeo Pixabay',duration:v.duration,thumbnail:v.videos?.medium?.thumbnail||v.videos?.small?.thumbnail||'',url:v.pageURL,downloadUrl:v.videos?.large?.url||v.videos?.medium?.url||v.videos?.small?.url||''})).filter(x=>x.downloadUrl)}
 async function searchPixabayImages(query){if(!process.env.PIXABAY_API_KEY)return[];const r=await fetch('https://pixabay.com/api/?'+new URLSearchParams({key:process.env.PIXABAY_API_KEY,q:query,lang:'es',image_type:'photo',orientation:'horizontal',safesearch:'true',order:'popular',per_page:'6'}));if(!r.ok)throw new Error('Pixabay Images API '+r.status);const d=await r.json();return(d.hits||[]).map(v=>({provider:'Pixabay',id:v.id,title:'Imagen Pixabay',duration:0,thumbnail:v.webformatURL||v.previewURL||'',url:v.pageURL,downloadUrl:v.largeImageURL||v.webformatURL||'',mediaType:'image'})).filter(x=>x.downloadUrl)}
-app.post('/api/media/search',async(req,res)=>{try{const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];const referenceTopic=String(req.body?.referenceTopic||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim();if(!scenes.length)return res.status(400).json({error:'No hay escenas para buscar.'});const results=[];for(const scene of scenes.slice(0,12)){const sceneQuery=String(scene.searchQuery||scene.visualPrompt||scene.title||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim();const anchoredQuery=[sceneQuery,referenceTopic].filter(Boolean).join(' ').slice(0,120);const query=anchoredQuery||sceneQuery;const wantImage=String(scene.mediaType||'').toLowerCase()==='image'||Boolean(scene.constantImage);const[pexels,pixabay]=await Promise.allSettled(wantImage?[searchPexelsPhotos(query),searchPixabayImages(query)]:[searchPexels(query),searchPixabay(query)]);results.push({number:scene.number,title:scene.title,query,mediaType:wantImage?'image':'video',media:[...(pexels.status==='fulfilled'?pexels.value:[]),...(pixabay.status==='fulfilled'?pixabay.value:[])]})}res.json({ok:true,results,credits:{pexels:'Visuales proporcionados por Pexels',pixabay:'Visuales proporcionados por Pixabay'}})}catch(err){res.status(502).json({error:err.message||'No se pudieron buscar visuales.'})}});
+async function fetchImageForGemini(url){
+  const value=String(url||'').trim();
+  if(!value)return null;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),15000);
+  try{
+    const r=await fetch(value,{signal:controller.signal});
+    if(!r.ok||!r.body)return null;
+    const contentType=String(r.headers.get('content-type')||'image/jpeg').split(';')[0];
+    if(!contentType.startsWith('image/'))return null;
+    const data=Buffer.from(await r.arrayBuffer());
+    if(!data.length||data.length>5*1024*1024)return null;
+    return{mimeType:contentType,data:data.toString('base64')};
+  }catch{return null}finally{clearTimeout(timer)}
+}
+async function evaluateSelectedVisual(referenceVideo,visualProfile,scene,mediaItem){
+  const referenceThumbs=Array.isArray(referenceVideo?.thumbnails)?referenceVideo.thumbnails:[];
+  const refImage=await fetchImageForGemini(referenceThumbs[0]||referenceVideo?.thumbnail||'');
+  const mediaImage=await fetchImageForGemini(mediaItem?.thumbnail||'');
+  if(!refImage||!mediaImage)return{ok:false,score:0,reason:'No se pudieron descargar las miniaturas de referencia y del visual seleccionado.'};
+  const system='Evalúa únicamente la correspondencia visual. No copies ni reproduzcas contenido protegido. Responde únicamente JSON válido con las claves score, subjectMatch, styleMatch, compositionMatch, reason. score es 0-100. subjectMatch, styleMatch y compositionMatch son booleanos.';
+  const user='Compara la miniatura del vídeo de referencia de YouTube con el visual real seleccionado para esta escena. La escena debe pertenecer al mismo tema y tipo de contenido que la referencia, y conservar características generales compatibles de composición, iluminación, paleta, escala, continuidad y lenguaje audiovisual, pero ser material original.\n\nTema de referencia: '+String(referenceVideo?.title||'')+'\nEscena: '+String(scene?.title||'')+'\nConsulta visual: '+String(scene?.searchQuery||scene?.visualPrompt||'')+'\nPerfil visual detectado: '+JSON.stringify({visualStyle:visualProfile?.videoProfile?.visualStyle,palette:visualProfile?.videoProfile?.palette,lighting:visualProfile?.videoProfile?.lighting,composition:visualProfile?.videoProfile?.composition,cameraMovement:visualProfile?.videoProfile?.cameraMovement,continuity:visualProfile?.videoProfile?.continuity}).slice(0,5000);\n  const text=await callGemini({system,user,images:[refImage,mediaImage],temperature:0.1,maxOutputTokens:220,json:true});
+  const parsed=parseJsonResponse(text);\n  const score=Number(parsed?.score)||0;\n  return{ok:score>=60&&parsed?.subjectMatch!==false,score,subjectMatch:Boolean(parsed?.subjectMatch),styleMatch:Boolean(parsed?.styleMatch),compositionMatch:Boolean(parsed?.compositionMatch),reason:String(parsed?.reason||'')};\n}\n\napp.post('/api/media/search',async(req,res)=>{try{const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];const referenceTopic=String(req.body?.referenceTopic||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim();if(!scenes.length)return res.status(400).json({error:'No hay escenas para buscar.'});const results=[];for(const scene of scenes.slice(0,12)){const sceneQuery=String(scene.searchQuery||scene.visualPrompt||scene.title||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim();const anchoredQuery=[sceneQuery,referenceTopic].filter(Boolean).join(' ').slice(0,120);const query=anchoredQuery||sceneQuery;const wantImage=String(scene.mediaType||'').toLowerCase()==='image'||Boolean(scene.constantImage);const[pexels,pixabay]=await Promise.allSettled(wantImage?[searchPexelsPhotos(query),searchPixabayImages(query)]:[searchPexels(query),searchPixabay(query)]);results.push({number:scene.number,title:scene.title,query,mediaType:wantImage?'image':'video',media:[...(pexels.status==='fulfilled'?pexels.value:[]),...(pixabay.status==='fulfilled'?pixabay.value:[])]})}res.json({ok:true,results,credits:{pexels:'Visuales proporcionados por Pexels',pixabay:'Visuales proporcionados por Pixabay'}})}catch(err){res.status(502).json({error:err.message||'No se pudieron buscar visuales.'})}});
 
 async function downloadToFile(source,file){
   const value=String(source||'');
@@ -683,7 +705,18 @@ async function executeReferenceMatchTest(){
   const media=await mediaRes.json();
   if(!mediaRes.ok)throw new Error(media?.error||'No se pudieron buscar visuales.');
   const visualRows=Array.isArray(media.results)?media.results:[];
-  const visualMatches=visualRows.map(x=>({number:x.number,query:x.query,mediaCount:Array.isArray(x.media)?x.media.length:0,mediaType:x.mediaType}));
+  const visualMatches=visualRows.map(x=>({number:x.number,query:x.query,mediaCount:Array.isArray(x.media)?x.media.length:0,mediaType:x.mediaType,selectedMedia:(Array.isArray(x.media)?x.media.slice(0,1):[]).map(m=>({provider:m.provider,id:m.id,title:m.title,thumbnail:m.thumbnail,url:m.url,mediaType:m.mediaType||x.mediaType}))}));
+  const actualVisualChecks=[];
+  for(const row of visualRows.slice(0,4)){
+    const scene=plan.scenes.find(s=>String(s.number)===String(row.number))||plan.scenes[visualRows.indexOf(row)];
+    const selected=Array.isArray(row.media)?row.media.find(m=>m?.thumbnail)||row.media[0]:null;
+    if(!selected){actualVisualChecks.push({number:row.number,provider:'',id:'',score:0,ok:false,reason:'No se encontró un visual seleccionable.'});continue;}
+    try{
+      const evaluated=await evaluateSelectedVisual(video,profile,scene,selected);
+      actualVisualChecks.push({number:row.number,provider:selected.provider||'',id:selected.id||'',title:selected.title||'',score:evaluated.score,subjectMatch:evaluated.subjectMatch,styleMatch:evaluated.styleMatch,compositionMatch:evaluated.compositionMatch,ok:evaluated.ok,reason:evaluated.reason});
+    }catch(err){actualVisualChecks.push({number:row.number,provider:selected.provider||'',id:selected.id||'',title:selected.title||'',score:0,ok:false,reason:err.message||String(err)});}
+  }
+  const actualVisualPass=actualVisualChecks.length===Math.min(4,visualRows.length)&&actualVisualChecks.length>0&&actualVisualChecks.every(x=>x.ok)&&actualVisualChecks.reduce((n,x)=>n+x.score,0)/actualVisualChecks.length>=65;
   const audioProfile=profile.audioProfile||{};
   const promptMood=String(plan.musicMood||audioProfile.musicMood||audioProfile.mood||'').toLowerCase();
   const audioText=JSON.stringify(audioProfile).toLowerCase();
@@ -704,11 +737,11 @@ async function executeReferenceMatchTest(){
   const visualPass=visualMatches.length>0&&visualMatches.every(x=>x.mediaCount>0)&&subjectCoverage.every(x=>x.hasSpecificSubject);
   const musicPass=musicBytes>0&&audioMatchSignals.length>=3;
   return{
-    ok:visualPass&&musicPass,
+    ok:visualPass&&actualVisualPass&&musicPass,
     reference:{title:video.title,duration:video.duration||'',estimatedScenes:style.estimatedSceneCount,preferredScenes:style.preferredSceneCount},
-    visualTest:{scenesTested:visualMatches.length,results:visualMatches,themeTermsFound:matchedTerms,subjectCoverage,pass:visualPass},
+    visualTest:{scenesTested:visualMatches.length,results:visualMatches,themeTermsFound:matchedTerms,subjectCoverage,actualVisualChecks,actualVisualAverageScore:actualVisualChecks.length?Math.round(actualVisualChecks.reduce((n,x)=>n+Number(x.score||0),0)/actualVisualChecks.length):0,pass:visualPass&&actualVisualPass},
     musicTest:{bytes:musicBytes,provider:musicProvider,audioProfileSignals:audioMatchSignals,mood:promptMood,energy:audioProfile.energy||'',dynamics:audioProfile.dynamics||'',instrumentation:audioProfile.instrumentation||'',bpmEstimate:audioProfile.bpmEstimate||'',pass:musicPass},
-    note:'Prueba de correspondencia: genera solo 8 s de música procedural y busca visuales; no genera ni renderiza un MP4.'
+    note:'Prueba de correspondencia: valida las miniaturas reales de los visuales seleccionados contra la miniatura de referencia y el perfil audiovisual, además de generar solo 8 s de música procedural. No genera ni renderiza un MP4.'
   };
 }
 app.get('/api/reference-match-test',async(_req,res)=>{
