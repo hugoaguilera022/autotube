@@ -393,6 +393,26 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
 }});
 
 
+async function generateElevenLabsTts(text,language='es',style='Natural y cercana',audioProfile={}){
+  const key=String(process.env.ELEVENLABS_API_KEY||'').trim();
+  if(!key)throw new Error('Falta ELEVENLABS_API_KEY.');
+  const voiceId=String(process.env.ELEVENLABS_VOICE_ID||'hpp4J3VqNfWAUOO0d1Us').trim();
+  const safeText=String(text||'').trim();
+  if(!safeText)throw new Error('La narración está vacía.');
+  const r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+encodeURIComponent(voiceId),{method:'POST',headers:{'Content-Type':'application/json','xi-api-key':key,'Accept':'audio/wav'},body:JSON.stringify({text:safeText,model_id:'eleven_multilingual_v2',voice_settings:{stability:0.5,similarity_boost:0.75,speed:1.0}})});
+  const raw=await r.arrayBuffer();
+  if(!r.ok)throw new Error('ElevenLabs TTS '+r.status+': '+Buffer.from(raw).toString('utf8').slice(0,500));
+  const audio=Buffer.from(raw);
+  if(!audio.length)throw new Error('ElevenLabs TTS devolvió audio vacío.');
+  return audio;
+}
+async function generateNarrationTts(text,language='es',style='Natural y cercana',audioProfile={}){
+  try{return await generateGeminiTts(text,language,style,audioProfile)}catch(err){
+    const msg=String(err?.message||err);
+    if(/Gemini TTS 429|quota exceeded|current quota/i.test(msg))return await generateElevenLabsTts(text,language,style,audioProfile);
+    throw err;
+  }
+}
 async function generateGeminiTts(text,language='es',style='Natural y cercana',audioProfile={}){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
@@ -1202,7 +1222,7 @@ async function executeFullPipelineTest(reference){
     });
 
     await run('tts',async()=>{
-      narration=await generateGeminiTts(
+      narration=await generateNarrationTts(
         testScene.narration||('Contenido original sobre '+referenceTitle+'.'),
         'es',
         audioProfile.voiceStyle||'Natural y cercana',
