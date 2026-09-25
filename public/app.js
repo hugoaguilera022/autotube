@@ -224,7 +224,41 @@ async function generateAiSceneClips(){
     for(let i=0;i<clipCount;i++){
       const scene=scenes[Math.min(scenes.length-1,Math.round(i*(scenes.length-1)/Math.max(1,clipCount-1)))];
       state.textContent='Generando vídeo IA '+(i+1)+' de '+clipCount+' (cuota optimizada)…';
-      const prompt=[scene.visualPrompt||scene.title||'Cinematic scene','Original AI video, realistic high-quality cinematography, 16:9 landscape, natural motion, coherent camera movement, detailed textures, no text, no logos, no watermark, normal speed.'].join('. ');
+      const refAnalysis=currentVideoPlan?.referenceStyle?.visualAnalysis||currentVideoPlan?.visualReferenceAnalysis||{};
+      const vp=refAnalysis?.videoProfile||{},ap=refAnalysis?.animationProfile||{},sp=refAnalysis?.structureProfile||{},gd=refAnalysis?.generationDirectives||{};
+      const audiovisualDNA=[
+        vp.visualStyle&&('visual style: '+vp.visualStyle),
+        vp.composition&&('composition/framing: '+vp.composition),
+        vp.palette&&('palette: '+vp.palette),
+        vp.lighting&&('lighting: '+vp.lighting),
+        vp.cameraMovement&&('camera movement: '+vp.cameraMovement),
+        vp.continuity&&('continuity: '+vp.continuity),
+        ap.cameraMotion&&('camera animation: '+ap.cameraMotion),
+        ap.zoomStyle&&('zoom: '+ap.zoomStyle),
+        ap.panStyle&&('pan: '+ap.panStyle),
+        ap.overlays&&('overlays/graphics: '+ap.overlays),
+        ap.effects&&('effects: '+ap.effects),
+        ap.transitionStyle&&('transitions: '+ap.transitionStyle),
+        ap.motionIntensity&&('motion intensity: '+ap.motionIntensity),
+        ap.visualRhythm&&('visual rhythm: '+ap.visualRhythm),
+        sp.pacing&&('editing pacing: '+sp.pacing),
+        sp.visualContinuity&&('visual continuity: '+sp.visualContinuity),
+        gd.preserveVisualContinuity&&'preserve visual continuity between scenes'
+      ].filter(Boolean).join('; ');
+      const previousScene=scenes[i-1];
+      const nextScene=scenes[i+1];
+      const continuity=[
+        previousScene&&('previous scene ended with: '+String(previousScene.visualPrompt||previousScene.title||'').slice(0,300)),
+        nextScene&&('next scene should lead naturally toward: '+String(nextScene.visualPrompt||nextScene.title||'').slice(0,300))
+      ].filter(Boolean).join('. ');
+      const prompt=[
+        scene.visualPrompt||scene.title||'Cinematic scene',
+        scene.animationNotes&&('scene-specific animation and camera direction: '+scene.animationNotes),
+        audiovisualDNA&&('reference audiovisual characteristics to preserve: '+audiovisualDNA),
+        continuity,
+        'Generate ORIGINAL content only. Match the reference audiovisual language, shot scale, framing, camera behavior, motion intensity, lighting, palette, transitions and pacing without reproducing any identifiable shot, frame, character, text, logo, recording or copyrighted expression.',
+        'Realistic high-quality cinematography, 16:9 landscape, coherent natural motion, detailed textures, professional continuous camera movement, normal speed, no text, no logos, no watermark.'
+      ].filter(Boolean).join('. ');
       const r=await client.predict('text_to_video',[
         prompt,
         'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos, watermark, slow motion',
