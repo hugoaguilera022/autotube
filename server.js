@@ -432,7 +432,7 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana',au
       raw=await r.text();d=null;try{d=raw?JSON.parse(raw):null}catch{}
       if(r.status!==429||attempt===1)break;
       const retryMatch=String(d?.error?.message||'').match(/retry in\s+([0-9.]+)s/i);
-      const waitMs=Math.min(15000,Math.max(1000,Math.ceil(Number(retryMatch?.[1]||5)*1000)+250));
+      const waitMs=Math.min(50000,Math.max(1000,Math.ceil(Number(retryMatch?.[1]||5)*1000)+500));
       await new Promise(resolve=>setTimeout(resolve,waitMs));
     }
     if(r.ok){
