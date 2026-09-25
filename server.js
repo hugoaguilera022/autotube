@@ -10,7 +10,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const multer = require('multer');
 const youtubedl = require('youtube-dl-exec');
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 250 * 1024 * 1024 } });
+const upload = multer({ storage: multer.diskStorage({ destination: (_req,_file,cb)=>cb(null,os.tmpdir()), filename: (_req,file,cb)=>cb(null,'autotube-upload-'+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+'-'+String(file.originalname||'upload').replace(/[^a-zA-Z0-9._-]/g,'_')) }), limits: { fileSize: 250 * 1024 * 1024 } });
 const renderJobs = new Map();
 const renderJobDir = path.join(os.tmpdir(), 'autotube-render-jobs');
 fs.mkdir(renderJobDir, { recursive: true }).catch(() => {});
@@ -576,7 +576,7 @@ function runFfmpeg(args){return new Promise((resolve,reject)=>{const p=spawn(ffm
 app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=>{
   try{
     const file=req.file;
-    if(!file||!file.buffer?.length)return res.status(400).json({error:'No se recibió ningún vídeo de referencia.'});
+    if(!file)return res.status(400).json({error:'No se recibió ningún vídeo de referencia.'});
     const allowed=/^video\/(mp4|quicktime|webm|x-msvideo|mpeg|ogg)$/i.test(String(file.mimetype||''))||/\.(mp4|mov|m4v|webm|avi|mkv|mpeg|mpg)$/i.test(String(file.originalname||''));
     if(!allowed)return res.status(400).json({error:'El archivo de referencia no parece ser un vídeo compatible.'});
     const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-'));
@@ -584,7 +584,7 @@ app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=
       const input=path.join(dir,'reference-video');
       const framesDir=path.join(dir,'frames');
       await fs.mkdir(framesDir,{recursive:true});
-      await fs.writeFile(input,file.buffer);
+      await fs.copyFile(file.path,input);
       const stat=await fs.stat(input);
       if(!stat.size)throw new Error('El vídeo de referencia está vacío.');
       try{await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',input,'-map','0:v:0','-an','-sn','-dn','-vf','fps=1/2,scale=768:-2','-frames:v','6','-q:v','3',path.join(framesDir,'frame-%02d.jpg')]);}catch(firstErr){console.warn('Reference frame extraction retry:',firstErr.message);await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',input,'-map','0:v:0','-an','-sn','-dn','-vf','scale=768:-2','-frames:v','1','-q:v','3',path.join(framesDir,'frame-%02d.jpg')]);}      const files=(await fs.readdir(framesDir)).filter(x=>/^frame-\d+\.jpg$/i.test(x)).sort();
@@ -612,7 +612,7 @@ app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=
   }
 });
 
-async function downloadAudioBuffer(buffer,file){await fs.writeFile(file,buffer);const stat=await fs.stat(file);if(!stat.size)throw new Error('El audio generado está vacío.');}
+async function downloadAudioBuffer(source,file){if(typeof source==='string'){await fs.copyFile(source,file)}else{await fs.writeFile(file,source)}const stat=await fs.stat(file);if(!stat.size)throw new Error('El audio generado está vacío.');}
 async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationAudio=[],musicBuffer=null,onProgress=()=>{},finalOutputPath}){
   if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-'));
@@ -623,9 +623,9 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
     const total=usableScenes.length;
     for(let i=0;i<total;i++){
       const{scene,found,aiClip,audio}=usableScenes[i],media=found?.media?.find(m=>m.downloadUrl)||null,input=path.join(dir,'in-'+i+'.mp4'),output=path.join(dir,'scene-'+i+'.mp4'),duration=Math.max(2,Math.min(180,Number(scene.duration)||8));
-      if(aiClip?.buffer){await fs.writeFile(input,aiClip.buffer)}else{await downloadToFile(media.downloadUrl,input)}
+      if(aiClip?.path){await fs.copyFile(aiClip.path,input)}else if(aiClip?.buffer){await fs.writeFile(input,aiClip.buffer)}else{await downloadToFile(media.downloadUrl,input)}
       let audioInput=null;
-      if(audio){audioInput=path.join(dir,'voice-'+i+'.bin');await fs.writeFile(audioInput,Buffer.isBuffer(audio)?audio:await fs.readFile(audio));const stat=await fs.stat(audioInput);if(!stat.size)throw new Error('La narración de la escena '+(i+1)+' está vacía.');}
+      if(audio){audioInput=path.join(dir,'voice-'+i+'.bin');await downloadAudioBuffer(audio,audioInput);}
       const args=['-y'];if(String(media?.mediaType||found.mediaType||scene.mediaType||'video').toLowerCase()==='image')args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
       args.push('-t',String(duration),'-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p,fps=30','-map','0:v:0','-map','1:a:0','-c:a','aac','-b:a','192k','-af','apad');
@@ -647,7 +647,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
     onProgress(100);return{outputPath:out,size:stat.size,duration:usableScenes.reduce((n,x)=>n+(Number(x.scene.duration)||8),0)}
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
 }
-app.post('/api/render',upload.fields([{name:'narration',maxCount:12},{name:'music',maxCount:1},{name:'aiClips',maxCount:12}]),async(req,res)=>{try{let scenes=[];let mediaResults=[];try{scenes=JSON.parse(String(req.body?.scenes||'[]'));mediaResults=JSON.parse(String(req.body?.mediaResults||'[]'));}catch{throw new Error('Los datos de producción no tienen un formato válido.');}if(!scenes.length||(!mediaResults.length&&!Array.isArray(req.files?.aiClips)))return res.status(400).json({error:'Genera los vídeos IA de las escenas o busca visuales de respaldo antes de renderizar.'});const jobId='render_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex'),outputPath=path.join(renderJobDir,jobId+'.mp4');renderJobs.set(jobId,{status:'processing',progress:1,createdAt:Date.now(),outputPath,error:null});res.status(202).json({ok:true,jobId,status:'processing'});(async()=>{const job=renderJobs.get(jobId);try{const narrationFiles=Array.isArray(req.files?.narration)?req.files.narration:[],musicFile=Array.isArray(req.files?.music)?req.files.music[0]:null,aiClipFiles=Array.isArray(req.files?.aiClips)?req.files.aiClips:[];const result=await renderAutotubeVideo({scenes,mediaResults,aiClips:aiClipFiles,narrationAudio:narrationFiles.map(x=>x.buffer),musicBuffer:musicFile?.buffer||null,onProgress:p=>{if(job)job.progress=p},finalOutputPath:outputPath});const validation=await validateRenderedMp4(outputPath);if(job){job.validation=validation;job.status='done';job.progress=100;job.size=result.size;job.finishedAt=Date.now()}console.log('Render completed:',jobId,'size=',result.size)}catch(err){console.error('Render error:',jobId,err);if(job){job.status='error';job.progress=0;job.error=err.message||'No se pudo renderizar el vídeo.'}}})()}catch(err){console.error('Render start error:',err);if(!res.headersSent)res.status(500).json({error:err.message||'No se pudo iniciar el render.'})}});
+app.post('/api/render',upload.fields([{name:'narration',maxCount:12},{name:'music',maxCount:1},{name:'aiClips',maxCount:12}]),async(req,res)=>{try{let scenes=[];let mediaResults=[];try{scenes=JSON.parse(String(req.body?.scenes||'[]'));mediaResults=JSON.parse(String(req.body?.mediaResults||'[]'));}catch{throw new Error('Los datos de producción no tienen un formato válido.');}if(!scenes.length||(!mediaResults.length&&!Array.isArray(req.files?.aiClips)))return res.status(400).json({error:'Genera los vídeos IA de las escenas o busca visuales de respaldo antes de renderizar.'});const jobId='render_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex'),outputPath=path.join(renderJobDir,jobId+'.mp4');renderJobs.set(jobId,{status:'processing',progress:1,createdAt:Date.now(),outputPath,error:null});res.status(202).json({ok:true,jobId,status:'processing'});(async()=>{const job=renderJobs.get(jobId);try{const narrationFiles=Array.isArray(req.files?.narration)?req.files.narration:[],musicFile=Array.isArray(req.files?.music)?req.files.music[0]:null,aiClipFiles=Array.isArray(req.files?.aiClips)?req.files.aiClips:[];const result=await renderAutotubeVideo({scenes,mediaResults,aiClips:aiClipFiles,narrationAudio:narrationFiles.map(x=>x.path),musicBuffer:musicFile?.path||null,onProgress:p=>{if(job)job.progress=p},finalOutputPath:outputPath});const validation=await validateRenderedMp4(outputPath);if(job){job.validation=validation;job.status='done';job.progress=100;job.size=result.size;job.finishedAt=Date.now()}console.log('Render completed:',jobId,'size=',result.size)}catch(err){console.error('Render error:',jobId,err);if(job){job.status='error';job.progress=0;job.error=err.message||'No se pudo renderizar el vídeo.'}}finally{for(const f of [...(Array.isArray(req.files?.narration)?req.files.narration:[]),...(Array.isArray(req.files?.music)?req.files.music:[]),...(Array.isArray(req.files?.aiClips)?req.files.aiClips:[])])await fs.rm(f.path,{force:true}).catch(()=>{});}})()}catch(err){console.error('Render start error:',err);if(!res.headersSent)res.status(500).json({error:err.message||'No se pudo iniciar el render.'})}});
 app.get('/api/render/:jobId',async(req,res)=>{const job=renderJobs.get(String(req.params.jobId||''));if(!job)return res.status(404).json({error:'Render no encontrado. El servicio puede haberse reiniciado; inicia un nuevo render.'});if(job.status==='processing')return res.json({ok:true,status:'processing',progress:job.progress||0});if(job.status==='error')return res.json({ok:false,status:'error',error:job.error||'No se pudo renderizar el vídeo.'});try{const stat=await fs.stat(job.outputPath);if(!stat.size)throw new Error('MP4 vacío');res.json({ok:true,status:'done',progress:100,size:stat.size,validation:job.validation||null,downloadUrl:'/api/render/'+encodeURIComponent(req.params.jobId)+'/download'})}catch{return res.status(404).json({error:'El vídeo renderizado ya no está disponible. Inicia un nuevo render.'})}});
 app.get('/api/render/:jobId/download',async(req,res)=>{const job=renderJobs.get(String(req.params.jobId||''));if(!job)return res.status(404).json({error:'Render no encontrado.'});if(job.status!=='done')return res.status(409).json({error:'El render todavía no está listo.'});try{await fs.stat(job.outputPath);res.download(job.outputPath,'autotube-final.mp4')}catch{res.status(404).json({error:'El vídeo renderizado ya no está disponible.'})}});
 
