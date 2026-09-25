@@ -36,31 +36,31 @@ async function generateUrlToVideo(){
   if(!reference)return alert('Añade primero una URL de YouTube.');
   let value;try{value=validateYoutubeReference(reference)}catch(e){return alert(e.message)}
   const btn=$('#urlToVideoBtn'),state=$('#generationState'),preview=$('#preview');
-  btn.disabled=true;btn.textContent='Descargando MP4…';state.textContent='Descargando vídeo original…';
-  preview.innerHTML='<div class="empty"><div class="empty-icon">◉</div><b>Descargando el vídeo original…</b><p>AutoTube conserva el vídeo y el audio originales. Solo remuxa el contenedor cuando es necesario para obtener MP4.</p></div>';
+  btn.disabled=true;btn.textContent='Regenerando vídeo…';state.textContent='Analizando referencia…';
+  preview.innerHTML='<div class="empty"><div class="empty-icon">◉</div><b>Analizando y regenerando el vídeo…</b><p>AutoTube estudia la estructura audiovisual y crea un montaje original con visuales, voz y/o música según las capas detectadas.</p></div>';
   try{
-    const started=await apiJson('/api/url-to-mp4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:value})},'la descarga del vídeo original');
+    const started=await apiJson('/api/url-to-video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:value})},'la generación desde YouTube');
     const jobId=started?.jobId;if(!jobId)throw new Error('El servidor no devolvió el identificador del trabajo.');
     let finished=null;
-    for(let i=0;i<600;i++){
+    for(let i=0;i<900;i++){
       await new Promise(r=>setTimeout(r,2000));
-      const status=await apiJson('/api/url-to-mp4/'+encodeURIComponent(jobId),{},'el estado del MP4');
+      const status=await apiJson('/api/url-to-video/'+encodeURIComponent(jobId),{},'el estado de la regeneración');
       if(status.status==='done'){finished=status;break;}
-      if(status.status==='error')throw new Error(status.error||'No se pudo generar el MP4.');
+      if(status.status==='error')throw new Error(status.error||'No se pudo regenerar el vídeo.');
       const p=Math.max(0,Math.min(99,Number(status.progress)||0));
-      state.textContent=p?'Generando MP4 '+p+'%':'Descargando y validando…';
-      btn.textContent=p?'MP4 '+p+'%':'Descargando MP4…';
+      state.textContent=p?'Regenerando vídeo '+p+'%':'Analizando y generando…';
+      btn.textContent=p?'Regenerando '+p+'%':'Regenerando vídeo…';
     }
-    if(!finished)throw new Error('El proceso está tardando más de lo esperado.');
-    const rr=await fetch(finished.downloadUrl);if(!rr.ok)throw new Error('El MP4 terminó pero no se pudo descargar.');
-    const blob=await rr.blob();if(blob.size<1000)throw new Error('El MP4 descargado está vacío o incompleto.');
-    const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='autotube-original.mp4';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
-    const s=finished.source||{},f=finished.final||{};
-    state.textContent='MP4 listo y validado';
-    preview.innerHTML='<div class="empty"><div class="empty-icon">✓</div><b>MP4 original listo</b><p>Vídeo y audio conservados. '+String(f.width||s.width||'')+'×'+String(f.height||s.height||'')+' · '+String(f.fps||s.fps||'')+' fps · '+String(f.duration||s.duration||'')+' s · modo '+String(finished.mode||'copy')+'.</p></div>';
+    if(!finished)throw new Error('La regeneración está tardando más de lo esperado.');
+    const rr=await fetch(finished.downloadUrl);if(!rr.ok)throw new Error('El vídeo terminó pero no se pudo descargar.');
+    const blob=await rr.blob();if(blob.size<1000)throw new Error('El MP4 generado está vacío o incompleto.');
+    const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='autotube-regenerado.mp4';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+    const v=finished.validation||{};
+    state.textContent='MP4 regenerado y validado';
+    preview.innerHTML='<div class="empty"><div class="empty-icon">✓</div><b>MP4 regenerado listo</b><p>'+String(finished.referenceTitle||'Referencia de YouTube')+' · '+String(v.width||'')+'×'+String(v.height||'')+' · '+String(v.fps||'')+' fps · '+String(v.durationSeconds||finished.durationSeconds||'')+' s.</p></div>';
   }catch(e){
-    state.textContent='Error';preview.innerHTML='<div class="empty"><div class="empty-icon">!</div><b>No se pudo generar el MP4</b><p>'+escapeHtml(e.message)+'</p></div>';
-  }finally{btn.disabled=false;btn.textContent='▶ Generar MP4 exacto desde esta URL';}
+    state.textContent='Error';preview.innerHTML='<div class="empty"><div class="empty-icon">!</div><b>No se pudo regenerar el MP4</b><p>'+escapeHtml(e.message)+'</p></div>';
+  }finally{btn.disabled=false;btn.textContent='▶ Regenerar vídeo desde YouTube';}
 }
 function openProduction(plan){currentVideoPlan={...currentVideoPlan,...plan};$('#productionTitle').textContent=plan.title||'Nuevo vídeo';const metaDuration=currentVideoPlan?.referenceDurationSeconds?Math.ceil(Number(currentVideoPlan.referenceDurationSeconds)/60):(plan.duration||$('#duration').value);$('#productionMeta').textContent=(plan.outline?.length||0)+' bloques de contenido · '+metaDuration+' min · '+(plan.language||$('#language').value);$('#productionState').textContent='Listo para producir';$('#scenesList').innerHTML='<div class="card empty"><div class="empty-icon">🎬</div><b>Plan preparado</b><p>Pulsa “Generar escenas con IA” para crear el montaje escena por escena.</p></div>';go('production')}
 $('#backToCreate').onclick=()=>go('create');$('#generateMusicBtn').onclick=generateMusic;$('#findMediaBtn').onclick=loadSceneMedia;$('#generateAiVideoBtn').onclick=generateAiSceneClips;$('#generateVoiceBtn').onclick=generateVoiceForScenes;$('#renderVideoBtn').onclick=renderFinalVideo;
