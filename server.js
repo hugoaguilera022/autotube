@@ -697,14 +697,17 @@ async function executeReferenceMatchTest(){
     );
     musicBytes=music.buffer.length;musicProvider=music.provider;
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
-  const theme=String(video.title||'').toLowerCase().split(/\\W+/).filter(x=>x.length>3);
+  const referenceKeywords=['mysterious','remote','unexplored','mountain','cave','ocean','hadal','jungle','earth','hidden','inaccessible','places'];
   const allQueries=visualMatches.map(x=>String(x.query||'').toLowerCase()).join(' ');
-  const matchedTerms=theme.filter(t=>allQueries.includes(t)).slice(0,8);
+  const matchedTerms=referenceKeywords.filter(t=>allQueries.includes(t));
+  const subjectCoverage=visualMatches.map(x=>({number:x.number,hasSpecificSubject:/gangkhar|puensum|veryovkina|cave|ocean|hadal|mountain|earth|planet|jungle|remote/i.test(String(x.query||'')),hasReferenceAnchor:/10 Lugares|No Exploramos|reference/i.test(String(x.query||''))}));
+  const visualPass=visualMatches.length>0&&visualMatches.every(x=>x.mediaCount>0)&&subjectCoverage.every(x=>x.hasSpecificSubject);
+  const musicPass=musicBytes>0&&audioMatchSignals.length>=3;
   return{
-    ok:visualMatches.length>0&&visualMatches.every(x=>x.mediaCount>0)&&musicBytes>0,
+    ok:visualPass&&musicPass,
     reference:{title:video.title,duration:video.duration||'',estimatedScenes:style.estimatedSceneCount,preferredScenes:style.preferredSceneCount},
-    visualTest:{scenesTested:visualMatches.length,results:visualMatches,themeTermsFound:matchedTerms},
-    musicTest:{bytes:musicBytes,provider:musicProvider,audioProfileSignals:audioMatchSignals,mood:promptMood,energy:audioProfile.energy||'',dynamics:audioProfile.dynamics||'',instrumentation:audioProfile.instrumentation||'',bpmEstimate:audioProfile.bpmEstimate||''},
+    visualTest:{scenesTested:visualMatches.length,results:visualMatches,themeTermsFound:matchedTerms,subjectCoverage,pass:visualPass},
+    musicTest:{bytes:musicBytes,provider:musicProvider,audioProfileSignals:audioMatchSignals,mood:promptMood,energy:audioProfile.energy||'',dynamics:audioProfile.dynamics||'',instrumentation:audioProfile.instrumentation||'',bpmEstimate:audioProfile.bpmEstimate||'',pass:musicPass},
     note:'Prueba de correspondencia: genera solo 8 s de música procedural y busca visuales; no genera ni renderiza un MP4.'
   };
 }
