@@ -98,7 +98,7 @@ async function toMp4(source,output){
     await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',source,'-map','0:v:0','-map','0:a:0?','-c','copy','-movflags','+faststart',output]);
     return 'remux-copy';
   }catch{
-    await runFfmpeg(['-y','hide_banner','-loglevel','error','-i',source,'-map','0:v:0','-map','0:a:0?','-c:v','libx264','-preset','veryfast','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','320k','-movflags','+faststart',output]);
+    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',source,'-map','0:v:0','-map','0:a:0?','-c:v','libx264','-preset','veryfast','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','320k','-movflags','+faststart',output]);
     return 'compatible-transcode';
   }
 }
