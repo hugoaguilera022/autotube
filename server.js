@@ -431,12 +431,22 @@ async function generateLocalFliteTts(text,language='es',style='Natural y cercana
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
 }
 async function generateNarrationTts(text,language='es',style='Natural y cercana',audioProfile={}){
-  try{return await generateGeminiTts(text,language,style,audioProfile)}catch(geminiErr){
-    try{return await generateElevenLabsTts(text,language,style,audioProfile)}catch(elevenErr){
+  // Keep cloud TTS responsive. Quota/rate-limit/slow-provider failures fall
+  // through quickly to the next provider and finally to local FFmpeg audio.
+  const withTimeout=(promise,ms,label)=>Promise.race([
+    promise,
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error(label+' timeout')),ms))
+  ]);
+  try{
+    return await withTimeout(generateGeminiTts(text,language,style,audioProfile),12000,'Gemini TTS');
+  }catch(geminiErr){
+    try{
+      return await withTimeout(generateElevenLabsTts(text,language,style,audioProfile),12000,'ElevenLabs TTS');
+    }catch(elevenErr){
       const local=await generateLocalFliteTts(text,language,style,audioProfile).catch(localErr=>{
-        throw new Error('No se pudo generar la narración con Gemini TTS, ElevenLabs ni el fallback local: '+[geminiErr?.message,elevenErr?.message,localErr?.message].filter(Boolean).join(' | '));
+        throw new Error('No se pudo generar la narración: '+[geminiErr?.message,elevenErr?.message,localErr?.message].filter(Boolean).join(' | '));
       });
-      console.warn('AutoTube TTS fallback local (FFmpeg flite): proveedores externos no disponibles.');
+      console.warn('AutoTube TTS fallback local.');
       return local;
     }
   }
@@ -1438,23 +1448,27 @@ async function executeUrlToVideo(reference,jobId){
     const scenes=plan.scenes.map((s,i)=>({...s,number:i+1,duration:Math.max(4,Math.min(60,Number(s.duration)||8)),mediaType:'video',constantImage:false}));
     if(job)job.progress=20;
 
-    const mediaResults=[];
-    const narrationAudio=[];
-    for(let i=0;i<scenes.length;i++){
-      const scene=scenes[i];
+    // Render speed: fetch visual + narration for each scene concurrently, while
+    // preserving scene order. A single failed provider uses the existing fallback.
+    const resultsByScene=await Promise.all(scenes.map(async(scene)=>{
       const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
       let results=await searchPexelsPhotos(query);
       if(!results.length)results=await searchPixabayImages(query);
       const media=results.find(x=>x?.downloadUrl);
       if(!media)throw new Error('No se encontró visual para la escena '+scene.number+'.');
-      mediaResults.push({number:scene.number,media:[{...media,mediaType:String(media.mediaType||'image').toLowerCase()}],mediaType:String(media.mediaType||'image').toLowerCase()});
       const narration=await generateNarrationTts(
         scene.narration||('Contenido original sobre '+referenceTitle+'.'),
         'es',audioProfile.voiceStyle||'Natural y cercana',audioProfile
       );
-      narrationAudio.push(narration);
-      if(job)job.progress=20+Math.round(((i+1)/scenes.length)*45);
-    }
+      return {scene,media,narration};
+    }));
+    const mediaResults=resultsByScene.map(({scene,media})=>({
+      number:scene.number,
+      media:[{...media,mediaType:String(media.mediaType||'image').toLowerCase()}],
+      mediaType:String(media.mediaType||'image').toLowerCase()
+    }));
+    const narrationAudio=resultsByScene.map(x=>x.narration);
+    if(job)job.progress=65;
 
     const totalDuration=scenes.reduce((n,s)=>n+s.duration,0);
     const music=await generateMusicBuffer({
