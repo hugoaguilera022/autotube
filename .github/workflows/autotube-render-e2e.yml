@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          reference='https://www.youtube.com/watch?v=qMUk5jrgENE'
+          reference='https://www.youtube.com/watch?v=mMggTkdN3Eo'
           response=$(curl -sS --max-time 30 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "{\"reference\":\"$reference\"}")
           echo "$response"
           job_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("jobId", ""))')
@@ -96,7 +96,13 @@ jobs:
             if [ "$status" = "done" ]; then
               ok=$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", False)).lower())')
               size=$(printf '%s' "$response" | python -c 'import json,sys; print(int(json.load(sys.stdin).get("size", 0) or 0))')
-              if [ "$ok" = "true" ] && [ "$size" -gt 0 ]; then echo "AUTOTUBE_REAL_URL_TO_MP4_PASS"; exit 0; fi
+              if [ "$ok" = "true" ] && [ "$size" -gt 0 ]; then
+                echo "AUTOTUBE_REAL_URL_TO_MP4_PASS"
+                curl -fL --retry 3 --max-time 1200 "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID/download" -o autotube-final.mp4
+                test -s autotube-final.mp4
+                ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,sample_rate,channels -of json autotube-final.mp4 | tee autotube-ffprobe.json
+                exit 0
+              fi
               echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL"; exit 1
             fi
             if [ "$status" = "error" ] || [ "$status" = "restart" ]; then echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL status=$status"; exit 1; fi
@@ -104,3 +110,13 @@ jobs:
           done
           echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL timeout"
           exit 1
+
+      - name: Upload verified MP4
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-verified-mp4
+          path: |
+            autotube-final.mp4
+            autotube-ffprobe.json
+          retention-days: 7
