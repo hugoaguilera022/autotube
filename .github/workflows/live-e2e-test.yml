@@ -1,0 +1,31 @@
+name: AutoTube E2E live regeneration test
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger regeneration
+        id: start
+        run: |
+          set -e
+          URL='https://autotube-hfeu.onrender.com/api/full-pipeline-test?reference=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ'
+          curl --fail --silent --show-error "$URL" -o start.json
+          cat start.json
+          JOB=$(python -c "import json; print(json.load(open('start.json'))['jobId'])")
+          echo "JOB=$JOB" >> "$GITHUB_ENV"
+      - name: Poll result
+        run: |
+          set -e
+          for i in $(seq 1 180); do
+            curl --silent --show-error "https://autotube-hfeu.onrender.com/api/full-pipeline-test/$JOB" -o result.json || true
+            cat result.json
+            STATUS=$(python -c "import json; print(json.load(open('result.json')).get('status',''))" 2>/dev/null || true)
+            if [ "$STATUS" = "done" ]; then exit 0; fi
+            if [ "$STATUS" = "failed" ]; then exit 1; fi
+            sleep 5
+          done
+          echo "Timed out"
+          exit 1
