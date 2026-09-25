@@ -479,7 +479,22 @@ async function executePreflight(){
   let ttsAudio=null;
   await run('tts',async()=>{ttsAudio=await generateGeminiTts('Prueba de narración de AutoTube.','es','Natural y cercana');if(!ttsAudio.length)throw new Error('Gemini TTS devolvió audio vacío.');return{provider:'Gemini TTS',bytes:ttsAudio.length}});
   let musicBuffer=null;
-  await run('music-ffmpeg',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-music-'));try{const out=path.join(dir,'music.wav');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','sine=frequency=220:sample_rate=44100:duration=2','-f','lavfi','-i','sine=frequency=277:sample_rate=44100:duration=2','-filter_complex','[0:a]volume=0.08[a0];[1:a]volume=0.04[a1];[a0][a1]amix=inputs=2:duration=longest,aresample=44100,apad[a]','-map','[a]','-t','2','-ac','2','-ar','44100','-c:a','pcm_s16le',out]);musicBuffer=await fs.readFile(out);if(!musicBuffer.length)throw new Error('La prueba de música produjo un archivo vacío.');return{bytes:musicBuffer.length};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
+  await run('music-ffmpeg',async()=>{
+    const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/music',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        topic:preflightReferenceVideo?.title||'Preflight',
+        mood:preflightReferenceStyle?.visualAnalysis?.audioProfile?.musicMood||'instrumental original',
+        audioProfile:preflightReferenceStyle?.visualAnalysis?.audioProfile||{},
+        durationSeconds:30
+      })
+    });
+    if(!r.ok){const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}throw new Error(d?.error||'Music API '+r.status);}
+    musicBuffer=Buffer.from(await r.arrayBuffer());
+    if(!musicBuffer.length)throw new Error('La prueba de música produjo un archivo vacío.');
+    return{bytes:musicBuffer.length,provider:'Lyria'};
+  });
   const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
   await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const remoteClip=rows.find(x=>x.downloadUrl);if(!remoteClip)throw new Error('No hay un clip descargable para la prueba de render.');if(!ttsAudio||!musicBuffer)throw new Error('Faltan audio de narración o música para la prueba integrada.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const source=path.join(dir,'smoke-source.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=5','-t','2','-an','-c:v','libx264','-pix_fmt','yuv420p',source]);const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2,narration:'Prueba de narración.'}],mediaResults:[{number:1,title:'Preflight',media:[{downloadUrl:source}]}],narrationAudio:[ttsAudio],musicBuffer,finalOutputPath:out});const validated=await validateRenderedMp4(out);return{bytes:result.size,provider:mediaSource,hasNarration:true,hasMusic:true,validatedAudioStream:true,...validated};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
   const failed=Object.entries(checks).filter(([,v])=>!v.ok).map(([k,v])=>({name:k,error:v.error}));
