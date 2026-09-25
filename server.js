@@ -166,6 +166,13 @@ async function analyzeYoutubeReferenceMedia(url,video){
         if(text){
           const analysis=parseJsonResponse(text);
           const vp=analysis?.videoProfile||{},ap=analysis?.audioProfile||{},sp=analysis?.structureProfile||{},gd=analysis?.generationDirectives||{};
+          const constantImage=Boolean(continuity.constantImage||vp.constantImage);
+          vp.constantImage=constantImage;
+          if(!analysis.generationDirectives)analysis.generationDirectives={};
+          analysis.generationDirectives.useSingleContinuousVisual=Boolean(gd.useSingleContinuousVisual||constantImage);
+          analysis.generationDirectives.preferredSceneCount=constantImage?1:Number(gd.preferredSceneCount||vp.estimatedSceneCount||sp.segmentCount||0);
+          analysis.generationDirectives.preserveVisualContinuity=true;
+          if(constantImage)analysis.generationDirectives.visualSearchStrategy='Priorizar una única fotografía/imagen horizontal estable y mantenerla durante toda la duración.';
           return{
             visualAnalysis:analysis,
             visualSource:'youtube-full-video+audio',
@@ -175,7 +182,7 @@ async function analyzeYoutubeReferenceMedia(url,video){
             hasFullVideoAnalysis:true,
             hasAudioAnalysis:true,
             measuredVisualContinuity:continuity,
-            constantImage:Boolean(continuity.constantImage||vp.constantImage),
+            constantImage,
             estimatedSceneCount:Number(vp.estimatedSceneCount||sp.segmentCount||0),
             preferredSceneCount:Number(gd.preferredSceneCount||0),
             durationSeconds:Number(vp.durationSeconds||0),
