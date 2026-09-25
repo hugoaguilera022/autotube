@@ -878,7 +878,8 @@ async function validateRenderedMp4(file,expectedDuration=0){
   const width=Number(vm[1]),height=Number(vm[2]);
   const fps=fm?Number(fm[1]):0;
   const audioCodec=am?String(am[1]).toLowerCase():'';
-  if(width!==1920||height!==1080)throw new Error('Resolución real del MP4: '+width+'x'+height+' (se esperaba 1920x1080).');
+  const supportedResolution=(width===1280&&height===720)||(width===1920&&height===1080);
+  if(!supportedResolution)throw new Error('Resolución real del MP4: '+width+'x'+height+' (se esperaba 1280x720 o 1920x1080).');
   if(!fps||Math.abs(fps-30)>0.5)throw new Error('FPS reales del MP4: '+(fps||'desconocidos')+' (se esperaban 30).');  if(audioCodec!=='aac')throw new Error('Códec de audio real del MP4: '+(audioCodec||'desconocido')+' (se esperaba AAC).');
   return{width,height,fps,audioCodec,durationSeconds};
 }
