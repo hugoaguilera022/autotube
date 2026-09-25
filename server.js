@@ -1095,6 +1095,92 @@ app.get('/api/preflight',async(_req,res)=>{
   return res.status(job.result?.ok?200:503).json({status:job.status,jobId:job.id,...(job.result||{ok:false,checks:{},failed:[]})});
 });
 
+
+const fullPipelineTestJobs=new Map();
+async function executeFullPipelineTest(reference){
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-full-test-'));
+  const started=Date.now();
+  const checks={};
+  const run=async(name,fn)=>{
+    const t=Date.now();
+    try{const value=await fn();checks[name]={ok:true,ms:Date.now()-t,...(value&&typeof value==='object'?value:{})};}
+    catch(err){checks[name]={ok:false,ms:Date.now()-t,error:err.message||String(err)};throw err;}
+  };
+  try{
+    let video=null,style=null,outline=null,plan=null,narration=null,music=null,clip=null,render=null,validation=null;
+    await run('youtube-analysis',async()=>{
+      video=await getReferenceVideo(reference);
+      style=await analyzeYoutubeReferenceMedia(reference,video);
+      if(!video?.title||!style?.visualAnalysis)throw new Error('No se obtuvo un perfil audiovisual completo de YouTube.');
+      return{title:video.title,hasFullVideoAnalysis:Boolean(style.hasFullVideoAnalysis),hasAudioProfile:Boolean(style.hasAudioAnalysis),estimatedSceneCount:Number(style.estimatedSceneCount||0)};
+    });
+    await run('outline',async()=>{
+      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        topic:video.title,reference,referenceTopic:video.title,referenceData:video,visualReferenceAnalysis:style.visualAnalysis,referenceStyle:style,language:'es',duration:'1'
+      })});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d?.error||'Outline '+r.status);
+      outline=d;
+      return{title:d.title||'',blocks:Array.isArray(d.outline)?d.outline.length:0};
+    });
+    await run('production-plan',async()=>{
+      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        topic:video.title,reference,referenceTopic:video.title,referenceData:video,visualReferenceAnalysis:style.visualAnalysis,referenceStyle:style,language:'es',duration:'1',title:outline?.title||video.title,outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
+      })});
+      const d=await r.json();
+      if(!r.ok||!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error(d?.error||'Production plan inválido.');
+      plan=d;
+      return{scenes:d.scenes.length,title:d.title||''};
+    });
+    const testScene={...(plan.scenes[0]||{}),number:1,duration:8,mediaType:'video',constantImage:false};
+    await run('ai-video',async()=>{
+      const ref=style.visualAnalysis||{};
+      const vp=ref.videoProfile||{},ap=ref.animationProfile||{},sp=ref.structureProfile||{};
+      const prompt=[testScene.visualPrompt||testScene.title||video.title,
+        vp.visualStyle&&('visual style: '+vp.visualStyle),vp.composition&&('composition: '+vp.composition),
+        vp.palette&&('palette: '+vp.palette),vp.lighting&&('lighting: '+vp.lighting),
+        vp.cameraMovement&&('camera: '+vp.cameraMovement),ap.cameraMotion&&('camera motion: '+ap.cameraMotion),
+        ap.effects&&('effects: '+ap.effects),sp.pacing&&('pacing: '+sp.pacing),
+        'Original content only; preserve general audiovisual characteristics, no copied frames, text, logos or recordings; 16:9 realistic cinematography.'].filter(Boolean).join('. ');
+      clip=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:4,width:704,height:512,improveTexture:false});
+      const check=await validateGeneratedVideoClip(clip.outputPath);
+      return{provider:clip.provider,bytes:clip.bytes,durationSeconds:check.durationSeconds,width:check.width,height:check.height};
+    });
+    await run('tts',async()=>{
+      const ap=style.visualAnalysis?.audioProfile||{};
+      narration=await generateGeminiTts(testScene.narration||('Contenido original sobre '+video.title+'.'),'es',style.visualAnalysis?.audioProfile?.voiceStyle||'Natural y cercana',ap);
+      return{bytes:narration.length};
+    });
+    await run('music',async()=>{
+      music=await generateFallbackMusic('Original instrumental background. '+JSON.stringify(style.visualAnalysis?.audioProfile||{}),10,dir,style.visualAnalysis?.audioProfile||{});
+      return{provider:music.provider,bytes:music.buffer.length};
+    });
+    await run('render',async()=>{
+      const output=path.join(dir,'full-test.mp4');
+      render=await renderAutotubeVideo({scenes:[testScene],aiClips:[{path:clip.outputPath}],narrationAudio:[narration],musicBuffer:music.buffer,onProgress:()=>{},finalOutputPath:output});
+      validation=await validateRenderedMp4(output,8);
+      return{bytes:render.size,...validation};
+    });
+    return{ok:true,elapsedMs:Date.now()-started,reference:{url:reference,title:video.title},checks};
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+}
+app.get('/api/full-pipeline-test',async(req,res)=>{
+  const reference=String(req.query?.reference||'').trim();
+  if(!reference)return res.status(400).json({ok:false,error:'Añade ?reference=https://www.youtube.com/watch?v=...'});
+  const existing=[...fullPipelineTestJobs.values()].find(j=>j.status==='running'&&j.reference===reference);
+  if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/full-pipeline-test/'+encodeURIComponent(existing.id)});
+  const id='fulltest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  fullPipelineTestJobs.set(id,{id,reference,status:'running',startedAt:Date.now(),result:null});
+  res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/full-pipeline-test/'+encodeURIComponent(id),message:'Prueba completa iniciada: YouTube → IA → vídeo → voz → música → MP4.'});
+  executeFullPipelineTest(reference).then(result=>{const j=fullPipelineTestJobs.get(id);if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}}).catch(err=>{const j=fullPipelineTestJobs.get(id);if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}});
+});
+app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
+  const j=fullPipelineTestJobs.get(String(req.params.jobId||''));
+  if(!j)return res.status(410).json({ok:false,status:'restart',error:'La prueba se perdió porque Render reinició la instancia.'});
+  if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt});
+  return res.status(j.result?.ok?200:503).json({status:j.status,jobId:j.id,...(j.result||{ok:false})});
+});
+
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
