@@ -281,7 +281,7 @@ async function generateAiSceneClips(){
       const r=await client.predict('text_to_video',[
         prompt,
         'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos, watermark, slow motion',
-        null,null,704,512,'text-to-video',2.0,9,Math.floor(Math.random()*4294967295),true,3,false,false
+        null,null,1216,704,'text-to-video',2.0,9,Math.floor(Math.random()*4294967295),true,3,false,false
       ]);
       const o=r?.data?.[0];
       const u=typeof o==='string'?o:(o?.url||o?.path||o?.video?.url||'');
