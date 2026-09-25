@@ -452,6 +452,25 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana',au
   }
   throw new Error(lastError||'Gemini TTS no pudo generar la narración.');
 }
+async function generateElevenLabsTts(text,lang='es'){
+  const key=process.env.ELEVENLABS_API_KEY;
+  if(!key)throw new Error('ELEVENLABS_API_KEY no configurada.');
+  const voiceId=process.env.ELEVENLABS_VOICE_ID||'21m00Tcm4TlvDq8ikWAM';
+  const r=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+encodeURIComponent(voiceId),{
+    method:'POST',
+    headers:{'xi-api-key':key,'Content-Type':'application/json','Accept':'audio/wav'},
+    body:JSON.stringify({
+      text:String(text||'').slice(0,5000),
+      model_id:'eleven_multilingual_v2',
+      voice_settings:{stability:0.45,similarity_boost:0.75}
+    })
+  });
+  const b=Buffer.from(await r.arrayBuffer());
+  if(!r.ok)throw new Error('ElevenLabs TTS '+r.status+': '+b.toString('utf8').slice(0,500));
+  if(!b.length)throw new Error('ElevenLabs TTS devolvió audio vacío.');
+  return b;
+}
+
 app.post('/api/ai/voice',async(req,res)=>{
   try{
     const text=String(req.body?.text||'').trim();
@@ -1194,13 +1213,11 @@ async function executeFullPipelineTest(reference){
     });
 
     await run('tts',async()=>{
-      narration=await generateGeminiTts(
+      narration=await generateElevenLabsTts(
         testScene.narration||('Contenido original sobre '+referenceTitle+'.'),
-        'es',
-        audioProfile.voiceStyle||'Natural y cercana',
-        audioProfile
+        'es'
       );
-      return{bytes:narration.length};
+      return{bytes:narration.length,provider:'ElevenLabs'};
     });
 
     await run('music',async()=>{
