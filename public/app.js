@@ -212,7 +212,7 @@ async function loadSceneMedia(){
   const btn=$('#findMediaBtn'),state=$('#mediaState');
   btn.disabled=true;btn.textContent='Buscando visuales…';state.textContent='Pexels + Pixabay';
   try{
-    const d=await apiJson('/api/media/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenes})},'la búsqueda de visuales');
+    const d=await apiJson('/api/media/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenes,referenceTopic:currentVideoPlan?.referenceTopic||currentVideoPlan?.referenceData?.title||currentVideoPlan?.topic||''})},'la búsqueda de visuales');
     currentVideoPlan.mediaResults=d.results||[];renderMediaResults(d.results||[]);
     state.textContent='Listo';
   }catch(e){state.textContent='Error';alert(e.message)}
