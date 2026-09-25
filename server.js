@@ -1445,6 +1445,17 @@ app.post('/api/url-to-video',async(req,res)=>{
   res.status(202).json({ok:true,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
   executeUrlToVideo(reference,jobId).catch(err=>console.error('URL-to-video error:',jobId,err));
 });
+app.get('/api/url-to-video',async(req,res)=>{
+  const reference=String(req.query?.reference||'').trim();
+  if(!reference)return res.status(400).json({ok:false,error:'Añade ?reference=https://www.youtube.com/watch?v=...'});
+  const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
+  if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)});
+  const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
+  urlVideoJobs.set(jobId,job);
+  res.status(202).json({ok:true,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
+  executeUrlToVideo(reference,jobId).catch(err=>console.error('URL-to-video error:',jobId,err));
+});
 app.get('/api/url-to-video/:jobId',async(req,res)=>{
   const job=urlVideoJobs.get(String(req.params.jobId||''));
   if(!job)return res.status(410).json({ok:false,status:'restart',error:'El trabajo se perdió porque Render reinició la instancia.'});
