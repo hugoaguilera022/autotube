@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: autotube-render-e2e
+  cancel-in-progress: true
+
 jobs:
   e2e:
     runs-on: ubuntu-latest
