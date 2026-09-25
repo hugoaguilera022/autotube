@@ -142,6 +142,38 @@ function install(){
           }
         })();
       });
+      if(process.env.AUTOTUBE_TEST_MODE==='1'){
+        app.get('/api/url-to-mp4/test',async(req,res)=>{
+          const existing=[...jobs.values()].find(j=>j.test===true&&(j.status==='processing'||j.status==='done'));
+          if(existing)return res.json({ok:true,jobId:existing.id,status:existing.status,progress:existing.progress||0,statusUrl:'/api/url-to-mp4/'+encodeURIComponent(existing.id)});
+          const id='urlmp4_test_'+Date.now();
+          jobs.set(id,{id,status:'processing',progress:1,createdAt:Date.now(),reference:'https://www.youtube.com/watch?v=QcKmagCJiz4',test:true});
+          res.status(202).json({ok:true,jobId:id,status:'processing',statusUrl:'/api/url-to-mp4/'+encodeURIComponent(id)});
+          (async()=>{
+            const reference='https://www.youtube.com/watch?v=QcKmagCJiz4';
+            const dir=path.join(os.tmpdir(),'autotube-url-'+id),output=path.join(dir,'autotube-exact.mp4');
+            try{
+              await fs.mkdir(dir,{recursive:true});
+              jobs.get(id).progress=10;
+              const dl=await downloadExactYoutube(reference,dir);
+              jobs.get(id).progress=65;
+              const sourceProbe=await probe(dl.source);jobs.get(id).source=sourceProbe;
+              const mode=await toMp4(dl.source,output);jobs.get(id).progress=92;
+              const finalProbe=await probe(output);const stat=await fs.stat(output);
+              if(!stat.size)throw new Error('El MP4 final está vacío.');
+              if(sourceProbe.duration&&Math.abs(sourceProbe.duration-finalProbe.duration)>Math.max(1,sourceProbe.duration*0.01))throw new Error('La duración cambió durante la conversión.');
+              if(sourceProbe.width&&finalProbe.width&&sourceProbe.width!==finalProbe.width)throw new Error('La resolución de vídeo cambió.');
+              if(sourceProbe.height&&finalProbe.height&&sourceProbe.height!==finalProbe.height)throw new Error('La resolución de vídeo cambió.');
+              jobs.get(id).status='done';jobs.get(id).progress=100;jobs.get(id).finishedAt=Date.now();jobs.get(id).outputPath=output;jobs.get(id).size=stat.size;jobs.get(id).mode=mode;jobs.get(id).final=finalProbe;
+              console.log('AUTOTUBE TEST PASSED',id,{mode,source:sourceProbe,final:finalProbe,bytes:stat.size});
+            }catch(e){
+              console.error('AUTOTUBE TEST FAILED',id,e);
+              const j=jobs.get(id);if(j){j.status='error';j.progress=0;j.error=e.message||String(e)}
+              await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+            }
+          })();
+        });
+      }
       app.get('/api/url-to-mp4/:jobId',async(req,res)=>{
         const j=jobs.get(String(req.params.jobId||''));
         if(!j)return res.status(404).json({error:'Trabajo no encontrado. Render puede haberse reiniciado.'});
