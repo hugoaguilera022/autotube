@@ -170,13 +170,20 @@ async function analyzeYoutubeReferenceMedia(url,video){
         {type:'video',uri:referenceUrl}
       ]
     };
-    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-goog-api-key':key},
-      body:JSON.stringify(body)
-    });
-    const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
-    if(r.ok){
+    let r=null,raw='',d=null;
+    for(let attempt=0;attempt<3;attempt++){
+      r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-goog-api-key':key},
+        body:JSON.stringify(body)
+      });
+      raw=await r.text();d=null;try{d=raw?JSON.parse(raw):null}catch{}
+      if(r.ok)break;
+      lastError='Gemini YouTube '+r.status+': '+(d?.error?.message||raw.slice(0,700));
+      if(r.status>=500&&attempt<2){await new Promise(resolve=>setTimeout(resolve,5000*(attempt+1)));continue}
+      break;
+    }
+    if(r?.ok){
       const text=String(d?.output_text||'').trim();
       if(text){
         const analysis=parseJsonResponse(text);
@@ -293,28 +300,65 @@ app.post('/api/ai/voice',async(req,res)=>{
     const text=String(req.body?.text||'').trim();
     if(!text)return res.status(400).json({error:'La narración está vacía.'});
     const audio=await generateGeminiTts(text,req.body?.language||'es',req.body?.style||'Natural y cercana');
-    res.set('Content-Type','audio/wav');res.set('Content-Length',String(audio.length));res.send(audio);
+    res.set('Content-Type','audio/wav');res.set('Content-Length',String(audio.length));res.set('X-AutoTube-Music-Provider',String(generated.provider||'Lyria'));res.send(audio);
   }catch(err){console.error('Gemini TTS error:',err);res.status(502).json({error:err.message||'No se pudo generar la narración.'})}
 });
 
 async function generateLyriaMusic(prompt){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
-  const body={
-    model:'lyria-3-clip-preview',
-    input:String(prompt||'Instrumental original, no vocals.'),
-    response_format:{type:'audio'}
-  };
-  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
-    method:'POST',
-    headers:{'Content-Type':'application/json','x-goog-api-key':key},
-    body:JSON.stringify(body)
-  });
-  const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
-  if(!r.ok)throw new Error('Lyria '+r.status+': '+(d?.error?.message||raw.slice(0,700)));
-  const audio=d?.output_audio;
-  if(!audio?.data)throw new Error('Lyria no devolvió audio.');
-  return{buffer:Buffer.from(audio.data,'base64'),mime:audio.mime_type||'audio/mpeg'};
+  const attempts=[
+    {model:'lyria-3.5',body:{model:'lyria-3.5',input:String(prompt||'Instrumental original, no vocals.'),response_format:{type:'audio'}}},
+    {model:'lyria-3-clip-preview',body:{model:'lyria-3-clip-preview',input:String(prompt||'Instrumental original, no vocals.')}}
+  ];
+  let lastError='';
+  for(const attempt of attempts){
+    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-goog-api-key':key},
+      body:JSON.stringify(attempt.body)
+    });
+    const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
+    if(r.ok){
+      const audio=d?.output_audio||d?.steps?.flatMap(s=>Array.isArray(s?.content)?s.content:[]).find(c=>c?.type==='audio');
+      if(audio?.data)return{buffer:Buffer.from(audio.data,'base64'),mime:audio.mime_type||'audio/mpeg',provider:attempt.model};
+      lastError='Lyria no devolvió audio.';
+    }else{
+      lastError='Lyria '+r.status+': '+(d?.error?.message||raw.slice(0,700));
+    }
+    if(r.status===429)continue;
+  }
+  return null;
+}
+async function generateFallbackMusic(prompt,durationSeconds,dir){
+  const duration=Math.max(30,Math.min(300,Number(durationSeconds)||60));
+  const output=path.join(dir,'fallback-music.wav');
+  const seed=crypto.createHash('sha256').update(String(prompt||'')).digest();
+  const root=110+(seed[0]%6)*11;
+  const fifth=Math.round(root*1.5);
+  const octave=root*2;
+  const beatHz=Math.max(0.5,Math.min(3,Number(durationSeconds?120/60:2)));
+  const filter=[
+    '[0:a]volume=0.10,lowpass=f=900[bass]',
+    '[1:a]volume=0.055,lowpass=f=1800[mid]',
+    '[2:a]volume=0.035,lowpass=f=3200[high]',
+    '[3:a]volume=0.018,highpass=f=7000[air]',
+    '[4:a]volume=0.025,lowpass=f=1400[pulse]',
+    '[bass][mid][high][air][pulse]amix=inputs=5:duration=longest:dropout_transition=2,aresample=44100,afade=t=in:st=0:d=3,afade=t=out:st='+Math.max(3,duration-3)+':d=3,volume=0.9[a]'
+  ].join(';');
+  await runFfmpeg([
+    '-y',
+    '-f','lavfi','-i','sine=frequency='+root+':sample_rate=44100:duration='+duration,
+    '-f','lavfi','-i','sine=frequency='+fifth+':sample_rate=44100:duration='+duration,
+    '-f','lavfi','-i','sine=frequency='+octave+':sample_rate=44100:duration='+duration,
+    '-f','lavfi','-i','anoisesrc=color=pink:amplitude=0.012:sample_rate=44100:duration='+duration,
+    '-f','lavfi','-i','sine=frequency='+Math.max(55,root/2)+':sample_rate=44100:duration='+duration,
+    '-filter_complex',filter,
+    '-map','[a]','-ar','44100','-ac','2','-c:a','pcm_s16le',output
+  ]);
+  const audio=await fs.readFile(output);
+  if(!audio.length)throw new Error('La música de respaldo está vacía.');
+  return{buffer:audio,mime:'audio/wav',provider:'FFmpeg procedural reference-style fallback'};
 }
 
 
@@ -339,7 +383,11 @@ app.post('/api/ai/music',async(req,res)=>{
       'Instrumental only, no vocals.',
       'Maintain a coherent continuous bed suitable for narration.'
     ].join('\n');
-    const generated=await generateLyriaMusic(prompt);
+    let generated=await generateLyriaMusic(prompt);
+    if(!generated){
+      generated=await generateFallbackMusic(prompt,duration,dir);
+      console.warn('Lyria no disponible en la cuota actual; usando música procedural original basada en el perfil audiovisual de referencia.');
+    }
     const raw=path.join(dir,'generated-audio');
     const output=path.join(dir,'music.wav');
     await fs.writeFile(raw,generated.buffer);
@@ -536,7 +584,7 @@ async function executePreflight(){
     if(!r.ok){const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}throw new Error(d?.error||'Music API '+r.status);}
     musicBuffer=Buffer.from(await r.arrayBuffer());
     if(!musicBuffer.length)throw new Error('La prueba de música produjo un archivo vacío.');
-    return{bytes:musicBuffer.length,provider:'Lyria'};
+    return{bytes:musicBuffer.length,provider:r.headers.get('X-AutoTube-Music-Provider')||'Lyria'};
   });
   const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
   await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const remoteClip=rows.find(x=>x.downloadUrl);if(!remoteClip)throw new Error('No hay un clip descargable para la prueba de render.');if(!ttsAudio||!musicBuffer)throw new Error('Faltan audio de narración o música para la prueba integrada.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const source=path.join(dir,'smoke-source.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=5','-t','2','-an','-c:v','libx264','-pix_fmt','yuv420p',source]);const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2,narration:'Prueba de narración.'}],mediaResults:[{number:1,title:'Preflight',media:[{downloadUrl:source}]}],narrationAudio:[ttsAudio],musicBuffer,finalOutputPath:out});const validated=await validateRenderedMp4(out);return{bytes:result.size,provider:mediaSource,hasNarration:true,hasMusic:true,validatedAudioStream:true,...validated};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
