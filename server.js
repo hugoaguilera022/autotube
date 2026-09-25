@@ -47,6 +47,42 @@ app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true})
 app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
 function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
 async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
+async function downloadYoutubeReference(url,dir){
+  const output=path.join(dir,'reference.%(ext)s');
+  const potScript=path.join(process.cwd(),'.pot-provider','server','build','generate_once.js');
+  const strategies=[
+    {name:'mweb_bgutil_pot',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['mweb']},'youtubepot-bgutilscript':{script_path:potScript}}},
+    {name:'web_safari_hls',format:'best[protocol^=m3u8]/best[height<=360]',extractor_args:{youtube:{player_client:['web_safari']}}},
+    {name:'android_vr',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['android_vr']}}},
+    {name:'tv',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['tv']}}},
+    {name:'tv_simply',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['tv_simply']}}},
+    {name:'web_embedded',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['web_embedded']}}},
+    {name:'ios',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['ios']}}}
+  ];
+  let lastError='';
+  for(const strategy of strategies){
+    try{
+      await fs.mkdir(dir,{recursive:true});
+      const result=await youtubedl(url,{
+        format:strategy.format,mergeOutputFormat:'mp4',output,noPlaylist:true,noWarnings:true,
+        noCheckCertificates:true,restrictFilenames:true,preferFreeFormats:false,
+        extractor_args:strategy.extractor_args,ffmpegLocation:path.dirname(ffmpegPath)
+      },{timeout:180000,killSignal:'SIGKILL'});
+      const files=await fs.readdir(dir);
+      const videoFile=files.find(name=>/^reference\\.(mp4|mkv|webm|mov)$/i.test(name));
+      if(!videoFile)throw new Error('yt-dlp no produjo un archivo de vídeo.');
+      const file=path.join(dir,videoFile),stat=await fs.stat(file);
+      if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
+      return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1000),strategy:strategy.name};
+    }catch(err){
+      lastError=String(err?.stderr||err?.message||err||'').slice(-1600);
+      const files=await fs.readdir(dir).catch(()=>[]);
+      for(const name of files.filter(x=>/^reference\\./i.test(x)))await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
+    }
+  }
+  throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. Se probaron múltiples clientes de yt-dlp y, cuando está disponible, un proveedor automático de PO tokens. Último error: '+lastError);
+}
+
 async function uploadGeminiFile(filePath,mimeType){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
