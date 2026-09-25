@@ -1450,7 +1450,7 @@ async function executeFullPipelineTest(reference){
   }
 }
 const urlVideoJobs=new Map();
-function parseIsoDurationSeconds(value){const m=String(value||'').match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);if(!m)return 0;return Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0);}
+function parseIsoDurationSeconds(value){if(Number.isFinite(Number(value))&&Number(value)>0)return Number(value);const raw=String(value||'').trim();const m=raw.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);if(!m)return 0;return Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0);}
 
 async function executeUrlToVideo(reference,jobId){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-'));
@@ -1508,13 +1508,15 @@ async function executeUrlToVideo(reference,jobId){
     const maxSeconds=targetDurationSeconds;
     let used=0;
     const finalScenes=[];
-    for(let i=0;i<scenes.length&&used<maxSeconds;i++){
-      const remaining=scenes.length-i-1;
-      const room=Math.max(4,maxSeconds-used-Math.max(0,remaining*4));
-      const duration=Math.max(4,Math.min(Number(scenes[i].duration)||8,room));
-      finalScenes.push({...scenes[i],duration});
+    let cursor=0;
+    while(used<maxSeconds&&scenes.length){
+      const sourceScene=scenes[cursor%scenes.length];
+      const remainingTarget=maxSeconds-used;
+      const duration=Math.max(4,Math.min(Number(sourceScene.duration)||8,remainingTarget));
+      finalScenes.push({...sourceScene,number:finalScenes.length+1,duration});
       used+=duration;
-      if(finalScenes.length>=12)break;
+      cursor++;
+      if(cursor>5000)throw new Error('El vídeo de referencia es demasiado largo para procesarlo de forma segura en una sola tarea.');
     }
     if(job)job.progress=30;
 
