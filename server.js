@@ -676,6 +676,103 @@ async function validateRenderedMp4(file){
   return{width,height,fps,audioCodec};
 }
 
+
+async function generateVeoVideoClip(prompt,dir,options={}){
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('Falta GEMINI_API_KEY.');
+  const model=String(options.model||process.env.VEO_MODEL||'veo-3.1-generate-preview').trim();
+  const base='https://generativelanguage.googleapis.com/v1beta';
+  const body={
+    instances:[{prompt:String(prompt||'').trim()}],
+    parameters:{
+      aspectRatio:String(options.aspectRatio||'16:9'),
+      resolution:String(options.resolution||'720p'),
+      numberOfVideos:1
+    }
+  };
+  const start=await fetch(base+'/models/'+encodeURIComponent(model)+':predictLongRunning',{
+    method:'POST',
+    headers:{'x-goog-api-key':key,'Content-Type':'application/json'},
+    body:JSON.stringify(body)
+  });
+  const raw=await start.text();
+  let data=null;try{data=raw?JSON.parse(raw):null}catch{}
+  if(!start.ok)throw new Error('Veo '+start.status+': '+(data?.error?.message||raw.slice(0,700)));
+  const operationName=String(data?.name||'').trim();
+  if(!operationName)throw new Error('Veo no devolvió una operación de generación.');
+  let status=data;
+  for(let attempt=0;attempt<36;attempt++){
+    if(status?.done)break;
+    await new Promise(resolve=>setTimeout(resolve,5000));
+    const poll=await fetch(base+'/'+operationName,{headers:{'x-goog-api-key':key}});
+    const pollRaw=await poll.text();let pollData=null;try{pollData=pollRaw?JSON.parse(pollRaw):null}catch{}
+    if(!poll.ok)throw new Error('Veo no pudo consultar la operación ('+poll.status+'): '+(pollData?.error?.message||pollRaw.slice(0,500)));
+    status=pollData;
+    if(status?.error)throw new Error('Veo terminó con error: '+(status.error.message||JSON.stringify(status.error)));
+  }
+  if(!status?.done)throw new Error('Veo no terminó la generación dentro del tiempo de prueba.');
+  const videoUri=String(status?.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri||'').trim();
+  if(!videoUri)throw new Error('Veo terminó pero no devolvió la URI del vídeo generado.');
+  const response=await fetch(videoUri,{headers:{'x-goog-api-key':key}});
+  if(!response.ok)throw new Error('No se pudo descargar el vídeo generado por Veo ('+response.status+').');
+  const buffer=Buffer.from(await response.arrayBuffer());
+  if(buffer.length<100000)throw new Error('Veo devolvió un archivo demasiado pequeño para ser un vídeo válido.');
+  const output=path.join(dir,'veo-generated.mp4');
+  await fs.writeFile(output,buffer);
+  return{outputPath:output,bytes:buffer.length,model,operationName,videoUri};
+}
+
+async function validateGeneratedVideoClip(file){
+  const result=await new Promise((resolve,reject)=>{
+    const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-f','null','-'],{stdio:['ignore','pipe','pipe']});
+    let stderr='';
+    p.stderr.on('data',x=>{stderr+=x.toString();if(stderr.length>30000)stderr=stderr.slice(-30000)});
+    p.on('error',reject);
+    p.on('close',code=>{
+      if(code!==0)return reject(new Error('FFmpeg no pudo validar el clip de vídeo IA: '+stderr.slice(-1000)));
+      resolve(stderr);
+    });
+  });
+  const text=String(result||'');
+  const dm=text.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
+  const durationSeconds=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
+  const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
+  const vm=videoLine.match(/Video:\s*([^,]+)/i);
+  const dimensions=videoLine.match(/(\d{2,5})x(\d{2,5})/);
+  if(!durationSeconds||durationSeconds<6)throw new Error('El clip IA tiene una duración inválida: '+durationSeconds+' s.');
+  if(!vm)throw new Error('El archivo generado no contiene un stream de vídeo válido.');
+  return{
+    ok:true,
+    durationSeconds,
+    videoCodec:String(vm[1]||'').trim(),
+    width:dimensions?Number(dimensions[1]):0,
+    height:dimensions?Number(dimensions[2]):0
+  };
+}
+
+async function runVideoAiSmokeTest(){
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-veo-test-'));
+  try{
+    const prompt='Original cinematic documentary video, 16:9 landscape. A remote unexplored snowy mountain range in the Himalayas at dawn, dramatic clouds moving slowly across the peaks, subtle aerial camera push-in, realistic natural lighting, deep blue and cold tones, atmospheric mist, high-detail professional documentary cinematography. No text, no logos, no copyrighted characters, no imitation of any specific existing video.';
+    const generated=await generateVeoVideoClip(prompt,dir,{resolution:'720p'});
+    const validation=await validateGeneratedVideoClip(generated.outputPath);
+    return{
+      ok:Boolean(validation.ok),
+      provider:'Google Veo 3.1',
+      model:generated.model,
+      bytes:generated.bytes,
+      durationSeconds:validation.durationSeconds,
+      width:validation.width,
+      height:validation.height,
+      videoCodec:validation.videoCodec
+    };
+  }finally{
+    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
+}
+
+const videoAiTestJobs=new Map();
+
 const preflightJobs=new Map();
 
 async function executePreflight(){
@@ -765,7 +862,23 @@ app.get('/api/reference-match-test/:jobId',async(req,res)=>{
   return res.status(j.result?.ok?200:503).json({status:j.status,jobId:j.id,...(j.result||{ok:false})});
 });
 
-app.get('/api/preflight',async(_req,res)=>{
+
+app.get('/api/video-ai-test',async(_req,res)=>{
+  const existing=[...videoAiTestJobs.values()].find(j=>j.status==='running');
+  if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/video-ai-test/'+encodeURIComponent(existing.id)});
+  const id='veotest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  videoAiTestJobs.set(id,{id,status:'running',startedAt:Date.now(),result:null});
+  res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/video-ai-test/'+encodeURIComponent(id),message:'Prueba corta de vídeo IA iniciada. No genera el vídeo completo.'});
+  runVideoAiSmokeTest().then(result=>{const j=videoAiTestJobs.get(id);if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}}).catch(err=>{const j=videoAiTestJobs.get(id);if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}});
+});
+app.get('/api/video-ai-test/:jobId',async(req,res)=>{
+  const j=videoAiTestJobs.get(String(req.params.jobId||''));
+  if(!j)return res.status(410).json({ok:false,status:'restart',error:'La instancia se reinició durante la prueba de vídeo IA.'});
+  if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt});
+  return res.status(j.result?.ok?200:503).json({status:j.status,jobId:j.id,...(j.result||{ok:false})});
+});
+
+
   const existing=[...preflightJobs.values()].find(j=>j.status==='running');
   if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/preflight/'+encodeURIComponent(existing.id),message:'Preflight ya está ejecutándose.'});
   const id='preflight_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
