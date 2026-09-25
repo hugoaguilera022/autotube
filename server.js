@@ -642,7 +642,15 @@ async function generateMusicBuffer({topic,mood,audioProfile,durationSeconds}){
       'Instrumental only, no vocals.',
       'Maintain a coherent continuous bed suitable for narration and match the detected rhythmic intensity across the whole duration.'
     ].join('\\n');
-    let generated=await generateLyriaMusic(prompt);
+    // Never let a slow music provider block the whole render. If Lyria does
+    // not answer quickly, immediately use the deterministic local music bed.
+    let generated=null;
+    try{
+      generated=await Promise.race([
+        generateLyriaMusic(prompt),
+        new Promise((_,reject)=>setTimeout(()=>reject(new Error('Lyria music timeout')),12000))
+      ]);
+    }catch(err){console.warn('Lyria fallback:',err.message)}
     if(!generated)generated=await generateFallbackMusic(prompt,duration,dir,profile);
     const raw=path.join(dir,'generated-audio');
     const output=path.join(dir,'music.wav');
