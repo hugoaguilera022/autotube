@@ -12,11 +12,11 @@
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">▶</div><div><strong>AutoTube</strong><span>AI YouTube Studio</span></div></div>
       <nav>
-        <button type="button" class="nav active" data-view="dashboard" onclick="window.go && window.go('dashboard')">⌂ <span>Dashboard</span></button>
-        <button type="button" class="nav" data-view="create" onclick="window.go && window.go('create')">✦ <span>Crear vídeo</span></button>
-        <button type="button" class="nav" data-view="projects" onclick="window.go && window.go('projects')">▣ <span>Proyectos</span></button>
-        <button type="button" class="nav" data-view="automation" onclick="window.go && window.go('automation')">◷ <span>Automatización</span></button>
-        <button type="button" class="nav" data-view="connections" onclick="window.go && window.go('connections')">↗ <span>Conexiones</span></button>
+        <button type="button" class="nav active" data-view="dashboard" onclick="autoTubeNavigate('dashboard')">⌂ <span>Dashboard</span></button>
+        <button type="button" class="nav" data-view="create" onclick="autoTubeNavigate('create')">✦ <span>Crear vídeo</span></button>
+        <button type="button" class="nav" data-view="projects" onclick="autoTubeNavigate('projects')">▣ <span>Proyectos</span></button>
+        <button type="button" class="nav" data-view="automation" onclick="autoTubeNavigate('automation')">◷ <span>Automatización</span></button>
+        <button type="button" class="nav" data-view="connections" onclick="autoTubeNavigate('connections')">↗ <span>Conexiones</span></button>
       </nav>
       <div class="side-bottom"><div class="status-dot"></div><span id="serverStatus">Comprobando conexión…</span></div>
     </aside>
@@ -24,7 +24,7 @@
       <header class="topbar"><div><p class="eyebrow">AUTOMATION STUDIO</p><h1 id="pageTitle">Tu contenido, automatizado.</h1></div><div id="youtubeStatus" class="youtube-status"><button class="ghost" id="youtubeBtn">Conectar YouTube</button><button class="youtube-connected hidden" id="youtubeConnected"><img id="youtubeStatusAvatar" alt="" /><span><b id="youtubeStatusTitle">YouTube conectado</b><small>Canal conectado</small></span><span class="status-check">✓</span></button></div></header>
 
       <section id="dashboard" class="view active-view">
-        <div class="hero"><div><span class="pill">NUEVO · AUTO-PILOT</span><h2>Convierte una idea en un vídeo listo para YouTube.</h2><p>Genera la estructura, guion y recursos desde un único panel. Las claves se mantienen en el servidor y nunca en el navegador.</p><button type="button" class="primary" data-go="create" onclick="window.go && window.go('create')">Crear mi primer vídeo →</button></div><div class="hero-orb"><div class="orb-ring"></div><span>AI</span></div></div>
+        <div class="hero"><div><span class="pill">NUEVO · AUTO-PILOT</span><h2>Convierte una idea en un vídeo listo para YouTube.</h2><p>Genera la estructura, guion y recursos desde un único panel. Las claves se mantienen en el servidor y nunca en el navegador.</p><button type="button" class="primary" data-go="create" onclick="autoTubeNavigate('create')">Crear mi primer vídeo →</button></div><div class="hero-orb"><div class="orb-ring"></div><span>AI</span></div></div>
         <div class="stats"><div><span>Vídeos este mes</span><b>0</b></div><div><span>Publicados</span><b>0</b></div><div><span>Automatizaciones</span><b>0</b></div><div><span>Estado</span><b class="ok">Listo</b></div></div>
         <div class="section-head"><h3>Flujo AutoTube</h3><span>4 pasos</span></div>
         <div class="flow"><div><i>01</i><b>Idea</b><span>Tema, nicho o referencia</span></div><div><i>02</i><b>Guion</b><span>IA crea una estructura original</span></div><div><i>03</i><b>Producción</b><span>Visuales + voz + montaje</span></div><div><i>04</i><b>YouTube</b><span>Revisión y publicación</span></div></div>
@@ -54,6 +54,29 @@
         <div class="connections-grid"><div class="card connection"><div class="service-icon yt">▶</div><div><b>YouTube</b><span>OAuth · subida de vídeos</span></div><button class="small" id="youtubeConnect2">Conectar</button></div><div class="card connection"><div class="service-icon ai">✦</div><div><b>OpenAI</b><span>Guiones y metadata</span></div><span class="badge" id="openaiBadge">Revisar</span></div><div class="card connection"><div class="service-icon">▧</div><div><b>Pexels</b><span>Vídeo e imágenes</span></div><span class="badge">Opcional</span></div><div class="card connection"><div class="service-icon">♫</div><div><b>ElevenLabs</b><span>Voz sintética</span></div><span class="badge">Opcional</span></div></div><div class="notice">🔒 <b>Seguridad:</b> nunca pongas tus claves API en el código del navegador. Añádelas en <code>Environment</code> de Render.</div></section>
     </main>
   </div>
+
+  <script>
+    window.autoTubeNavigate = function(name) {
+      var views = document.querySelectorAll('.view');
+      for (var i = 0; i < views.length; i++) {
+        views[i].classList.toggle('active-view', views[i].id === name);
+      }
+      var navs = document.querySelectorAll('.nav');
+      for (var j = 0; j < navs.length; j++) {
+        navs[j].classList.toggle('active', navs[j].getAttribute('data-view') === name);
+      }
+      var titles = {
+        dashboard: 'Tu contenido, automatizado.',
+        create: 'Crear un vídeo con IA.',
+        production: 'Producción del vídeo',
+        projects: 'Tus proyectos.',
+        automation: 'Automatiza tu canal.',
+        connections: 'Conexiones & API'
+      };
+      var title = document.getElementById('pageTitle');
+      if (title) title.textContent = titles[name] || 'AutoTube';
+    };
+  </script>
   <script src="/app.js"></script>
   <script src="/ai-video-fix.js"></script>
 </body></html>
