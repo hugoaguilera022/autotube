@@ -667,6 +667,62 @@ async function executePreflight(){
   const failed=Object.entries(checks).filter(([,v])=>!v.ok).map(([k,v])=>({name:k,error:v.error}));
   return{ok:failed.length===0,checks,failed,notes:{renderSmokePreviouslyValidated:true,renderImageSmokePreviouslyValidated:true,musicGenerationSmokeSkippedToPreventInstanceRestart:true}};
 }
+const referenceMatchJobs=new Map();
+async function executeReferenceMatchTest(){
+  const referenceUrl='https://www.youtube.com/watch?v=qMUk5jrgENE';
+  const video=await getReferenceVideo(referenceUrl);
+  const style=await analyzeYoutubeReferenceMedia(referenceUrl,video);
+  const profile=style?.visualAnalysis||{};
+  const planRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    topic:'',referenceTopic:video.title,language:'es',duration:String(Math.max(1,Math.min(2,Math.ceil(Number(profile?.videoProfile?.durationSeconds||60)/60)))),
+    title:video.title,outline:[],visualIdeas:[],visualReferenceAnalysis:profile,referenceStyle:style,referenceData:video,reference:referenceUrl
+  })});
+  const plan=await planRes.json();
+  if(!planRes.ok||!Array.isArray(plan.scenes)||!plan.scenes.length)throw new Error(plan?.error||'No se pudo crear el plan de prueba.');
+  const mediaRes=await fetch('http://127.0.0.1:'+PORT+'/api/media/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenes:plan.scenes.slice(0,4),referenceTopic:video.title})});
+  const media=await mediaRes.json();
+  if(!mediaRes.ok)throw new Error(media?.error||'No se pudieron buscar visuales.');
+  const visualRows=Array.isArray(media.results)?media.results:[];
+  const visualMatches=visualRows.map(x=>({number:x.number,query:x.query,mediaCount:Array.isArray(x.media)?x.media.length:0,mediaType:x.mediaType}));
+  const audioProfile=profile.audioProfile||{};
+  const promptMood=String(plan.musicMood||audioProfile.musicMood||audioProfile.mood||'').toLowerCase();
+  const audioText=JSON.stringify(audioProfile).toLowerCase();
+  const audioMatchSignals=['energy','dynamics','instrumentation','bpmEstimate'].filter(k=>audioProfile[k]!==undefined);
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-match-'));
+  let musicBytes=0,musicProvider='';
+  try{
+    const music=await generateFallbackMusic(
+      'Reference test: '+video.title+' | '+promptMood+' | '+audioText.slice(0,1600),
+      8,dir,audioProfile
+    );
+    musicBytes=music.buffer.length;musicProvider=music.provider;
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+  const theme=String(video.title||'').toLowerCase().split(/\\W+/).filter(x=>x.length>3);
+  const allQueries=visualMatches.map(x=>String(x.query||'').toLowerCase()).join(' ');
+  const matchedTerms=theme.filter(t=>allQueries.includes(t)).slice(0,8);
+  return{
+    ok:visualMatches.length>0&&visualMatches.every(x=>x.mediaCount>0)&&musicBytes>0,
+    reference:{title:video.title,duration:video.duration||'',estimatedScenes:style.estimatedSceneCount,preferredScenes:style.preferredSceneCount},
+    visualTest:{scenesTested:visualMatches.length,results:visualMatches,themeTermsFound:matchedTerms},
+    musicTest:{bytes:musicBytes,provider:musicProvider,audioProfileSignals:audioMatchSignals,mood:promptMood,energy:audioProfile.energy||'',dynamics:audioProfile.dynamics||'',instrumentation:audioProfile.instrumentation||'',bpmEstimate:audioProfile.bpmEstimate||''},
+    note:'Prueba de correspondencia: genera solo 8 s de música procedural y busca visuales; no genera ni renderiza un MP4.'
+  };
+}
+app.get('/api/reference-match-test',async(_req,res)=>{
+  const existing=[...referenceMatchJobs.values()].find(j=>j.status==='running');
+  if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/reference-match-test/'+encodeURIComponent(existing.id)});
+  const id='match_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  referenceMatchJobs.set(id,{id,status:'running',startedAt:Date.now(),result:null});
+  res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/reference-match-test/'+encodeURIComponent(id)});
+  executeReferenceMatchTest().then(result=>{const j=referenceMatchJobs.get(id);if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}}).catch(err=>{const j=referenceMatchJobs.get(id);if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}});
+});
+app.get('/api/reference-match-test/:jobId',async(req,res)=>{
+  const j=referenceMatchJobs.get(String(req.params.jobId||''));
+  if(!j)return res.status(410).json({ok:false,status:'restart',error:'La instancia se reinició durante la prueba.'});
+  if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt});
+  return res.status(j.result?.ok?200:503).json({status:j.status,jobId:j.id,...(j.result||{ok:false})});
+});
+
 app.get('/api/preflight',async(_req,res)=>{
   const existing=[...preflightJobs.values()].find(j=>j.status==='running');
   if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/preflight/'+encodeURIComponent(existing.id),message:'Preflight ya está ejecutándose.'});
