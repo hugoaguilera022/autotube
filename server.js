@@ -411,11 +411,28 @@ async function generateElevenLabsTts(text,language='es',style='Natural y cercana
   if(!audio.length)throw new Error('ElevenLabs TTS devolvió audio vacío.');
   return audio;
 }
+async function generateLocalFliteTts(text,language='es',style='Natural y cercana',audioProfile={}){
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-flite-'));
+  try{
+    const safe=String(text||'').replace(/[\\r\\n]+/g,' ').replace(/[\\\\]/g,' ').trim();
+    if(!safe)throw new Error('La narración está vacía.');
+    const textFile=path.join(dir,'speech.txt'),output=path.join(dir,'voice.wav');
+    await fs.writeFile(textFile,safe,'utf8');
+    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','flite=textfile='+textFile+':voice=kal','-ar','44100','-ac','2','-c:a','pcm_s16le',output]);
+    const audio=await fs.readFile(output);
+    if(!audio.length)throw new Error('FFmpeg flite devolvió audio vacío.');
+    return audio;
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+}
 async function generateNarrationTts(text,language='es',style='Natural y cercana',audioProfile={}){
-  try{return await generateGeminiTts(text,language,style,audioProfile)}catch(err){
-    const msg=String(err?.message||err);
-    if(/Gemini TTS 429|quota exceeded|current quota/i.test(msg))return await generateElevenLabsTts(text,language,style,audioProfile);
-    throw err;
+  try{return await generateGeminiTts(text,language,style,audioProfile)}catch(geminiErr){
+    try{return await generateElevenLabsTts(text,language,style,audioProfile)}catch(elevenErr){
+      const local=await generateLocalFliteTts(text,language,style,audioProfile).catch(localErr=>{
+        throw new Error('No se pudo generar la narración con Gemini TTS, ElevenLabs ni el fallback local: '+[geminiErr?.message,elevenErr?.message,localErr?.message].filter(Boolean).join(' | '));
+      });
+      console.warn('AutoTube TTS fallback local (FFmpeg flite): proveedores externos no disponibles.');
+      return local;
+    }
   }
 }
 async function generateGeminiTts(text,language='es',style='Natural y cercana',audioProfile={}){
