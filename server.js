@@ -325,7 +325,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
     scenes=scenes.slice(0,requestedSceneCount).map((s,i)=>({
       ...s,
       number:i+1,
-      referenceSegment:s.referenceSegment||refStructure?.sceneSegments?.[i]||null,
+      referenceSegment:s.referenceSegment||refStructure?.sceneSegments?.[Math.min((refStructure?.sceneSegments?.length||1)-1,Math.round(i*((refStructure?.sceneSegments?.length||1)-1)/Math.max(1,requestedSceneCount-1)))]||null,
       duration:Math.max(2,Number(s.duration)||Math.round((Number(duration)*60)/Math.max(1,requestedSceneCount))),
       mediaType:String(s.mediaType||'video').toLowerCase()==='image'?'image':'video',
       constantImage:Boolean(s.constantImage)
