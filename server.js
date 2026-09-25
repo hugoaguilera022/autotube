@@ -190,28 +190,21 @@ async function analyzeDownloadedReferenceMedia(file,video){
 
     let audioAnalysis=null;
     const audioPath=path.join(dir,'reference-audio.wav');
-    try{
-      await runFfmpeg([
-        '-y','-hide_banner','-loglevel','error','-i',file,
-        '-vn','-sn','-dn','-ac','1','-ar','16000','-t','180',
-        '-c:a','pcm_s16le',audioPath
-      ]);
-      const audioStat=await fs.stat(audioPath);
-      if(audioStat.size>20000&&audioStat.size<25*1024*1024){
-        const audioFile=await uploadGeminiFile(audioPath,'audio/wav');
-        const audioPrompt='Analiza el audio real de esta referencia de YouTube. No reproduzcas ni copies la grabación. Devuelve SOLO JSON válido con: hasSpeech,hasMusic,hasAmbience,hasSoundEffects,language,speechRate,pauses,emotion,voiceStyle,musicMood,energy,dynamics,instrumentation,bpmEstimate,voiceMusicBalance,audioContinuity,speechConfidence,musicConfidence,ambienceConfidence. Determina de forma explícita si hay voz humana, música, ambas o ninguna. Si hay voz pero no música, hasMusic=false. Si hay música pero no voz, hasSpeech=false. Si hay ambas, marca ambas true. Usa unknown solo cuando realmente no pueda determinarse.';
-        const audioText=await callGemini({
-          system:'Eres un analista de audio profesional. Clasifica el audio real proporcionado sin inventar contenido.',
-          user:audioPrompt,
-          files:[audioFile],
-          temperature:0.1,
-          maxOutputTokens:1200,
-          json:true
-        });
-        audioAnalysis=parseJsonResponse(audioText);
+    const hasAudioStream=/Stream #[^\n]*Audio:/i.test(probeText);
+    if(hasAudioStream){
+      const starts=[0,Math.max(0,durationSeconds/2-30),Math.max(0,durationSeconds-60)].filter((v,i,a)=>a.indexOf(v)===i);
+      const audioFiles=[];
+      for(let i=0;i<starts.length;i++){
+        const segmentPath=path.join(dir,'reference-audio-'+i+'.wav');
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss',String(starts[i]),'-i',file,'-vn','-sn','-dn','-t','60','-ac','1','-ar','16000','-c:a','pcm_s16le',segmentPath]);
+        const stat=await fs.stat(segmentPath);
+        if(stat.size>20000&&stat.size<10*1024*1024)audioFiles.push(await uploadGeminiFile(segmentPath,'audio/wav'));
       }
-    }catch(err){
-      console.warn('Audio reference analysis fallback:',err.message||err);
+      if(!audioFiles.length)throw new Error('No se pudo extraer audio utilizable de la referencia.');
+      const audioPrompt='Analiza CONJUNTAMENTE los segmentos de audio del principio, centro y final de la referencia. Consolida el perfil sonoro de todo el vídeo. Devuelve SOLO JSON válido con: hasSpeech,hasMusic,hasAmbience,hasSoundEffects,language,speechRate,pauses,emotion,voiceStyle,musicMood,energy,dynamics,instrumentation,bpmEstimate,voiceMusicBalance,audioContinuity,speechConfidence,musicConfidence,ambienceConfidence. Marca hasSpeech=true si existe voz humana relevante en cualquiera y hasMusic=true si existe música relevante en cualquiera.';
+      const audioText=await callGemini({system:'Eres un analista de audio profesional. Clasifica los segmentos reales y consolida un perfil fiable.',user:audioPrompt,files:audioFiles,temperature:0.05,maxOutputTokens:1400,json:true});
+      audioAnalysis=parseJsonResponse(audioText);
+      if(typeof audioAnalysis?.hasSpeech!=='boolean'||typeof audioAnalysis?.hasMusic!=='boolean')throw new Error('No se pudo clasificar de forma fiable voz y música.');
     }
 
     const prompt='Analiza estos fotogramas extraídos en orden de un vídeo de YouTube. Son muestras temporales del vídeo real, no imágenes de stock. Reconstruye un perfil audiovisual ORIGINAL y fiel al TEMA y al lenguaje visual observado. No copies planos, personajes, texto, guion ni grabaciones. Determina qué aparece realmente, cómo cambia la imagen, encuadre, composición, iluminación, paleta, movimiento, animación y ritmo. Si el vídeo parece mantener una imagen esencialmente constante, indícalo. Devuelve ÚNICAMENTE JSON válido con videoProfile, animationProfile, audioProfile, structureProfile y generationDirectives. videoProfile: durationSeconds,constantImage,estimatedSceneCount,sceneChangeRate,cameraMovement,composition,palette,lighting,visualStyle,continuity. animationProfile: cameraMotion,zoomStyle,panStyle,overlays,textAnimation,effects,transitionStyle,motionIntensity,visualRhythm. audioProfile: hasSpeech,language,speechRate,pauses,emotion,hasMusic,hasAmbience,hasSoundEffects,musicMood,energy,dynamics,instrumentation,voiceStyle,bpmEstimate,voiceMusicBalance,audioContinuity. Como el análisis visual procede de fotogramas, no inventes detalles de audio que no puedan inferirse; usa unknown cuando corresponda. structureProfile: opening,pacing,transitions,segmentCount,segmentDurations,visualContinuity,timestamps,sceneSegments. sceneSegments debe ser un array ordenado que cubra todo el vídeo usando estos tiempos aproximados: '+JSON.stringify(frameSeconds)+'. Cada segmento debe incluir startSeconds,endSeconds,summary,subject,shotScale,composition,cameraMovement,motionIntensity,lighting,palette,transitionIn,transitionOut,audioRole,narrationRole,continuityAnchor,generationPrompt. generationDirectives: useSingleContinuousVisual,preferredSceneCount,preserveVisualContinuity,preserveAudioContinuity,visualSearchStrategy,musicStrategy,narrationStrategy,animationStrategy. El título y metadatos de YouTube son contexto adicional: '+JSON.stringify({title:video?.title||'',description:String(video?.description||'').slice(0,2500),tags:Array.isArray(video?.tags)?video.tags.slice(0,20):[],duration:video?.duration||''})+'.';
