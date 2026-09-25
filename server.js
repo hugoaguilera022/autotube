@@ -479,7 +479,7 @@ async function generateLyriaMusic(prompt){
   return null;
 }
 async function generateFallbackMusic(prompt,durationSeconds,dir,audioProfile={}){
-  const duration=Math.max(30,Math.min(300,Number(durationSeconds)||60));
+  const duration=Math.max(3,Math.min(300,Number(durationSeconds)||60));
   const output=path.join(dir,'fallback-music.wav');
   const seed=crypto.createHash('sha256').update(JSON.stringify(audioProfile)+String(prompt||'')).digest();
   const energyText=String(audioProfile.energy||'').toLowerCase();
@@ -1206,7 +1206,7 @@ async function executeFullPipelineTest(reference){
     await run('music',async()=>{
       music=await generateFallbackMusic(
         'Original instrumental background. '+JSON.stringify(audioProfile),
-        10,dir,audioProfile
+        3,dir,audioProfile
       );
       return{provider:music.provider,bytes:music.buffer.length};
     });
