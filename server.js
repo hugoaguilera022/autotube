@@ -619,7 +619,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-'));
   try{
     const clips=[];
-    const usableScenes=scenes.map((scene,i)=>({scene,found:mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i]||null,aiClip:aiClips.length?aiClips[i%aiClips.length]:null,audio:narrationAudio[i]||null})).filter(x=>x.aiClip?.buffer||x.found?.media?.find(m=>m.downloadUrl)?.downloadUrl);
+    const usableScenes=scenes.map((scene,i)=>({scene,found:mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i]||null,aiClip:aiClips.length?aiClips[i%aiClips.length]:null,audio:narrationAudio[i]||null})).filter(x=>x.aiClip?.path||x.aiClip?.buffer||x.found?.media?.find(m=>m.downloadUrl)?.downloadUrl);
     if(!usableScenes.length)throw new Error('No hay clips de vídeo disponibles para las escenas.');
     const total=usableScenes.length;
     for(let i=0;i<total;i++){
