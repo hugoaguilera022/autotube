@@ -879,6 +879,7 @@ app.get('/api/video-ai-test/:jobId',async(req,res)=>{
 });
 
 
+app.get('/api/preflight',async(_req,res)=>{
   const existing=[...preflightJobs.values()].find(j=>j.status==='running');
   if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/preflight/'+encodeURIComponent(existing.id),message:'Preflight ya está ejecutándose.'});
   const id='preflight_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
