@@ -1402,125 +1402,104 @@ const urlVideoJobs=new Map();
 async function executeUrlToVideo(reference,jobId){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-'));
   const job=urlVideoJobs.get(jobId);
-  const started=Date.now();
   try{
     const video=await getReferenceVideo(reference);
-    let style=await analyzeYoutubeReferenceMedia(reference,video);
+    const style=await analyzeYoutubeReferenceMedia(reference,video);
     const referenceTitle=String(video?.title||'Contenido original').slice(0,300);
     const visualReferenceAnalysis=style?.visualAnalysis||{};
-    const audioProfile=visualReferenceAnalysis?.audioProfile&&typeof visualReferenceAnalysis.audioProfile==='object'?{...visualReferenceAnalysis.audioProfile}:{};
-    // Keep only the reference fields actually consumed downstream. This avoids
-    // retaining the full Gemini scene-by-scene analysis in memory during render.
-    const va=visualReferenceAnalysis||{};
-    const sp=va.structureProfile||{};
-    const compactSceneSegments=Array.isArray(sp.sceneSegments)
-      ? sp.sceneSegments.slice(0,12).map(s=>({
-          startSeconds:s?.startSeconds,endSeconds:s?.endSeconds,summary:String(s?.summary||'').slice(0,500),
-          subject:String(s?.subject||'').slice(0,300),shotScale:s?.shotScale,composition:s?.composition,
-          cameraMovement:s?.cameraMovement,motionIntensity:s?.motionIntensity,lighting:s?.lighting,palette:s?.palette,
-          transitionIn:s?.transitionIn,transitionOut:s?.transitionOut,audioRole:s?.audioRole,
-          narrationRole:s?.narrationRole,continuityAnchor:String(s?.continuityAnchor||'').slice(0,300),
-          generationPrompt:String(s?.generationPrompt||'').slice(0,700)
-        }))
-      : [];
-    const referenceStyleForGeneration={
-      visualAnalysis:{
-        videoProfile:va.videoProfile||{},
-        animationProfile:va.animationProfile||{},
-        audioProfile:va.audioProfile||{},
-        structureProfile:{...sp,sceneSegments:compactSceneSegments},
-        generationDirectives:va.generationDirectives||{}
-      }
-    };
+    if(job)job.progress=12;
 
+    // Render test path: visuals only. Music and narration are deliberately
+    // excluded here so a failed audio provider cannot block MP4 rendering.
     const outlineRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({topic:referenceTitle,reference,referenceTopic:referenceTitle,
+      body:JSON.stringify({
+        topic:referenceTitle,reference,referenceTopic:referenceTitle,
         referenceData:{title:referenceTitle,videoId:video?.videoId||'',channelTitle:video?.channelTitle||''},
-        visualReferenceAnalysis,referenceStyle:referenceStyleForGeneration,language:'es',duration:'1'})
+        visualReferenceAnalysis,referenceStyle:{visualAnalysis:visualReferenceAnalysis},
+        language:'es',duration:'1'
+      })
     });
-    const outline=await outlineRes.json();
+    const outline=await outlineRes.json().catch(()=>null);
     if(!outlineRes.ok)throw new Error(outline?.error||'No se pudo generar la estructura.');
 
     const planRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({topic:referenceTitle,reference,referenceTopic:referenceTitle,
+      body:JSON.stringify({
+        topic:referenceTitle,reference,referenceTopic:referenceTitle,
         referenceData:{title:referenceTitle,videoId:video?.videoId||'',channelTitle:video?.channelTitle||''},
-        visualReferenceAnalysis:referenceStyleForGeneration?.visualAnalysis||{},
-        referenceStyle:referenceStyleForGeneration,language:'es',duration:'1',
-        title:outline?.title||referenceTitle,outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]})
+        visualReferenceAnalysis,referenceStyle:{visualAnalysis:visualReferenceAnalysis},
+        language:'es',duration:'1',title:outline?.title||referenceTitle,
+        outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
+      })
     });
-    const plan=await planRes.json();
-    if(!planRes.ok||!Array.isArray(plan?.scenes)||!plan.scenes.length)throw new Error(plan?.error||'Plan de producción inválido.');
-    style=null;
+    const plan=await planRes.json().catch(()=>null);
+    if(!planRes.ok||!Array.isArray(plan?.scenes)||!plan.scenes.length)
+      throw new Error(plan?.error||'Plan de producción inválido.');
 
-    const scenes=plan.scenes.map((s,i)=>({...s,number:i+1,duration:Math.max(4,Math.min(60,Number(s.duration)||8)),mediaType:'video',constantImage:false}));
-    if(job)job.progress=20;
-
-    // Render speed: fetch visual + narration for each scene concurrently, while
-    // preserving scene order. A single failed provider uses the existing fallback.
-    // Keep provider/API and local FFmpeg pressure bounded. Three scenes at a time
-    // is substantially faster than fully sequential preparation without spawning
-    // a dozen TTS/FFmpeg processes on Render Free's single small CPU.
-    const resultsByScene=new Array(scenes.length);
-    const workerCount=1;
-    let nextScene=0;
-    async function sceneWorker(){
-      while(true){
-        const index=nextScene++;
-        if(index>=scenes.length)return;
-        const scene=scenes[index];
-        const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
-        let results=await searchPexelsPhotos(query);
-        if(!results.length)results=await searchPixabayImages(query);
-        const media=results.find(x=>x?.downloadUrl);
-        if(!media)throw new Error('No se encontró visual para la escena '+scene.number+'.');
-        const narration=await generateNarrationTts(
-          scene.narration||('Contenido original sobre '+referenceTitle+'.'),
-          'es',audioProfile.voiceStyle||'Natural y cercana',audioProfile
-        );
-        resultsByScene[index]={scene,media,narration};
-      }
-    }
-    await Promise.all(Array.from({length:workerCount},()=>sceneWorker()));
-    const mediaResults=resultsByScene.map(({scene,media})=>({
-      number:scene.number,
-      media:[{...media,mediaType:String(media.mediaType||'image').toLowerCase()}],
-      mediaType:String(media.mediaType||'image').toLowerCase()
+    const scenes=plan.scenes.map((s,i)=>({
+      ...s,number:i+1,duration:Math.max(4,Math.min(30,Number(s.duration)||8)),
+      mediaType:'video',constantImage:false
     }));
-    const narrationAudio=resultsByScene.map(x=>x.narration);
-    if(job)job.progress=65;
+    // Keep the first render small and reliable on Render Free.
+    const maxSeconds=60;
+    let used=0;
+    const limited=[];
+    for(let i=0;i<scenes.length&&used<maxSeconds;i++){
+      const remaining=scenes.length-i-1;
+      const room=Math.max(4,maxSeconds-used-Math.max(0,remaining*4));
+      const duration=Math.max(4,Math.min(Number(scenes[i].duration)||8,room));
+      limited.push({...scenes[i],duration});
+      used+=duration;
+    }
+    const finalScenes=limited.length?limited:scenes.slice(0,1);
+    if(job)job.progress=30;
 
-    const totalDuration=scenes.reduce((n,s)=>n+s.duration,0);
-    const music=await generateMusicBuffer({
-      topic:referenceTitle,
-      mood:audioProfile.musicMood||audioProfile.energy||'instrumental original',
-      audioProfile,durationSeconds:totalDuration
-    });
-    if(job)job.progress=72;
+    const resultsByScene=[];
+    for(const scene of finalScenes){
+      const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
+      let results=await searchPexelsPhotos(query);
+      if(!results.length)results=await searchPixabayImages(query);
+      const media=results.find(x=>x?.downloadUrl);
+      if(!media)throw new Error('No se encontró visual para la escena '+scene.number+'.');
+      resultsByScene.push({
+        number:scene.number,
+        media:[{...media,mediaType:String(media.mediaType||'image').toLowerCase()}],
+        mediaType:String(media.mediaType||'image').toLowerCase()
+      });
+      if(job)job.progress=30+Math.round((resultsByScene.length/finalScenes.length)*30);
+    }
 
-    const outputPath=path.join(dir,'autotube-final.mp4');
+    if(activeRenderJobId && activeRenderJobId!==jobId)
+      throw new Error('Ya hay otro render en curso. Espera a que termine.');
+    activeRenderJobId=jobId;
+    const outputPath=path.join(renderJobDir,jobId+'.mp4');
     const result=await renderAutotubeVideo({
-      scenes,mediaResults,narrationAudio,musicBuffer:music.buffer,
-      onProgress:p=>{if(job)job.progress=Math.min(99,72+Math.round(p*0.28))},
+      scenes:finalScenes,
+      mediaResults:resultsByScene,
+      aiClips:[],
+      narrationAudio:[],
+      musicBuffer:null,
+      onProgress:p=>{if(job)job.progress=60+Math.round(Math.max(0,Math.min(100,Number(p)||0))*0.38)},
       finalOutputPath:outputPath
     });
-    const validation=await validateRenderedMp4(outputPath,totalDuration);
-    const finalPath=path.join(renderJobDir,jobId+'.mp4');
-    await fs.copyFile(outputPath,finalPath);
+    const validation=await validateRenderedMp4(outputPath,result.duration);
+    const stat=await fs.stat(outputPath);
+    if(!stat.size)throw new Error('El MP4 final está vacío.');
     if(job){
-      job.status='done';job.progress=100;job.outputPath=finalPath;job.size=result.size;
-      job.validation=validation;job.referenceTitle=referenceTitle;job.sceneCount=scenes.length;
-      job.durationSeconds=validation.durationSeconds;job.finishedAt=Date.now();
+      job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
+      job.validation=validation;job.referenceTitle=referenceTitle;
+      job.sceneCount=finalScenes.length;job.durationSeconds=validation.durationSeconds;
+      job.finishedAt=Date.now();
     }
     return{ok:true,jobId,reference:{url:reference,title:referenceTitle},
-      scenes:scenes.length,durationSeconds:validation.durationSeconds,size:result.size,
-      width:validation.width,height:validation.height,fps:validation.fps,audioCodec:validation.audioCodec,
-      elapsedMs:Date.now()-started};
+      scenes:finalScenes.length,durationSeconds:validation.durationSeconds,size:stat.size,
+      validation};
   }catch(err){
-    if(job){job.status='error';job.progress=0;job.error=err.message||String(err);job.finishedAt=Date.now();}
+    if(job){job.status='error';job.progress=0;job.error=err?.message||String(err);job.finishedAt=Date.now();}
     throw err;
   }finally{
+    if(activeRenderJobId===jobId)activeRenderJobId=null;
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
 }
