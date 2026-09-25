@@ -765,7 +765,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       out=path.join(dir,'autotube-final.mp4');
       await runFfmpeg(['-y','-hide_banner','-loglevel','error',
         '-i',videoOnly,'-stream_loop','-1','-i',musicFile,
-        '-filter_complex','[0:a]aresample=44100,acompressor=threshold=0.08:ratio=3:attack=20:release=250[voice];[1:a]aresample=44100,volume=0.14[music];[music][voice]sidechaincompress=threshold=0.05:ratio=6:attack=20:release=300:makeup=1:mix=1[ducked];[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95,loudnorm=I=-16:LRA=11:TP=-1.5[a]',
+        '-filter_complex','[0:a]aresample=44100,acompressor=threshold=0.08:ratio=3:attack=20:release=250,asplit=2[voice][voice_sc];[1:a]aresample=44100,volume=0.14[music];[music][voice_sc]sidechaincompress=threshold=0.05:ratio=6:attack=20:release=300:makeup=1:mix=1[ducked];[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95,loudnorm=I=-16:LRA=11:TP=-1.5[a]',
         '-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-ar','44100','-ac','2','-b:a','192k','-movflags','+faststart',out]);
     }
     const stat=await fs.stat(out);
