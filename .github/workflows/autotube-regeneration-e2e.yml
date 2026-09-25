@@ -1,0 +1,40 @@
+name: AutoTube audiovisual regeneration E2E
+on:
+  push:
+    branches: [main]
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start regeneration
+        run: |
+          set -euo pipefail
+          REF='https://youtu.be/gklcNX9EcW0?si=cl-YmRd3CkGyXTC5'
+          curl -fsS -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "$(jq -nc --arg r "$REF" '{reference:$r}')" | tee start.json
+          jq -e '.jobId' start.json
+      - name: Poll and validate final MP4
+        run: |
+          set -euo pipefail
+          JOB_ID="$(jq -r '.jobId' start.json)"
+          for i in $(seq 1 180); do
+            sleep 5
+            curl -fsS "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID" > status.json || true
+            cat status.json
+            STATUS="$(jq -r '.status // empty' status.json)"
+            if [ "$STATUS" = "done" ]; then
+              DOWNLOAD_URL="$(jq -r '.downloadUrl' status.json)"
+              curl -fsSL "https://autotube-hfeu.onrender.com${DOWNLOAD_URL}" -o final.mp4
+              test -s final.mp4
+              ffprobe -v error -show_entries format=duration:stream=codec_type,codec_name,width,height,r_frame_rate -of json final.mp4 > probe.json
+              cat probe.json
+              test "$(stat -c%s final.mp4)" -gt 10000
+              jq -e '.streams | map(select(.codec_type=="video")) | length > 0' probe.json
+              exit 0
+            fi
+            if [ "$STATUS" = "error" ]; then
+              jq . status.json
+              exit 1
+            fi
+          done
+          echo "Timed out waiting for AutoTube regeneration"
+          exit 1
