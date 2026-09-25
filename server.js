@@ -775,18 +775,167 @@ async function executePreflight(){
   const checks={};
   let preflightReferenceVideo=null;
   let preflightReferenceStyle=null;
-  const run=async(name,fn)=>{const started=Date.now();try{const value=await fn();checks[name]={ok:true,ms:Date.now()-started,...(value&&typeof value==='object'?value:{})};}catch(err){checks[name]={ok:false,ms:Date.now()-started,error:err.message||String(err)};}};
-  // Preflight ligero: valida APIs y el flujo de planificación. Las pruebas de render ya fueron validadas previamente y no se repiten aquí para evitar reinicios/OOM en Render.
-  await run('ffmpeg',async()=>{if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-'));try{const out=path.join(dir,'test.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x180:r=5','-t','0.5','-an','-c:v','libx264','-pix_fmt','yuv420p',out]);const st=await fs.stat(out);if(!st.size)throw new Error('FFmpeg produjo un archivo vacío.');return{bytes:st.size};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
-  await run('gemini',async()=>{const text=await callGemini({system:'Responde únicamente con JSON válido.',user:'Devuelve {"ok":true}.',maxOutputTokens:40,json:true});return{response:parseJsonResponse(text)}});
+  const run=async(name,fn)=>{
+    const started=Date.now();
+    try{
+      const value=await fn();
+      checks[name]={ok:true,ms:Date.now()-started,...(value&&typeof value==='object'?value:{})};
+    }catch(err){
+      checks[name]={ok:false,ms:Date.now()-started,error:err.message||String(err)};
+    }
+  };
+
+  // Este preflight no genera ningún vídeo IA ni consume cuota de generación.
+  // Solo comprueba que las piezas reales del flujo funcionan juntas.
+  await run('ffmpeg',async()=>{
+    if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-'));
+    try{
+      const out=path.join(dir,'test.mp4');
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x180:r=5','-t','0.5','-an','-c:v','libx264','-pix_fmt','yuv420p',out]);
+      const st=await fs.stat(out);
+      if(!st.size)throw new Error('FFmpeg produjo un archivo vacío.');
+      return{bytes:st.size};
+    }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+  });
+
+  await run('gemini',async()=>{
+    const text=await callGemini({system:'Responde únicamente con JSON válido.',user:'Devuelve {"ok":true}.',maxOutputTokens:40,json:true});
+    return{response:parseJsonResponse(text)};
+  });
+
   const referenceUrl='https://www.youtube.com/watch?v=qMUk5jrgENE';
-  await run('youtube-reference',async()=>{const r=await fetch('http://127.0.0.1:'+PORT+'/api/youtube/reference',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:referenceUrl})});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'YouTube reference '+r.status);if(!d?.video?.title)throw new Error('No se obtuvo el título de la referencia.');if(!d?.referenceStyle)throw new Error('No se obtuvo el perfil de referencia.');preflightReferenceVideo=d.video;preflightReferenceStyle=d.referenceStyle;return{title:d.video.title,visualSource:d.referenceStyle.visualSource||'unknown',thumbnailCount:Number(d.referenceStyle.thumbnailCount)||0,hasVisualAnalysis:Boolean(d.referenceStyle.hasFullVideoAnalysis),hasAudioProfile:Boolean(d.referenceStyle.hasAudioAnalysis),hasAnimationAnalysis:Boolean(d.referenceStyle.hasAnimationAnalysis),hasStructureProfile:Boolean(d.referenceStyle.hasStructureAnalysis),constantImage:Boolean(d.referenceStyle.constantImage),estimatedSceneCount:Number(d.referenceStyle.estimatedSceneCount||0),preferredSceneCount:Number(d.referenceStyle.preferredSceneCount||0)}});
-  await run('pexels',async()=>{if(!process.env.PEXELS_API_KEY)throw new Error('Falta PEXELS_API_KEY.');const rows=await searchPexels('cinematic');if(!rows.length)throw new Error('Pexels no devolvió vídeos.');return{results:rows.length}});
-  await run('pixabay',async()=>{if(!process.env.PIXABAY_API_KEY)throw new Error('Falta PIXABAY_API_KEY.');const rows=await searchPixabay('cinematic');if(!rows.length)throw new Error('Pixabay no devolvió vídeos.');return{results:rows.length}});
-  await run('production-plan',async()=>{const ref=preflightReferenceVideo;const refStyle=preflightReferenceStyle;if(!ref||!refStyle)throw new Error('No hay perfil de referencia disponible.');const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic:'',referenceTopic:ref.title,language:'es',duration:'2',title:'Preflight original',outline:['Gancho','Contexto','Desarrollo','Cierre'],visualIdeas:['Reference-derived visuals'],visualReferenceAnalysis:refStyle.visualAnalysis,referenceStyle:refStyle,referenceData:ref,reference:referenceUrl})});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'Production plan '+r.status);if(!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error('El plan de producción no devolvió escenas.');return{scenes:d.scenes.length,title:d.title||'',referenceContext:Boolean(d.referenceContext||d.referenceStyle)}});
-  await run('tts',async()=>{const audio=await generateGeminiTts('Prueba breve de narración.','es','Natural y cercana');if(!audio.length)throw new Error('Gemini TTS devolvió audio vacío.');return{provider:'Gemini TTS',bytes:audio.length}});
+  await run('youtube-reference',async()=>{
+    const start=await fetch('http://127.0.0.1:'+PORT+'/api/youtube/reference',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reference:referenceUrl})
+    });
+    const startRaw=await start.text();
+    let startData=null;try{startData=startRaw?JSON.parse(startRaw):null}catch{}
+    if(!start.ok)throw new Error(startData?.error||'YouTube reference '+start.status);
+    if(startData?.status==='done'){
+      preflightReferenceVideo=startData.video;
+      preflightReferenceStyle=startData.referenceStyle;
+    }else{
+      const jobId=startData?.jobId;
+      if(!jobId)throw new Error('El análisis de YouTube no devolvió jobId.');
+      const statusUrl=startData?.statusUrl||('/api/youtube/reference/'+encodeURIComponent(jobId));
+      let done=null;
+      for(let i=0;i<180;i++){
+        await new Promise(resolve=>setTimeout(resolve,2000));
+        const r=await fetch('http://127.0.0.1:'+PORT+statusUrl);
+        const raw=await r.text();
+        let d=null;try{d=raw?JSON.parse(raw):null}catch{}
+        if(d?.status==='done'){done=d;break;}
+        if(d?.status==='error')throw new Error(d?.error||'No se pudo analizar la referencia de YouTube.');
+        if(d?.status==='restart')throw new Error('El servidor reinició durante el análisis de YouTube.');
+      }
+      if(!done)throw new Error('El análisis de YouTube superó el tiempo máximo del preflight.');
+      preflightReferenceVideo=done.video;
+      preflightReferenceStyle=done.referenceStyle;
+    }
+    if(!preflightReferenceVideo?.title)throw new Error('No se obtuvo el título de la referencia.');
+    if(!preflightReferenceStyle?.visualAnalysis)throw new Error('No se obtuvo el análisis audiovisual de la referencia.');
+    return{
+      title:preflightReferenceVideo.title,
+      visualSource:preflightReferenceStyle.visualSource||'unknown',
+      hasFullVideoAnalysis:Boolean(preflightReferenceStyle.hasFullVideoAnalysis),
+      hasAudioProfile:Boolean(preflightReferenceStyle.hasAudioAnalysis),
+      hasAnimationAnalysis:Boolean(preflightReferenceStyle.hasAnimationAnalysis),
+      hasStructureProfile:Boolean(preflightReferenceStyle.hasStructureAnalysis),
+      constantImage:Boolean(preflightReferenceStyle.constantImage),
+      estimatedSceneCount:Number(preflightReferenceStyle.estimatedSceneCount||0),
+      preferredSceneCount:Number(preflightReferenceStyle.preferredSceneCount||0)
+    };
+  });
+
+  await run('pexels',async()=>{
+    if(!process.env.PEXELS_API_KEY)throw new Error('Falta PEXELS_API_KEY.');
+    const rows=await searchPexels('cinematic');
+    if(!rows.length)throw new Error('Pexels no devolvió vídeos.');
+    return{results:rows.length};
+  });
+
+  await run('pixabay',async()=>{
+    if(!process.env.PIXABAY_API_KEY)throw new Error('Falta PIXABAY_API_KEY.');
+    const rows=await searchPixabay('cinematic');
+    if(!rows.length)throw new Error('Pixabay no devolvió vídeos.');
+    return{results:rows.length};
+  });
+
+  await run('production-plan',async()=>{
+    const ref=preflightReferenceVideo,refStyle=preflightReferenceStyle;
+    if(!ref||!refStyle)throw new Error('No hay perfil de referencia disponible.');
+    const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        topic:'',
+        referenceTopic:ref.title,
+        language:'es',
+        duration:'2',
+        title:'Preflight original',
+        outline:['Gancho','Contexto','Desarrollo','Cierre'],
+        visualIdeas:['Reference-derived visuals'],
+        visualReferenceAnalysis:refStyle.visualAnalysis,
+        referenceStyle:refStyle,
+        referenceData:ref,
+        reference:referenceUrl
+      })
+    });
+    const raw=await r.text();
+    let d=null;try{d=raw?JSON.parse(raw):null}catch{}
+    if(!r.ok)throw new Error(d?.error||'Production plan '+r.status);
+    if(!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error('El plan de producción no devolvió escenas.');
+    return{scenes:d.scenes.length,title:d.title||'',referenceContext:Boolean(d.referenceContext||d.referenceStyle)};
+  });
+
+  await run('render-pipeline',async()=>{
+    if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-render-smoke-'));
+    try{
+      const source=path.join(dir,'source.mp4');
+      const output=path.join(dir,'final.mp4');
+      await runFfmpeg([
+        '-y','-hide_banner','-loglevel','error',
+        '-f','lavfi','-i','color=c=black:s=320x180:r=30',
+        '-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100',
+        '-t','2','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',source
+      ]);
+      const result=await renderAutotubeVideo({
+        scenes:[{number:1,title:'Preflight',duration:2,mediaType:'video'}],
+        mediaResults:[],
+        aiClips:[{path:source}],
+        narrationAudio:[],
+        musicBuffer:null,
+        onProgress:()=>{},
+        finalOutputPath:output
+      });
+      const validation=await validateRenderedMp4(output);
+      if(!result?.size||!validation?.width)throw new Error('El pipeline de render no produjo un MP4 válido.');
+      return{bytes:result.size,width:validation.width,height:validation.height,fps:validation.fps,audioCodec:validation.audioCodec};
+    }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+  });
+
+  await run('tts',async()=>{
+    const audio=await generateGeminiTts('Prueba breve de narración.','es','Natural y cercana');
+    if(!audio.length)throw new Error('Gemini TTS devolvió audio vacío.');
+    return{provider:'Gemini TTS',bytes:audio.length};
+  });
+
   const failed=Object.entries(checks).filter(([,v])=>!v.ok).map(([k,v])=>({name:k,error:v.error}));
-  return{ok:failed.length===0,checks,failed,notes:{renderSmokePreviouslyValidated:true,renderImageSmokePreviouslyValidated:true,musicGenerationSmokeSkippedToPreventInstanceRestart:true}};
+  return{
+    ok:failed.length===0,
+    checks,
+    failed,
+    notes:{
+      aiVideoGenerationNotRun:true,
+      renderPipelineSmokeTest:'synthetic-2s-no-AI',
+      referenceAnalysisTestedThroughApi:true,
+      outlineGenerationUntouched:true
+    }
+  };
 }
 const referenceMatchJobs=new Map();
 async function executeReferenceMatchTest(){
