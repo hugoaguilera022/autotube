@@ -44,7 +44,8 @@ async function downloadYoutubeReference(url,dir){
     noWarnings:true,
     noCheckCertificates:true,
     restrictFilenames:true,
-    preferFreeFormats:false
+    preferFreeFormats:false,
+    ffmpegLocation:path.dirname(ffmpegPath)
   },{timeout:180000,killSignal:'SIGKILL'});
   const files=await fs.readdir(dir);
   const videoFile=files.find(name=>/^reference\.(mp4|mkv|webm|mov)$/i.test(name));
