@@ -15,6 +15,7 @@ function timeoutForRequest(url, options = {}) {
   if (/generativelanguage\.googleapis\.com\/v1beta\/interactions/i.test(value)
       && /"type"\s*:\s*"video"/i.test(body)) return 75000;
 
+  if (/generativelanguage\.googleapis\.com\/v1beta\/interactions/i.test(value)) return 45000;
   if (/api\.pexels\.com/i.test(value)) return 20000;
   if (/pixabay\.com\/api/i.test(value)) return 20000;
 
@@ -151,6 +152,10 @@ global.fetch = async function patchedFetch(url, options = {}) {
     if (isYoutubeUnderstanding && (abortedByUs || /429|rate.?limit|timeout/i.test(String(err?.message || err)))) {
       console.warn('Gemini YouTube understanding timed out/rate-limited; using lightweight reference fallback.');
       return youtubeAnalysisFallbackResponse();
+    }
+    if (abortedByUs && /generativelanguage\.googleapis\.com\/v1beta\/interactions/i.test(value)) {
+      console.warn('Gemini interaction timed out; continuing with local fallback.');
+      return new Response('{}', { status: 504, headers: { 'Content-Type': 'application/json' } });
     }
     if (abortedByUs && /generativelanguage\.googleapis\.com/i.test(value)) {
       throw new Error('Gemini TTS 429: AutoTube Gemini TTS request timed out after 60 seconds; fallback requested.');
