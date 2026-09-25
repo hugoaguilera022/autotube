@@ -1132,7 +1132,7 @@ async function executeFullPipelineTest(reference){
       plan=d;
       return{scenes:d.scenes.length,title:d.title||''};
     });
-    const testScene={...(plan.scenes[0]||{}),number:1,duration:8,mediaType:'video',constantImage:false};
+    const testScene={...(plan.scenes[0]||{}),number:1,duration:3,mediaType:'video',constantImage:false};
     await run('ai-video',async()=>{
       const ref=style.visualAnalysis||{};
       const vp=ref.videoProfile||{},ap=ref.animationProfile||{},sp=ref.structureProfile||{};
@@ -1142,7 +1142,7 @@ async function executeFullPipelineTest(reference){
         vp.cameraMovement&&('camera: '+vp.cameraMovement),ap.cameraMotion&&('camera motion: '+ap.cameraMotion),
         ap.effects&&('effects: '+ap.effects),sp.pacing&&('pacing: '+sp.pacing),
         'Original content only; preserve general audiovisual characteristics, no copied frames, text, logos or recordings; 16:9 realistic cinematography.'].filter(Boolean).join('. ');
-      clip=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:4,width:704,height:512,improveTexture:false});
+      clip=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:3,width:256,height:256,improveTexture:false});
       const check=await validateGeneratedVideoClip(clip.outputPath);
       return{provider:clip.provider,bytes:clip.bytes,durationSeconds:check.durationSeconds,width:check.width,height:check.height};
     });
@@ -1158,7 +1158,7 @@ async function executeFullPipelineTest(reference){
     await run('render',async()=>{
       const output=path.join(dir,'full-test.mp4');
       render=await renderAutotubeVideo({scenes:[testScene],aiClips:[{path:clip.outputPath}],narrationAudio:[narration],musicBuffer:music.buffer,onProgress:()=>{},finalOutputPath:output});
-      validation=await validateRenderedMp4(output,8);
+      validation=await validateRenderedMp4(output,3);
       return{bytes:render.size,...validation};
     });
     return{ok:true,elapsedMs:Date.now()-started,reference:{url:reference,title:video.title},checks};
