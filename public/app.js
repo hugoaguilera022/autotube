@@ -112,11 +112,19 @@ if(referenceValue){
 }
 const topic=typedTopic||referenceAnalysis?.video?.title||'';
 if(!topic)throw new Error('No se pudo obtener el tema de la referencia de YouTube.');
-const d=await apiJson('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis,referenceStyle,referenceTopic:referenceAnalysis?.video?.title||''})},'la generación de la estructura');
-currentVideoPlan={...d,topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis,referenceStyle};
+const profileSeconds=Number(referenceAnalysis?.referenceStyle?.visualAnalysis?.videoProfile?.durationSeconds||0);
+const isoDuration=String(referenceAnalysis?.video?.duration||'');
+const isoMatch=isoDuration.match(/^PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+(?:\\.\\d+)?)S)?$/i);
+const isoSeconds=isoMatch?Number(isoMatch[1]||0)*3600+Number(isoMatch[2]||0)*60+Number(isoMatch[3]||0):0;
+const analyzedSeconds=profileSeconds||isoSeconds;
+const analyzedMinutes=analyzedSeconds>0?Math.max(1,Math.ceil(analyzedSeconds/60)):0;
+const productionDuration=referenceValue&&analyzedMinutes?String(analyzedMinutes):String($('#duration').value);
+if(referenceValue&&analyzedMinutes)$('#duration').value=productionDuration;
+const d=await apiJson('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:productionDuration,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis,referenceStyle,referenceTopic:referenceAnalysis?.video?.title||''})},'la generación de la estructura');
+currentVideoPlan={...d,topic,duration:productionDuration,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis,referenceStyle,referenceDurationSeconds:analyzedSeconds};
 preview.innerHTML='<div style="text-align:left"><span class="pill">'+(d.demo?'DEMO':'IA GENERATIVA')+'</span><h3 style="font-size:21px;margin:14px 0 7px">'+escapeHtml(d.title||'Nuevo vídeo')+'</h3><p class="muted">'+escapeHtml(d.hook||d.note||'Estructura preparada.')+'</p><ol style="color:#cbd0db;line-height:1.8">'+(d.outline||[]).map(x=>'<li>'+escapeHtml(x)+'</li>').join('')+'</ol><button class="primary" id="continueProductionBtn">Continuar a producción →</button></div>';
 state.textContent='Listo';$('#continueProductionBtn').onclick=()=>openProduction(d);}catch(e){state.textContent='Error';preview.innerHTML='<div class="empty"><div class="empty-icon">!</div><b>No se pudo generar</b><p>'+escapeHtml(e.message)+'</p></div>'}finally{btn.disabled=false;btn.textContent='Generar estructura con IA'}};
-function openProduction(plan){currentVideoPlan={...currentVideoPlan,...plan};$('#productionTitle').textContent=plan.title||'Nuevo vídeo';$('#productionMeta').textContent=(plan.outline?.length||0)+' bloques de contenido · '+(plan.duration||$('#duration').value)+' min · '+(plan.language||$('#language').value);$('#productionState').textContent='Listo para producir';$('#scenesList').innerHTML='<div class="card empty"><div class="empty-icon">🎬</div><b>Plan preparado</b><p>Pulsa “Generar escenas con IA” para crear el montaje escena por escena.</p></div>';go('production')}
+function openProduction(plan){currentVideoPlan={...currentVideoPlan,...plan};$('#productionTitle').textContent=plan.title||'Nuevo vídeo';const metaDuration=currentVideoPlan?.referenceDurationSeconds?Math.ceil(Number(currentVideoPlan.referenceDurationSeconds)/60):(plan.duration||$('#duration').value);$('#productionMeta').textContent=(plan.outline?.length||0)+' bloques de contenido · '+metaDuration+' min · '+(plan.language||$('#language').value);$('#productionState').textContent='Listo para producir';$('#scenesList').innerHTML='<div class="card empty"><div class="empty-icon">🎬</div><b>Plan preparado</b><p>Pulsa “Generar escenas con IA” para crear el montaje escena por escena.</p></div>';go('production')}
 $('#backToCreate').onclick=()=>go('create');
 $('#generateMusicBtn').onclick=generateMusic;
 $('#findMediaBtn').onclick=loadSceneMedia;
@@ -133,7 +141,7 @@ async function generateMusic(){
       topic:currentVideoPlan.topic,
       mood:currentVideoPlan.musicMood||'instrumental original',
       topic:currentVideoPlan.topic||'',
-      audioProfile:currentVideoPlan.referenceStyle?.visualAnalysis?.audioProfile||{},
+      audioProfile:currentVideoPlan.referenceStyle?.visualAnalysis?.audioProfile||currentVideoPlan.referenceAudioProfile||{},
       durationSeconds:Math.min(300,Math.max(30,Number(currentVideoPlan.duration||8)*60))
     })});
     if(!r.ok){let d={};try{d=await r.json()}catch{}throw new Error(d.error||'No se pudo generar la música.');}
