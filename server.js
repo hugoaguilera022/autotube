@@ -1476,7 +1476,7 @@ async function executeUrlToVideo(reference,jobId){
     if(job)job.progress=30;
 
     const resultsByScene=[];
-    const aiClips=[];
+    const aiClips=new Array(finalScenes.length).fill(null);
     for(let i=0;i<finalScenes.length;i++){
       const scene=finalScenes[i];
       const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
@@ -1512,7 +1512,7 @@ async function executeUrlToVideo(reference,jobId){
           dir,
           {durationSeconds:3,width:512,height:288,improveTexture:false}
         );
-        aiClips.push({path:generated.outputPath,mediaType:'video'});
+        aiClips[i]={path:generated.outputPath,mediaType:'video'};
         resultsByScene.push({number:scene.number,media:[],mediaType:'video'});
       }
       if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
