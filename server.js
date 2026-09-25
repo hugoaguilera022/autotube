@@ -704,7 +704,7 @@ async function generateMusicBuffer({topic,mood,audioProfile,durationSeconds}){
     try{
       generated=await Promise.race([
         generateLyriaMusic(prompt),
-        new Promise((_,reject)=>setTimeout(()=>reject(new Error('Lyria music timeout')),12000))
+        new Promise((_,reject)=>setTimeout(()=>reject(new Error('Lyria music timeout')),30000))
       ]);
     }catch(err){console.warn('Lyria fallback:',err.message)}
     if(!generated)generated=await generateFallbackMusic(prompt,duration,dir,profile);
@@ -1519,6 +1519,53 @@ async function executeUrlToVideo(reference,jobId){
     }
     if(job)job.progress=30;
 
+    const referenceAudio=style?.visualAnalysis?.audioProfile||{};
+    const wantsVoice=Boolean(referenceAudio.hasSpeech);
+    const wantsMusic=Boolean(referenceAudio.hasMusic);
+    const narrationAudio=[];
+    let musicBuffer=null;
+
+    // Audio is generated only when the reference actually contains that layer.
+    // Voice-only references never receive an invented music bed; music-only
+    // references never receive invented narration; mixed references receive both.
+    if(wantsVoice){
+      for(let i=0;i<finalScenes.length;i++){
+        let narration=String(finalScenes[i]?.narration||'').trim();
+        if(!narration){
+          const script=await callGemini({
+            system:'Eres guionista de YouTube. Escribe una narración ORIGINAL, factual y directamente relacionada con el tema de la referencia. No copies frases del vídeo de referencia.',
+            user:JSON.stringify({
+              topic:referenceTitle,
+              scene:finalScenes[i]?.title||'',
+              visualPrompt:finalScenes[i]?.visualPrompt||'',
+              durationSeconds:finalScenes[i]?.duration||8,
+              language:'es',
+              audioProfile:referenceAudio
+            }),
+            temperature:0.5,maxOutputTokens:350,json:false
+          });
+          narration=String(script||'').trim();
+        }
+        if(!narration)throw new Error('La referencia contiene voz, pero no se pudo crear la narración original de la escena '+String(finalScenes[i].number)+'.');
+        narrationAudio[i]=await generateNarrationTts(
+          narration,
+          String(referenceAudio.language||'es'),
+          String(referenceAudio.voiceStyle||'Natural y cercana'),
+          referenceAudio
+        );
+      }
+    }
+
+    if(wantsMusic){
+      const totalDuration=finalScenes.reduce((n,s)=>n+Math.max(4,Math.min(20,Number(s.duration)||8)),0);
+      musicBuffer=await generateMusicBuffer({
+        topic:referenceTitle,
+        mood:String(referenceAudio.musicMood||'original instrumental'),
+        audioProfile:referenceAudio,
+        durationSeconds:Math.max(4,totalDuration)
+      });
+    }
+
     const resultsByScene=[];
     const aiClips=new Array(finalScenes.length).fill(null);
     for(let i=0;i<finalScenes.length;i++){
@@ -1587,8 +1634,8 @@ async function executeUrlToVideo(reference,jobId){
       scenes:finalScenes,
       mediaResults:resultsByScene,
       aiClips,
-      narrationAudio:[],
-      musicBuffer:null,
+      narrationAudio,
+      musicBuffer:musicBuffer?.buffer||null,
       onProgress:p=>{if(job)job.progress=60+Math.round(Math.max(0,Math.min(100,Number(p)||0))*0.38)},
       finalOutputPath:outputPath
     });
