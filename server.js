@@ -637,36 +637,76 @@ app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=
 async function downloadAudioBuffer(source,file){if(typeof source==='string'){await fs.copyFile(source,file)}else{await fs.writeFile(file,source)}const stat=await fs.stat(file);if(!stat.size)throw new Error('El audio generado está vacío.');}
 async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationAudio=[],musicBuffer=null,onProgress=()=>{},finalOutputPath}){
   if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
+  if(!Array.isArray(scenes)||!scenes.length)throw new Error('No hay escenas para renderizar.');
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-'));
   try{
     const clips=[];
-    const usableScenes=scenes.map((scene,i)=>({scene,found:mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i]||null,aiClip:aiClips.length?aiClips[i%aiClips.length]:null,audio:narrationAudio[i]||null})).filter(x=>x.aiClip?.path||x.aiClip?.buffer||x.found?.media?.find(m=>m.downloadUrl)?.downloadUrl);
-    if(!usableScenes.length)throw new Error('No hay clips de vídeo disponibles para las escenas.');
-    const total=usableScenes.length;
+    const sceneInputs=scenes.map((scene,i)=>{
+      const found=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i]||null;
+      const aiClip=aiClips[i]||null; // Nunca reutilizar silenciosamente el clip de otra escena.
+      const media=found?.media?.find(m=>m?.downloadUrl)||null;
+      return{scene,found,aiClip,media,audio:narrationAudio[i]||null};
+    });
+    const missing=sceneInputs.filter(x=>!x.aiClip?.path&&!x.aiClip?.buffer&&!x.media?.downloadUrl);
+    if(missing.length)throw new Error('Faltan visuales para las escenas: '+missing.map(x=>String(x.scene.number)).join(', ')+'. Genera los vídeos IA de esas escenas o busca visuales de respaldo.');
+    const total=sceneInputs.length;
     for(let i=0;i<total;i++){
-      const{scene,found,aiClip,audio}=usableScenes[i],media=found?.media?.find(m=>m.downloadUrl)||null,input=path.join(dir,'in-'+i+'.mp4'),output=path.join(dir,'scene-'+i+'.mp4'),duration=Math.max(2,Math.min(180,Number(scene.duration)||8));
-      if(aiClip?.path){await fs.copyFile(aiClip.path,input)}else if(aiClip?.buffer){await fs.writeFile(input,aiClip.buffer)}else{await downloadToFile(media.downloadUrl,input)}
+      const{scene,found,aiClip,media,audio}=sceneInputs[i];
+      const input=path.join(dir,'in-'+i+'.mp4');
+      const output=path.join(dir,'scene-'+i+'.mp4');
+      const duration=Math.max(2,Math.min(180,Number(scene.duration)||8));
+      if(aiClip?.path)await fs.copyFile(aiClip.path,input);
+      else if(aiClip?.buffer)await fs.writeFile(input,aiClip.buffer);
+      else await downloadToFile(media.downloadUrl,input);
       let audioInput=null;
-      if(audio){audioInput=path.join(dir,'voice-'+i+'.bin');await downloadAudioBuffer(audio,audioInput);}
-      const args=['-y'];if(String(media?.mediaType||found?.mediaType||scene.mediaType||'video').toLowerCase()==='image')args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
+      if(audio){audioInput=path.join(dir,'voice-'+i+'.wav');await downloadAudioBuffer(audio,audioInput);}
+      const isImage=String(aiClip?.mediaType||media?.mediaType||found?.mediaType||scene.mediaType||'video').toLowerCase()==='image';
+      const args=['-y','-hide_banner','-loglevel','error'];
+      if(isImage)args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
-      args.push('-t',String(duration),'-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p,fps=30','-map','0:v:0','-map','1:a:0','-c:a','aac','-b:a','192k','-af','apad');
-      args.push('-c:v','libx264','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1','-avoid_negative_ts','make_zero',output);
+      args.push('-t',String(duration),
+        '-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p,fps=30',
+        '-map','0:v:0','-map','1:a:0',
+        '-c:v','libx264','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1',
+        '-c:a','aac','-b:a','192k','-ar','44100','-ac','2','-af','apad',
+        '-avoid_negative_ts','make_zero',output);
       await runFfmpeg(args);
-      const stat=await fs.stat(output);if(!stat.size)throw new Error('FFmpeg creó una escena vacía.');clips.push(output);onProgress(Math.min(80,Math.round(((i+1)/total)*70)+5));
+      const stat=await fs.stat(output);
+      if(!stat.size)throw new Error('FFmpeg creó una escena vacía (escena '+scene.number+').');
+      clips.push(output);
+      onProgress(Math.min(78,Math.round(((i+1)/total)*70)+5));
     }
-    const list=path.join(dir,'concat.txt');await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
+    const list=path.join(dir,'concat.txt');
+    await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
     const videoOnly=path.join(dir,'video-only.mp4');
-    try{await runFfmpeg(['-y','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',videoOnly]);}
-    catch(copyErr){console.warn('Concat copy falló; usando recodificación final:',copyErr.message);await runFfmpeg(['-y','-f','concat','-safe','0','-i',list,'-c:v','libx264','-c:a','aac','-b:a','192k','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',videoOnly]);}
+    try{
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',videoOnly]);
+    }catch(copyErr){
+      console.warn('Concat copy falló; usando recodificación final:',copyErr.message);
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c:v','libx264','-c:a','aac','-ar','44100','-ac','2','-b:a','192k','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',videoOnly]);
+    }
     let out=videoOnly;
     if(musicBuffer){
-      const musicFile=path.join(dir,'music.bin');await downloadAudioBuffer(musicBuffer,musicFile);out=path.join(dir,'autotube-final.mp4');
-      await runFfmpeg(['-y','-i',videoOnly,'-stream_loop','-1','-i',musicFile,'-filter_complex','[1:a]volume=0.18,aresample=async=1[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]','-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
+      const musicFile=path.join(dir,'music.bin');
+      await downloadAudioBuffer(musicBuffer,musicFile);
+      out=path.join(dir,'autotube-final.mp4');
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error',
+        '-i',videoOnly,'-stream_loop','-1','-i',musicFile,
+        '-filter_complex','[0:a]aresample=44100,acompressor=threshold=0.08:ratio=3:attack=20:release=250[voice];[1:a]aresample=44100,volume=0.14[music];[music][voice]sidechaincompress=threshold=0.05:ratio=6:attack=20:release=300:makeup=1:mix=1[ducked];[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95,loudnorm=I=-16:LRA=11:TP=-1.5[a]',
+        '-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-ar','44100','-ac','2','-b:a','192k','-movflags','+faststart',out]);
     }
-    const stat=await fs.stat(out);if(!stat.size)throw new Error('El MP4 final está vacío.');
-    if(finalOutputPath){await fs.copyFile(out,finalOutputPath);const finalStat=await fs.stat(finalOutputPath);if(!finalStat.size)throw new Error('No se pudo guardar el MP4 final.');onProgress(100);return{outputPath:finalOutputPath,size:finalStat.size,duration:usableScenes.reduce((n,x)=>n+(Number(x.scene.duration)||8),0)}}
-    onProgress(100);return{outputPath:out,size:stat.size,duration:usableScenes.reduce((n,x)=>n+(Number(x.scene.duration)||8),0)}
+    const stat=await fs.stat(out);
+    if(!stat.size)throw new Error('El MP4 final está vacío.');
+    const duration=sceneInputs.reduce((n,x)=>n+Math.max(2,Math.min(180,Number(x.scene.duration)||8)),0);
+    if(finalOutputPath){
+      await fs.copyFile(out,finalOutputPath);
+      const finalStat=await fs.stat(finalOutputPath);
+      if(!finalStat.size)throw new Error('No se pudo guardar el MP4 final.');
+      onProgress(100);
+      return{outputPath:finalOutputPath,size:finalStat.size,duration};
+    }
+    onProgress(100);
+    return{outputPath:out,size:stat.size,duration};
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
 }
 app.post('/api/render',upload.fields([{name:'narration',maxCount:12},{name:'music',maxCount:1},{name:'aiClips',maxCount:12}]),async(req,res)=>{try{let scenes=[];let mediaResults=[];try{scenes=JSON.parse(String(req.body?.scenes||'[]'));mediaResults=JSON.parse(String(req.body?.mediaResults||'[]'));}catch{throw new Error('Los datos de producción no tienen un formato válido.');}if(!scenes.length||(!mediaResults.length&&!Array.isArray(req.files?.aiClips)))return res.status(400).json({error:'Genera los vídeos IA de las escenas o busca visuales de respaldo antes de renderizar.'});const jobId='render_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex'),outputPath=path.join(renderJobDir,jobId+'.mp4');renderJobs.set(jobId,{status:'processing',progress:1,createdAt:Date.now(),outputPath,error:null});res.status(202).json({ok:true,jobId,status:'processing'});(async()=>{const job=renderJobs.get(jobId);try{const narrationFiles=Array.isArray(req.files?.narration)?req.files.narration:[],musicFile=Array.isArray(req.files?.music)?req.files.music[0]:null,aiClipFiles=Array.isArray(req.files?.aiClips)?req.files.aiClips:[];const result=await renderAutotubeVideo({scenes,mediaResults,aiClips:aiClipFiles,narrationAudio:narrationFiles.map(x=>x.path),musicBuffer:musicFile?.path||null,onProgress:p=>{if(job)job.progress=p},finalOutputPath:outputPath});const validation=await validateRenderedMp4(outputPath);if(job){job.validation=validation;job.status='done';job.progress=100;job.size=result.size;job.finishedAt=Date.now()}console.log('Render completed:',jobId,'size=',result.size)}catch(err){console.error('Render error:',jobId,err);if(job){job.status='error';job.progress=0;job.error=err.message||'No se pudo renderizar el vídeo.'}}finally{for(const f of [...(Array.isArray(req.files?.narration)?req.files.narration:[]),...(Array.isArray(req.files?.music)?req.files.music:[]),...(Array.isArray(req.files?.aiClips)?req.files.aiClips:[])])await fs.rm(f.path,{force:true}).catch(()=>{});}})()}catch(err){console.error('Render start error:',err);if(!res.headersSent)res.status(500).json({error:err.message||'No se pudo iniciar el render.'})}});
