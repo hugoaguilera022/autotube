@@ -1347,6 +1347,120 @@ async function executeFullPipelineTest(reference){
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
 }
+const urlVideoJobs=new Map();
+
+async function executeUrlToVideo(reference,jobId){
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-'));
+  const job=urlVideoJobs.get(jobId);
+  const started=Date.now();
+  try{
+    const video=await getReferenceVideo(reference);
+    const style=await analyzeYoutubeReferenceMedia(reference,video);
+    const referenceTitle=String(video?.title||'Contenido original').slice(0,300);
+    const visualReferenceAnalysis=style?.visualAnalysis||{};
+    const audioProfile=visualReferenceAnalysis?.audioProfile&&typeof visualReferenceAnalysis.audioProfile==='object'?{...visualReferenceAnalysis.audioProfile}:{};
+
+    const outlineRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({topic:referenceTitle,reference,referenceTopic:referenceTitle,
+        referenceData:{title:referenceTitle,videoId:video?.videoId||'',channelTitle:video?.channelTitle||''},
+        visualReferenceAnalysis,referenceStyle:style,language:'es',duration:'1'})
+    });
+    const outline=await outlineRes.json();
+    if(!outlineRes.ok)throw new Error(outline?.error||'No se pudo generar la estructura.');
+
+    const planRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({topic:referenceTitle,reference,referenceTopic:referenceTitle,
+        referenceData:{title:referenceTitle,videoId:video?.videoId||'',channelTitle:video?.channelTitle||''},
+        visualReferenceAnalysis,referenceStyle:style,language:'es',duration:'1',
+        title:outline?.title||referenceTitle,outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]})
+    });
+    const plan=await planRes.json();
+    if(!planRes.ok||!Array.isArray(plan?.scenes)||!plan.scenes.length)throw new Error(plan?.error||'Plan de producción inválido.');
+
+    const scenes=plan.scenes.map((s,i)=>({...s,number:i+1,duration:Math.max(4,Math.min(60,Number(s.duration)||8)),mediaType:'video',constantImage:false}));
+    if(job)job.progress=20;
+
+    const mediaResults=[];
+    const narrationAudio=[];
+    for(let i=0;i<scenes.length;i++){
+      const scene=scenes[i];
+      const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
+      let results=await searchPexelsPhotos(query);
+      if(!results.length)results=await searchPixabayImages(query);
+      const media=results.find(x=>x?.downloadUrl);
+      if(!media)throw new Error('No se encontró visual para la escena '+scene.number+'.');
+      mediaResults.push({number:scene.number,media:[{...media,mediaType:'video'}],mediaType:'video'});
+      const narration=await generateNarrationTts(
+        scene.narration||('Contenido original sobre '+referenceTitle+'.'),
+        'es',audioProfile.voiceStyle||'Natural y cercana',audioProfile
+      );
+      narrationAudio.push(narration);
+      if(job)job.progress=20+Math.round(((i+1)/scenes.length)*45);
+    }
+
+    const totalDuration=scenes.reduce((n,s)=>n+s.duration,0);
+    const music=await generateMusicBuffer({
+      topic:referenceTitle,
+      mood:audioProfile.musicMood||audioProfile.energy||'instrumental original',
+      audioProfile,durationSeconds:totalDuration
+    });
+    if(job)job.progress=72;
+
+    const outputPath=path.join(dir,'autotube-final.mp4');
+    const result=await renderAutotubeVideo({
+      scenes,mediaResults,narrationAudio,musicBuffer:music.buffer,
+      onProgress:p=>{if(job)job.progress=Math.min(99,72+Math.round(p*0.28))},
+      finalOutputPath:outputPath
+    });
+    const validation=await validateRenderedMp4(outputPath,totalDuration);
+    const finalPath=path.join(renderJobDir,jobId+'.mp4');
+    await fs.copyFile(outputPath,finalPath);
+    if(job){
+      job.status='done';job.progress=100;job.outputPath=finalPath;job.size=result.size;
+      job.validation=validation;job.referenceTitle=referenceTitle;job.sceneCount=scenes.length;
+      job.durationSeconds=validation.durationSeconds;job.finishedAt=Date.now();
+    }
+    return{ok:true,jobId,reference:{url:reference,title:referenceTitle},
+      scenes:scenes.length,durationSeconds:validation.durationSeconds,size:result.size,
+      width:validation.width,height:validation.height,fps:validation.fps,audioCodec:validation.audioCodec,
+      elapsedMs:Date.now()-started};
+  }catch(err){
+    if(job){job.status='error';job.progress=0;job.error=err.message||String(err);job.finishedAt=Date.now();}
+    throw err;
+  }finally{
+    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
+}
+
+app.post('/api/url-to-video',async(req,res)=>{
+  const reference=String(req.body?.reference||'').trim();
+  if(!reference)return res.status(400).json({ok:false,error:'Añade una URL de YouTube en reference.'});
+  const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
+  if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)});
+  const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
+  urlVideoJobs.set(jobId,job);
+  res.status(202).json({ok:true,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
+  executeUrlToVideo(reference,jobId).catch(err=>console.error('URL-to-video error:',jobId,err));
+});
+app.get('/api/url-to-video/:jobId',async(req,res)=>{
+  const job=urlVideoJobs.get(String(req.params.jobId||''));
+  if(!job)return res.status(410).json({ok:false,status:'restart',error:'El trabajo se perdió porque Render reinició la instancia.'});
+  if(job.status==='processing')return res.status(202).json({ok:false,status:'processing',jobId:job.id,progress:job.progress});
+  if(job.status==='error')return res.status(500).json({ok:false,status:'error',jobId:job.id,error:job.error});
+  res.json({ok:true,status:'done',jobId:job.id,progress:100,reference:job.reference,referenceTitle:job.referenceTitle,
+    sceneCount:job.sceneCount,durationSeconds:job.durationSeconds,size:job.size,validation:job.validation,
+    downloadUrl:'/api/url-to-video/'+encodeURIComponent(job.id)+'/download'});
+});
+app.get('/api/url-to-video/:jobId/download',async(req,res)=>{
+  const job=urlVideoJobs.get(String(req.params.jobId||''));
+  if(!job||job.status!=='done')return res.status(409).json({ok:false,error:'El vídeo todavía no está listo.'});
+  try{await fs.stat(job.outputPath);res.download(job.outputPath,'autotube-reference-matched.mp4')}
+  catch{res.status(404).json({ok:false,error:'El MP4 ya no está disponible. Genera un nuevo job.'})}
+});
+
 app.get('/api/full-pipeline-test',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'Añade ?reference=https://www.youtube.com/watch?v=...'});
