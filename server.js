@@ -956,7 +956,7 @@ async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   if(!url)throw new Error('LTX/ZeroGPU terminó la generación pero no devolvió el vídeo.');
   const response=await fetch(String(url));
   if(!response.ok)throw new Error('LTX/ZeroGPU no pudo descargar el vídeo generado ('+response.status+').');
-  const outputPath=path.join(dir,'ltx-generated.mp4');
+  const outputPath=path.join(dir,'ltx-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
   await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
   const stat=await fs.stat(outputPath);
   if(!stat.size)throw new Error('LTX/ZeroGPU devolvió un vídeo vacío.');
