@@ -1133,18 +1133,18 @@ async function executeFullPipelineTest(reference){
       return{scenes:d.scenes.length,title:d.title||''};
     });
     const testScene={...(plan.scenes[0]||{}),number:1,duration:3,mediaType:'video',constantImage:false};
-    await run('ai-video',async()=>{
+    await run('visual-source',async()=>{
       const ref=style.visualAnalysis||{};
-      const vp=ref.videoProfile||{},ap=ref.animationProfile||{},sp=ref.structureProfile||{};
-      const prompt=[testScene.visualPrompt||testScene.title||video.title,
-        vp.visualStyle&&('visual style: '+vp.visualStyle),vp.composition&&('composition: '+vp.composition),
-        vp.palette&&('palette: '+vp.palette),vp.lighting&&('lighting: '+vp.lighting),
-        vp.cameraMovement&&('camera: '+vp.cameraMovement),ap.cameraMotion&&('camera motion: '+ap.cameraMotion),
-        ap.effects&&('effects: '+ap.effects),sp.pacing&&('pacing: '+sp.pacing),
-        'Original content only; preserve general audiovisual characteristics, no copied frames, text, logos or recordings; 16:9 realistic cinematography.'].filter(Boolean).join('. ');
-      clip=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:3,width:256,height:256,improveTexture:false});
-      const check=await validateGeneratedVideoClip(clip.outputPath);
-      return{provider:clip.provider,bytes:clip.bytes,durationSeconds:check.durationSeconds,width:check.width,height:check.height};
+      const query=String(testScene.searchQuery||testScene.title||video.title||'').trim().slice(0,120);
+      const p=await searchPexels(query);
+      const q=p.length?p:await searchPixabay(query);
+      const media=q.find(x=>x?.downloadUrl);
+      if(!media)throw new Error('No se encontró un visual de respaldo para la referencia.');
+      const sourcePath=path.join(dir,'reference-derived-source.mp4');
+      await downloadToFile(media.downloadUrl,sourcePath);
+      const check=await validateGeneratedVideoClip(sourcePath);
+      clip={outputPath:sourcePath,bytes:(await fs.stat(sourcePath)).size,provider:media.provider,status:'complete'};
+      return{provider:media.provider,bytes:clip.bytes,durationSeconds:check.durationSeconds,width:check.width,height:check.height,query};
     });
     await run('tts',async()=>{
       const ap=style.visualAnalysis?.audioProfile||{};
