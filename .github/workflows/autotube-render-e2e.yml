@@ -1,0 +1,71 @@
+name: AutoTube Render E2E
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Wait for Render deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..60}; do
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 15 https://autotube-hfeu.onrender.com/api/health || true)
+            if [ "$code" = "200" ]; then
+              cat /tmp/health.json
+              echo
+              exit 0
+            fi
+            echo "Waiting for Render... HTTP $code"
+            sleep 10
+          done
+          echo "Render did not become healthy in time"
+          exit 1
+
+      - name: Start or reuse AutoTube preflight Job
+        id: start
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(curl -sS --max-time 30 https://autotube-hfeu.onrender.com/api/preflight)
+          echo "$response"
+          job_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("jobId", ""))')
+          if [ -z "$job_id" ]; then
+            echo "Preflight did not return jobId"
+            exit 1
+          fi
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+
+      - name: Poll Job until complete
+        shell: bash
+        env:
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+        run: |
+          set -euo pipefail
+          for i in {1..360}; do
+            response=$(curl -sS --max-time 30 "https://autotube-hfeu.onrender.com/api/preflight/$JOB_ID")
+            echo "--- poll $i ---"
+            echo "$response"
+            status=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))')
+            if [ "$status" = "done" ]; then
+              ok=$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", False)).lower())')
+              if [ "$ok" = "true" ]; then
+                echo "AUTOTUBE_E2E_TEST_PASS"
+                exit 0
+              fi
+              echo "AUTOTUBE_E2E_TEST_FAIL"
+              exit 1
+            fi
+            if [ "$status" = "failed" ] || [ "$status" = "restart" ]; then
+              echo "AUTOTUBE_E2E_TEST_FAIL status=$status"
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "AUTOTUBE_E2E_TEST_FAIL timeout"
+          exit 1
