@@ -62,7 +62,7 @@ jobs:
                 echo "AUTOTUBE_REAL_URL_TO_MP4_PASS"
                 curl -fL --retry 3 --max-time 1200 "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID/download" -o autotube-final.mp4
                 test -s autotube-final.mp4
-                ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,sample_rate,channels -of json autotube-final.mp4 | tee autotube-ffprobe.json
+                sudo apt-get update -qq\n                sudo apt-get install -y -qq ffmpeg\n                ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,sample_rate,channels -of json autotube-final.mp4 | tee autotube-ffprobe.json
                 exit 0
               fi
               echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL"; exit 1
