@@ -172,8 +172,8 @@ async function renderAutotubeVideo({scenes,mediaResults,narrationAudio=[],musicB
       if(audio){audioInput=path.join(dir,'voice-'+i+'.bin');await fs.writeFile(audioInput,Buffer.isBuffer(audio)?audio:await fs.readFile(audio));const stat=await fs.stat(audioInput);if(!stat.size)throw new Error('La narración de la escena '+(i+1)+' está vacía.');}
       const args=['-y','-stream_loop','-1','-i',input];
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
-      args.push('-t',String(duration),'-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p,fps=30','-map','0:v:0','-map','1:a:0','-c:a','aac','-b:a','128k','-af','apad');
-      args.push('-c:v','libx264','-preset','ultrafast','-crf','30','-pix_fmt','yuv420p','-threads','1','-avoid_negative_ts','make_zero',output);
+      args.push('-t',String(duration),'-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p,fps=30','-map','0:v:0','-map','1:a:0','-c:a','aac','-b:a','192k','-af','apad');
+      args.push('-c:v','libx264','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1','-avoid_negative_ts','make_zero',output);
       await runFfmpeg(args);
       const stat=await fs.stat(output);if(!stat.size)throw new Error('FFmpeg creó una escena vacía.');clips.push(output);onProgress(Math.min(80,Math.round(((i+1)/total)*70)+5));
     }
@@ -184,7 +184,7 @@ async function renderAutotubeVideo({scenes,mediaResults,narrationAudio=[],musicB
     let out=videoOnly;
     if(musicBuffer){
       const musicFile=path.join(dir,'music.bin');await downloadAudioBuffer(musicBuffer,musicFile);out=path.join(dir,'autotube-final.mp4');
-      await runFfmpeg(['-y','-i',videoOnly,'-stream_loop','-1','-i',musicFile,'-filter_complex','[1:a]volume=0.18,aresample=async=1[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]','-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-b:a','128k','-movflags','+faststart',out]);
+      await runFfmpeg(['-y','-i',videoOnly,'-stream_loop','-1','-i',musicFile,'-filter_complex','[1:a]volume=0.18,aresample=async=1[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]','-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
     }
     const stat=await fs.stat(out);if(!stat.size)throw new Error('El MP4 final está vacío.');
     if(finalOutputPath){await fs.copyFile(out,finalOutputPath);const finalStat=await fs.stat(finalOutputPath);if(!finalStat.size)throw new Error('No se pudo guardar el MP4 final.');onProgress(100);return{outputPath:finalOutputPath,size:finalStat.size,duration:usableScenes.reduce((n,x)=>n+(Number(x.scene.duration)||8),0)}}
