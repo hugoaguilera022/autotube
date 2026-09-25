@@ -20,60 +20,54 @@ jobs:
           set -euo pipefail
           for i in {1..60}; do
             code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 15 https://autotube-hfeu.onrender.com/api/health || true)
-            if [ "$code" = "200" ]; then
-              cat /tmp/health.json
-              echo
-              sleep 180
-              exit 0
-            fi
-            echo "Waiting for Render... HTTP $code"
+            if [ "$code" = "200" ]; then cat /tmp/health.json; exit 0; fi
             sleep 10
           done
-          echo "Render did not become healthy in time"
           exit 1
 
-      - name: Test real URL-to-MP4 pipeline
+      - name: Start exact URL-to-MP4 pipeline
         id: urlvideo
         shell: bash
         run: |
           set -euo pipefail
-          reference='https://www.youtube.com/watch?v=mMggTkdN3Eo'
-          response=$(curl -sS --max-time 30 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "{\"reference\":\"$reference\"}")
+          reference='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+          response=$(curl -fsS --max-time 30 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-mp4' -H 'Content-Type: application/json' --data "{\"reference\":\"$reference\"}")
           echo "$response"
-          job_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("jobId", ""))')
-          if [ -z "$job_id" ]; then echo "URL-to-MP4 did not return jobId"; exit 1; fi
+          job_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])')
           echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
 
-      - name: Poll real URL-to-MP4 job until MP4 is ready
+      - name: Poll until final MP4 is complete and validated
         shell: bash
         env:
           JOB_ID: ${{ steps.urlvideo.outputs.job_id }}
         run: |
           set -euo pipefail
           for i in {1..360}; do
-            response=$(curl -sS --max-time 30 "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID")
-            echo "--- urlvideo poll $i ---"
+            response=$(curl -fsS --max-time 30 "https://autotube-hfeu.onrender.com/api/url-to-mp4/$JOB_ID")
+            echo "--- poll $i ---"
             echo "$response"
-            status=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))')
+            status=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
             if [ "$status" = "done" ]; then
-              ok=$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", False)).lower())')
-              size=$(printf '%s' "$response" | python -c 'import json,sys; print(int(json.load(sys.stdin).get("size", 0) or 0))')
-              if [ "$ok" = "true" ] && [ "$size" -gt 0 ]; then
-                echo "AUTOTUBE_REAL_URL_TO_MP4_PASS"
-                curl -fL --retry 3 --max-time 1200 "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID/download" -o autotube-final.mp4
-                test -s autotube-final.mp4
-                sudo apt-get update -qq
-                sudo apt-get install -y -qq ffmpeg
-                ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,sample_rate,channels -of json autotube-final.mp4 | tee autotube-ffprobe.json
-                exit 0
-              fi
-              echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL"; exit 1
+              python - "$response" <<'PY'
+          import json,sys
+          d=json.loads(sys.argv[1]); s=d["source"]; f=d["final"]
+          assert d["size"] > 0
+          assert abs(float(s["duration"])-float(f["duration"])) <= max(1.0,float(s["duration"])*0.01)
+          assert s["width"] == f["width"] and s["height"] == f["height"]
+          assert bool(s["audioLine"]) == bool(f["audioLine"])
+          print("AUTOTUBE_EXACT_MP4_VALIDATION_PASS")
+          PY
+              curl -fL --retry 3 --max-time 1200 "https://autotube-hfeu.onrender.com/api/url-to-mp4/$JOB_ID/download" -o autotube-final.mp4
+              test -s autotube-final.mp4
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq ffmpeg
+              ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels -of json autotube-final.mp4 | tee autotube-ffprobe.json
+              exit 0
             fi
-            if [ "$status" = "error" ] || [ "$status" = "restart" ]; then echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL status=$status"; exit 1; fi
+            if [ "$status" = "error" ]; then echo "AUTOTUBE_EXACT_MP4_FAIL"; exit 1; fi
             sleep 5
           done
-          echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL timeout"
-          exit 1
+          echo "AUTOTUBE_EXACT_MP4_TIMEOUT"; exit 1
 
       - name: Upload verified MP4
         if: success()
