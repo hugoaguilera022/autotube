@@ -240,20 +240,76 @@ app.post('/api/ai/voice',async(req,res)=>{
   }catch(err){console.error('Gemini TTS error:',err);res.status(502).json({error:err.message||'No se pudo generar la narración.'})}
 });
 
+async function generateLyriaMusic(prompt){
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('Falta GEMINI_API_KEY.');
+  const body={
+    contents:[{parts:[{text:String(prompt||'Instrumental original, no vocals.')}]}],
+    generationConfig:{
+      responseModalities:['AUDIO','TEXT'],
+      responseFormat:{audio:{mimeType:'audio/wav'}}
+    }
+  };
+  const models=['lyria-3.5','lyria-3-clip-preview'];
+  let lastError='';
+  for(const model of models){
+    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-goog-api-key':key},
+      body:JSON.stringify(body)
+    });
+    const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
+    if(r.ok){
+      const part=d?.candidates?.[0]?.content?.parts?.find(p=>p?.inlineData?.data);
+      const data=part?.inlineData?.data;
+      if(data){
+        const mime=part.inlineData.mimeType||'audio/wav';
+        return{buffer:Buffer.from(data,'base64'),mime};
+      }
+      lastError='Lyria no devolvió audio.';
+    }else{
+      lastError='Lyria '+r.status+': '+(d?.error?.message||raw.slice(0,500));
+    }
+    if(r.status!==400&&r.status!==404&&r.status!==429&&r.status<500)break;
+  }
+  throw new Error(lastError||'Lyria no pudo generar la música.');
+}
+
 app.post('/api/ai/music',async(req,res)=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-music-'));
   try{
-    const duration=Math.max(5,Math.min(300,Number(req.body?.durationSeconds)||60));
+    const duration=Math.max(30,Math.min(300,Number(req.body?.durationSeconds)||60));
+    const mood=String(req.body?.mood||'instrumental original').replace(/[\r\n"]/g,' ').slice(0,500);
+    const topic=String(req.body?.topic||'').replace(/[\r\n"]/g,' ').slice(0,300);
+    const audioProfile=req.body?.audioProfile&&typeof req.body.audioProfile==='object'?req.body.audioProfile:{};
+    const prompt=[
+      'Create ORIGINAL instrumental background music for a YouTube video.',
+      'Do not copy or imitate any existing recording, melody, lyrics, artist, or track.',
+      'Use these reference characteristics only as high-level production guidance.',
+      'Topic: '+topic,
+      'Mood: '+mood,
+      'Energy: '+String(audioProfile.energy||''),
+      'Dynamics: '+String(audioProfile.dynamics||''),
+      'Instrumentation: '+String(audioProfile.instrumentation||''),
+      'Voice/music relationship: '+String(audioProfile.audioContinuity||'continuous'),
+      'Estimated BPM: '+String(audioProfile.bpmEstimate||'unknown'),
+      'Instrumental only, no vocals.',
+      'Maintain a coherent continuous bed suitable for narration.'
+    ].join('\n');
+    const generated=await generateLyriaMusic(prompt);
+    const raw=path.join(dir,'generated-audio');
     const output=path.join(dir,'music.wav');
-    const mood=String(req.body?.mood||'ambient').replace(/[\r\n"]/g,' ').slice(0,120);
-    const base=220+(Math.abs([...mood].reduce((n,ch)=>n+ch.charCodeAt(0),0))%180);
-    const f1=base,f2=Math.round(base*1.25),f3=Math.round(base*1.5);
-    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i',`sine=frequency=${f1}:sample_rate=44100:duration=${duration}`,'-f','lavfi','-i',`sine=frequency=${f2}:sample_rate=44100:duration=${duration}`,'-f','lavfi','-i',`sine=frequency=${f3}:sample_rate=44100:duration=${duration}`,'-filter_complex','[0:a]volume=0.08[a0];[1:a]volume=0.045[a1];[2:a]volume=0.025[a2];[a0][a1][a2]amix=inputs=3:duration=longest,aresample=44100,afade=t=in:st=0:d=3,afade=t=out:st='+(Math.max(3,duration-3))+':d=3,apad[a]','-map','[a]','-t',String(duration),'-ac','2','-ar','44100','-c:a','pcm_s16le',output]);
+    await fs.writeFile(raw,generated.buffer);
+    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-stream_loop','-1','-i',raw,'-t',String(duration),'-ar','44100','-ac','2','-c:a','pcm_s16le','-af','afade=t=in:st=0:d=3,afade=t=out:st='+(Math.max(3,duration-3))+':d=3',output]);
     const audio=await fs.readFile(output);
     if(!audio.length)throw new Error('La música generada está vacía.');
     res.set('Content-Type','audio/wav');res.set('Content-Length',String(audio.length));res.send(audio);
-  }catch(err){console.error('Music generation error:',err);res.status(502).json({error:err.message||'No se pudo generar la música.'})}
-  finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+  }catch(err){
+    console.error('Music generation error:',err);
+    res.status(502).json({error:err.message||'No se pudo generar la música con Lyria.'});
+  }finally{
+    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
 });
 
 async function searchPexels(query){if(!process.env.PEXELS_API_KEY)return[];const r=await fetch('https://api.pexels.com/v1/videos/search?'+new URLSearchParams({query,orientation:'landscape',size:'medium',locale:'es-ES',per_page:'6'}),{headers:{Authorization:process.env.PEXELS_API_KEY}});if(!r.ok)throw new Error('Pexels API '+r.status);const d=await r.json();return(d.videos||[]).map(v=>({provider:'Pexels',id:v.id,title:'Vídeo Pexels',duration:v.duration,thumbnail:v.image,url:v.url,downloadUrl:(v.video_files||[]).filter(x=>x.link).sort((a,b)=>{const sa=(a.width||0)<=1280?0:1,sb=(b.width||0)<=1280?0:1;if(sa!==sb)return sa-sb;return Math.abs((a.width||0)-1920)-Math.abs((b.width||0)-1920)})[0]?.link||''})).filter(x=>x.downloadUrl)}
