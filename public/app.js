@@ -210,33 +210,45 @@ async function generateAiSceneClips(){
   const scenes=currentVideoPlan?.scenes||[];
   if(!scenes.length)return alert('Primero genera las escenas.');
   const btn=$('#generateAiVideoBtn'),state=$('#mediaState');
-  btn.disabled=true;btn.textContent='Generando vídeos IA…';state.textContent='Conectando con Hugging Face ZeroGPU';
+  btn.disabled=true;btn.textContent='Generando vídeos IA…';state.textContent='Conectando con Hugging Face ZeroGPU optimizado';
   try{
     const mod=await import('https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js');
     const Client=mod.Client;
-    const client=await Client.connect('Lightricks/ltx-video-distilled');
+    const space='DeepRat/LTX-Video-ZeroGPU-Optimized';
+    const client=await Client.connect(space);
+    // ZeroGPU tiene cuota diaria gratuita. Generamos un conjunto compacto de clips
+    // de 2 s en resolución de trabajo 512x704 y el render los reutiliza por escenas.
+    // Así evitamos el consumo excesivo del Space LTX xlarge anterior.
+    const clipCount=Math.min(8,Math.max(1,scenes.length));
     const clips=[];
-    for(let i=0;i<scenes.length;i++){
+    for(let i=0;i<clipCount;i++){
       const scene=scenes[i];
-      state.textContent='Generando vídeo IA '+(i+1)+' de '+scenes.length+'…';
-      const prompt=[scene.visualPrompt||scene.title||'Cinematic scene', 'Original AI video, realistic high-quality cinematography, 16:9 landscape, natural motion, coherent camera movement, detailed textures, no text, no logos, no watermark.'].join('. ');
+      state.textContent='Generando vídeo IA '+(i+1)+' de '+clipCount+' (cuota optimizada)…';
+      const prompt=[scene.visualPrompt||scene.title||'Cinematic scene','Original AI video, realistic high-quality cinematography, 16:9 landscape, natural motion, coherent camera movement, detailed textures, no text, no logos, no watermark, normal speed.'].join('. ');
       const r=await client.predict('text_to_video',[
         prompt,
-        'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos, watermark',
-        null,null,704,1216,'text-to-video',Math.min(8.5,Math.max(3.2,Number(scene.duration)||8)),97,Math.floor(Math.random()*4294967295),true,3,false
+        'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos, watermark, slow motion',
+        null,null,512,704,'text-to-video',2.0,9,Math.floor(Math.random()*4294967295),true,3,false,false
       ]);
       const o=r?.data?.[0];
       const u=typeof o==='string'?o:(o?.url||o?.path||o?.video?.url||'');
       if(!u)throw new Error('LTX no devolvió el vídeo de la escena '+(i+1)+'.');
       const rr=await fetch(u);
-      if(!rr.ok)throw new Error('No se pudo descargar el vídeo IA de la escena '+(i+1)+'.');
+      if(!rr.ok)throw new Error('No se pudo descargar el vídeo IA de la escena '+(i+1)+' ('+rr.status+').');
       clips.push(new File([await rr.blob()],'ai-scene-'+(i+1)+'.mp4',{type:'video/mp4'}));
     }
     currentVideoPlan.aiClips=clips;
-    state.textContent='✓ '+clips.length+' vídeos IA listos para el montaje';
+    state.textContent='✓ '+clips.length+' vídeos IA optimizados listos para el montaje';
     renderAiClipResults(clips);
-  }catch(e){state.textContent='Error';alert(e?.message||String(e))}
-  finally{btn.disabled=false;btn.textContent='🎥 Generar vídeos IA de las escenas'}
+  }catch(e){
+    state.textContent='No se pudo generar vídeo IA';
+    const msg=String(e?.message||e);
+    if(/quota|zerogpu|exceeded/i.test(msg)){
+      alert('La cuota gratuita de vídeo IA de Hugging Face no tiene tiempo suficiente ahora mismo. AutoTube ha detenido la generación sin continuar consumiendo cuota. No pulses Renderizar MP4. La cuota se restablece según el ciclo de Hugging Face.');
+    }else{
+      alert(msg);
+    }
+  }finally{btn.disabled=false;btn.textContent='🎥 Generar vídeos IA (cuota optimizada)'}
 }
 function renderAiClipResults(clips){
   const box=$('#mediaResults');if(!box)return;
