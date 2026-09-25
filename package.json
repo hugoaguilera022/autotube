@@ -5,8 +5,8 @@
   "description": "AutoTube - AI-assisted YouTube content automation dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "node -r ./youtube-routes-preload.js -r ./render-stability-preload.js server.js",
-    "dev": "node -r ./youtube-routes-preload.js -r ./render-stability-preload.js --watch server.js"
+    "start": "node -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./autotube-preflight-preload.js server.js",
+    "dev": "node -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./autotube-preflight-preload.js --watch server.js"
   },
   "engines": {
     "node": "22.x"
