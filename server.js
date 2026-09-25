@@ -413,7 +413,7 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana',au
     contents:[{role:'user',parts:[{text:styleGuide+'\n\n'+safeText}]}],
     generationConfig:{
       responseModalities:['AUDIO'],
-      responseFormat:{audio:{mimeType:'AUDIO_L16',sampleRate:24000}},
+      responseFormat:{audio:{mimeType:'AUDIO_WAV',sampleRate:24000}},
       speechConfig:{voiceConfig:{voice:'Kore'},languageCode:lang}
     }
   };
@@ -433,7 +433,11 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana',au
       try{
         const input=path.join(dir,'voice.pcm'),output=path.join(dir,'voice.wav');
         await fs.writeFile(input,pcm);
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','s16le','-ar','24000','-ac','1','-i',input,'-c:a','pcm_s16le','-ar','44100','-ac','2',output]);
+        const isWav=pcm.length>=12&&pcm.subarray(0,4).toString('ascii')==='RIFF'&&pcm.subarray(8,12).toString('ascii')==='WAVE';
+        const ffmpegArgs=isWav
+          ? ['-y','-hide_banner','-loglevel','error','-i',input,'-c:a','pcm_s16le','-ar','44100','-ac','2',output]
+          : ['-y','-hide_banner','-loglevel','error','-f','s16le','-ar','24000','-ac','1','-i',input,'-c:a','pcm_s16le','-ar','44100','-ac','2',output];
+        await runFfmpeg(ffmpegArgs);
         const audio=await fs.readFile(output);
         if(!audio.length)throw new Error('El WAV de Gemini TTS está vacío.');
         return audio;
