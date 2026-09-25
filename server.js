@@ -222,7 +222,9 @@ async function validateRenderedMp4(file){
   return{width,height,fps,audioCodec};
 }
 
-app.get('/api/preflight',async(_req,res)=>{
+const preflightJobs=new Map();
+
+async function executePreflight(){
   const checks={};
   const run=async(name,fn)=>{const started=Date.now();try{const value=await fn();checks[name]={ok:true,ms:Date.now()-started,...(value&&typeof value==='object'?value:{})};}catch(err){checks[name]={ok:false,ms:Date.now()-started,error:err.message||String(err)};}};
   await run('ffmpeg',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-'));try{const out=path.join(dir,'test.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x180:r=10','-t','1','-an','-c:v','libx264','-pix_fmt','yuv420p',out]);const st=await fs.stat(out);if(!st.size)throw new Error('FFmpeg produjo un archivo vacío.');return{bytes:st.size};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
@@ -240,6 +242,22 @@ app.get('/api/preflight',async(_req,res)=>{
   const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
   await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const clip=rows.find(x=>x.downloadUrl);if(!clip)throw new Error('No hay un clip descargable para la prueba de render.');if(!ttsAudio||!musicBuffer)throw new Error('Faltan audio de narración o música para la prueba integrada.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2,narration:'Prueba de narración.'}],mediaResults:[{number:1,title:'Preflight',media:[clip]}],narrationAudio:[ttsAudio],musicBuffer,finalOutputPath:out});const validated=await validateRenderedMp4(out);return{bytes:result.size,provider:mediaSource,hasNarration:true,hasMusic:true,validatedAudioStream:true,...validated};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
   const failed=Object.entries(checks).filter(([,v])=>!v.ok).map(([k,v])=>({name:k,error:v.error}));
-  res.status(failed.length?503:200).json({ok:failed.length===0,checks,failed});
+  return{ok:failed.length===0,checks,failed};
+}
+
+app.get('/api/preflight',async(_req,res)=>{
+  const existing=[...preflightJobs.values()].find(j=>j.status==='running');
+  if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/preflight/'+encodeURIComponent(existing.id),message:'Preflight ya está ejecutándose.'});
+  const id='preflight_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  preflightJobs.set(id,{id,status:'running',startedAt:Date.now(),result:null});
+  res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/preflight/'+encodeURIComponent(id),message:'Preflight iniciado. Consulta statusUrl para ver el resultado completo.'});
+  executePreflight().then(result=>{const job=preflightJobs.get(id);if(job){job.status=result.ok?'done':'failed';job.result=result;job.finishedAt=Date.now();}}).catch(err=>{const job=preflightJobs.get(id);if(job){job.status='failed';job.result={ok:false,checks:{},failed:[{name:'preflight',error:err.message||String(err)}]};job.finishedAt=Date.now();}});
 });
+app.get('/api/preflight/:jobId',async(req,res)=>{
+  const job=preflightJobs.get(String(req.params.jobId||''));
+  if(!job)return res.status(404).json({ok:false,error:'Preflight no encontrado.'});
+  if(job.status==='running')return res.status(202).json({ok:false,status:'running',jobId:job.id,elapsedMs:Date.now()-job.startedAt});
+  return res.status(job.result?.ok?200:503).json({status:job.status,jobId:job.id,...(job.result||{ok:false,checks:{},failed:[]})});
+});
+
 app.listen(PORT,()=>console.log(`AutoTube listening on ${PORT}`));
