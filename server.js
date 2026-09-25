@@ -1228,8 +1228,8 @@ async function executeFullPipelineTest(reference){
     });
 
     const referenceTitle=String(video.title||'Contenido original').slice(0,300);
-    const referenceStyle=style;
-    const visualReferenceAnalysis=style.visualAnalysis;
+    let referenceStyle=style;
+    let visualReferenceAnalysis=style.visualAnalysis;
     const audioProfile=style.visualAnalysis?.audioProfile&&typeof style.visualAnalysis.audioProfile==='object'
       ? {...style.visualAnalysis.audioProfile}
       : {};
@@ -1270,6 +1270,8 @@ async function executeFullPipelineTest(reference){
     // Release the large reference-analysis objects before media/audio/render work.
     video=null;
     style=null;
+    referenceStyle=null;
+    visualReferenceAnalysis=null;
     outline=null;
 
     const testScene={...(plan.scenes[0]||{}),number:1,duration:3,mediaType:'video',constantImage:false};
@@ -1325,7 +1327,7 @@ async function executeFullPipelineTest(reference){
 
     return{ok:true,elapsedMs:Date.now()-started,reference:{url:reference,title:referenceTitle},checks};
   }finally{
-    video=null;style=null;outline=null;plan=null;narration=null;music=null;clip=null;render=null;validation=null;
+    video=null;style=null;referenceStyle=null;visualReferenceAnalysis=null;outline=null;plan=null;narration=null;music=null;clip=null;render=null;validation=null;
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
 }
