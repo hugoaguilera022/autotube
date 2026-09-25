@@ -480,6 +480,34 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana',au
   }
   throw new Error(lastError||'Gemini TTS no pudo generar la narración.');
 }
+const ttsTestJobs=new Map();
+app.get('/api/tts-test',async(req,res)=>{
+  const language=String(req.query?.language||'es').trim().toLowerCase();
+  const text=language.startsWith('en')
+    ? 'Hello, this is an AutoTube voice test. The same voice will be used for English and Spanish videos.'
+    : 'Hola, esta es una prueba de voz de AutoTube. Esta misma voz se puede utilizar para vídeos en español y en inglés.';
+  const id='ttstest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  ttsTestJobs.set(id,{id,status:'running',language,startedAt:Date.now(),result:null});
+  res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/tts-test/'+encodeURIComponent(id)});
+  (async()=>{
+    const started=Date.now();
+    try{
+      const audio=await generateElevenLabsTts(text,language,'Natural y cercana',{});
+      const isWav=audio.length>=12&&audio.subarray(0,4).toString('ascii')==='RIFF'&&audio.subarray(8,12).toString('ascii')==='WAVE';
+      const j=ttsTestJobs.get(id);
+      if(j){j.status='done';j.finishedAt=Date.now();j.result={ok:true,provider:'ElevenLabs',voiceId:String(process.env.ELEVENLABS_VOICE_ID||'hpp4J3VqNfWAUOO0d1Us'),language,bytes:audio.length,isWav,elapsedMs:Date.now()-started};}
+    }catch(err){
+      const j=ttsTestJobs.get(id);
+      if(j){j.status='failed';j.finishedAt=Date.now();j.result={ok:false,error:err.message||String(err)};}
+    }
+  })();
+});
+app.get('/api/tts-test/:jobId',async(req,res)=>{
+  const j=ttsTestJobs.get(String(req.params.jobId||''));
+  if(!j)return res.status(410).json({ok:false,status:'restart',error:'La prueba se perdió porque Render reinició la instancia.'});
+  if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt});
+  return res.status(j.result?.ok?200:503).json({status:j.status,jobId:j.id,...(j.result||{ok:false})});
+});
 app.post('/api/ai/voice',async(req,res)=>{
   try{
     const text=String(req.body?.text||'').trim();
