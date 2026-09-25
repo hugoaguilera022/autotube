@@ -82,7 +82,7 @@ async function downloadYoutubeReference(url,dir){
   }catch(err){
     console.warn('Internal exact URL->MP4 reference acquisition failed:',err?.message||String(err));
   }
-  const output=path.join(dir,'reference.%(ext)s');
+  const ytOutput=path.join(dir,'reference.%(ext)s');
   const output=path.join(dir,'reference.%(ext)s');
   const strategies=[
     {name:'mp4-avc-aac',format:'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]/best[ext=mp4]'},
