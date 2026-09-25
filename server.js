@@ -36,24 +36,41 @@ function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!v
 async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
 async function downloadYoutubeReference(url,dir){
   const output=path.join(dir,'reference.%(ext)s');
-  const result=await youtubedl(url,{
-    format:'bv*[height<=360]+ba/b[height<=360]',
-    mergeOutputFormat:'mp4',
-    output,
-    noPlaylist:true,
-    noWarnings:true,
-    noCheckCertificates:true,
-    restrictFilenames:true,
-    preferFreeFormats:false,
-    ffmpegLocation:path.dirname(ffmpegPath)
-  },{timeout:180000,killSignal:'SIGKILL'});
-  const files=await fs.readdir(dir);
-  const videoFile=files.find(name=>/^reference\.(mp4|mkv|webm|mov)$/i.test(name));
-  if(!videoFile)throw new Error('yt-dlp no pudo descargar una copia temporal de análisis del vídeo de YouTube.');
-  const file=path.join(dir,videoFile);
-  const stat=await fs.stat(file);
-  if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
-  return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1000)};
+  const strategies=[
+    {name:'web_safari-hls',format:'best[protocol^=m3u8]/best[height<=360]',extractor_args:{youtube:{player_client:['web_safari']}}},
+    {name:'android_vr',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['android_vr']}}},
+    {name:'web_embedded',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['web_embedded']}}}
+  ];
+  let lastError='';
+  for(const strategy of strategies){
+    try{
+      const result=await youtubedl(url,{
+        format:strategy.format,
+        mergeOutputFormat:'mp4',
+        output,
+        noPlaylist:true,
+        noWarnings:true,
+        noCheckCertificates:true,
+        restrictFilenames:true,
+        preferFreeFormats:false,
+        extractor_args:strategy.extractor_args,
+        ffmpegLocation:path.dirname(ffmpegPath)
+      },{timeout:180000,killSignal:'SIGKILL'});
+      const files=await fs.readdir(dir);
+      const videoFile=files.find(name=>/^reference\.(mp4|mkv|webm|mov)$/i.test(name));
+      if(!videoFile)throw new Error('yt-dlp no produjo un archivo de vídeo.');
+      const file=path.join(dir,videoFile);
+      const stat=await fs.stat(file);
+      if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
+      return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1000),strategy:strategy.name};
+    }catch(err){
+      lastError=String(err?.stderr||err?.message||err||'').slice(-1600);
+      await fs.rm(output.replace('%(ext)s','*'),{force:true}).catch(()=>{});
+      const files=await fs.readdir(dir).catch(()=>[]);
+      for(const name of files.filter(x=>/^reference\./i.test(x)))await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
+    }
+  }
+  throw new Error('No se pudo descargar temporalmente el vídeo de YouTube para el análisis audiovisual. Estrategias probadas: web_safari/HLS, android_vr y web_embedded. Último error: '+lastError);
 }
 
 async function uploadGeminiFile(filePath,mimeType){
@@ -289,7 +306,7 @@ async function generateLyriaMusic(prompt){
     contents:[{parts:[{text:String(prompt||'Instrumental original, no vocals.')}]}],
     generationConfig:{
       responseModalities:['AUDIO','TEXT'],
-      responseFormat:{audio:{mimeType:'audio/wav'}}
+      responseMimeType:'audio/wav'
     }
   };
   const models=['lyria-3.5','lyria-3-clip-preview'];
