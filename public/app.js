@@ -216,8 +216,8 @@ async function generateAiSceneClips(){
     const Client=mod.Client;
     const space='DeepRat/LTX-Video-ZeroGPU-Optimized';
     const client=await Client.connect(space);
-    // ZeroGPU tiene cuota diaria gratuita. Generamos un conjunto compacto de clips
-    // de 2 s en resolución de trabajo 512x704 y el render los reutiliza por escenas.
+    // ZeroGPU tiene cuota diaria gratuita. Priorizamos clips en formato horizontal y
+    // prompts específicos por segmento temporal para maximizar fidelidad audiovisual.
     // Así evitamos el consumo excesivo del Space LTX xlarge anterior.
     const clipCount=Math.min(8,Math.max(1,scenes.length));
     const clips=[];
@@ -247,6 +247,24 @@ async function generateAiSceneClips(){
       ].filter(Boolean).join('; ');
       const previousScene=scenes[i-1];
       const nextScene=scenes[i+1];
+      const segment=scene.referenceSegment||refAnalysis?.structureProfile?.sceneSegments?.[Math.min(i,(refAnalysis?.structureProfile?.sceneSegments?.length||1)-1)]||null;
+      const segmentDNA=segment?[
+        segment.startSeconds!=null&&('reference time range: '+segment.startSeconds+'s-'+segment.endSeconds+'s'),
+        segment.summary&&('reference segment summary: '+segment.summary),
+        segment.subject&&('reference segment subject: '+segment.subject),
+        segment.shotScale&&('reference shot scale: '+segment.shotScale),
+        segment.composition&&('reference segment composition: '+segment.composition),
+        segment.cameraMovement&&('reference segment camera movement: '+segment.cameraMovement),
+        segment.motionIntensity&&('reference segment motion intensity: '+segment.motionIntensity),
+        segment.lighting&&('reference segment lighting: '+segment.lighting),
+        segment.palette&&('reference segment palette: '+segment.palette),
+        segment.transitionIn&&('reference transition in: '+segment.transitionIn),
+        segment.transitionOut&&('reference transition out: '+segment.transitionOut),
+        segment.audioRole&&('reference audio role: '+segment.audioRole),
+        segment.narrationRole&&('reference narration role: '+segment.narrationRole),
+        segment.continuityAnchor&&('reference continuity anchor: '+segment.continuityAnchor),
+        segment.generationPrompt&&('reference segment generation direction: '+segment.generationPrompt)
+      ].filter(Boolean).join('; '):'';
       const continuity=[
         previousScene&&('previous scene ended with: '+String(previousScene.visualPrompt||previousScene.title||'').slice(0,300)),
         nextScene&&('next scene should lead naturally toward: '+String(nextScene.visualPrompt||nextScene.title||'').slice(0,300))
@@ -254,6 +272,7 @@ async function generateAiSceneClips(){
       const prompt=[
         scene.visualPrompt||scene.title||'Cinematic scene',
         scene.animationNotes&&('scene-specific animation and camera direction: '+scene.animationNotes),
+        segmentDNA&&('TIMESTAMP-SPECIFIC REFERENCE SEGMENT: '+segmentDNA),
         audiovisualDNA&&('reference audiovisual characteristics to preserve: '+audiovisualDNA),
         continuity,
         'Generate ORIGINAL content only. Match the reference audiovisual language, shot scale, framing, camera behavior, motion intensity, lighting, palette, transitions and pacing without reproducing any identifiable shot, frame, character, text, logo, recording or copyrighted expression.',
@@ -262,7 +281,7 @@ async function generateAiSceneClips(){
       const r=await client.predict('text_to_video',[
         prompt,
         'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos, watermark, slow motion',
-        null,null,512,704,'text-to-video',2.0,9,Math.floor(Math.random()*4294967295),true,3,false,false
+        null,null,704,512,'text-to-video',2.0,9,Math.floor(Math.random()*4294967295),true,3,false,false
       ]);
       const o=r?.data?.[0];
       const u=typeof o==='string'?o:(o?.url||o?.path||o?.video?.url||'');
