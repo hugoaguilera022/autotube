@@ -561,40 +561,82 @@ async function generateFallbackMusic(prompt,durationSeconds,dir,audioProfile={})
 }
 
 
-app.post('/api/ai/music',async(req,res)=>{
+const musicJobs=new Map();
+
+async function generateMusicBuffer({topic,mood,audioProfile,durationSeconds}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-music-'));
   try{
-    const duration=Math.max(30,Math.min(300,Number(req.body?.durationSeconds)||60));
-    const mood=String(req.body?.mood||'instrumental original').replace(/[\r\n"]/g,' ').slice(0,500);
-    const topic=String(req.body?.topic||'').replace(/[\r\n"]/g,' ').slice(0,300);
-    const audioProfile=req.body?.audioProfile&&typeof req.body.audioProfile==='object'?req.body.audioProfile:{};
+    const duration=Math.max(3,Math.min(300,Number(durationSeconds)||60));
+    const safeMood=String(mood||'instrumental original').replace(/[\r\n"]/g,' ').slice(0,500);
+    const safeTopic=String(topic||'').replace(/[\r\n"]/g,' ').slice(0,300);
+    const profile=audioProfile&&typeof audioProfile==='object'?audioProfile:{};
     const prompt=[
       'Create ORIGINAL instrumental background music for a YouTube video.',
       'Do not copy or imitate any existing recording, melody, lyrics, artist, or track.',
-      'Use these reference characteristics only as high-level production guidance.',
-      'Topic: '+topic,
-      'Mood: '+mood,
-      'Energy: '+String(audioProfile.energy||''),
-      'Dynamics: '+String(audioProfile.dynamics||''),      'Instrumentation: '+String(audioProfile.instrumentation||''),
-      'Voice/music relationship: '+String(audioProfile.audioContinuity||'continuous'),
-      'Estimated BPM: '+String(audioProfile.bpmEstimate||'unknown'),
+      'Reconstruct the reference audio profile as original music: mood, energy, dynamics, instrumentation, estimated BPM, continuity and voice/music balance.',
+      'Topic: '+safeTopic,
+      'Mood: '+safeMood,
+      'Energy: '+String(profile.energy||''),
+      'Dynamics: '+String(profile.dynamics||''),
+      'Instrumentation: '+String(profile.instrumentation||''),
+      'Music mood: '+String(profile.musicMood||''),
+      'Estimated BPM: '+String(profile.bpmEstimate||'unknown'),
+      'Audio continuity: '+String(profile.audioContinuity||'continuous'),
+      'Voice/music balance: '+String(profile.voiceMusicBalance||''),
+      'Ambience: '+String(profile.hasAmbience||false),
+      'Sound effects presence: '+String(profile.hasSoundEffects||false),
       'Instrumental only, no vocals.',
-      'Maintain a coherent continuous bed suitable for narration.'
-    ].join('\n');    let generated=await generateLyriaMusic(prompt);
-    if(!generated)generated=await generateFallbackMusic(prompt,duration,dir,audioProfile);
+      'Maintain a coherent continuous bed suitable for narration and match the detected rhythmic intensity across the whole duration.'
+    ].join('\\n');
+    let generated=await generateLyriaMusic(prompt);
+    if(!generated)generated=await generateFallbackMusic(prompt,duration,dir,profile);
     const raw=path.join(dir,'generated-audio');
     const output=path.join(dir,'music.wav');
     await fs.writeFile(raw,generated.buffer);
-    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-stream_loop','-1','-i',raw,'-t',String(duration),'-ar','44100','-ac','2','-c:a','pcm_s16le','-af','afade=t=in:st=0:d=3,afade=t=out:st='+(Math.max(3,duration-3))+':d=3',output]);
+    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-stream_loop','-1','-i',raw,'-t',String(duration),'-ar','44100','-ac','2','-c:a','pcm_s16le','-af','afade=t=in:st=0:d=3,afade=t=out:st='+Math.max(3,duration-3)+':d=3',output]);
     const audio=await fs.readFile(output);
     if(!audio.length)throw new Error('La música generada está vacía.');
-    res.set('Content-Type','audio/wav');res.set('Content-Length',String(audio.length));res.set('X-AutoTube-Music-Provider',String(generated.provider||'Lyria'));res.send(audio);
-  }catch(err){
-    console.error('Music generation error:',err);
-    res.status(502).json({error:err.message||'No se pudo generar la música con Lyria.'});
+    return{buffer:audio,provider:String(generated.provider||'Lyria')};
   }finally{
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
+}
+
+app.post('/api/ai/music',async(req,res)=>{
+  try{
+    const jobId='music_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+    musicJobs.set(jobId,{status:'processing',progress:1,createdAt:Date.now(),buffer:null,error:null});
+    res.status(202).json({ok:true,jobId,status:'processing',statusUrl:'/api/ai/music/'+jobId});
+    (async()=>{
+      const job=musicJobs.get(jobId);
+      try{
+        const audioProfile=req.body?.audioProfile&&typeof req.body.audioProfile==='object'?req.body.audioProfile:{};
+        job.progress=10;
+        const generated=await generateMusicBuffer({topic:req.body?.topic,mood:req.body?.mood,audioProfile,durationSeconds:req.body?.durationSeconds});
+        job.buffer=generated.buffer;
+        job.provider=generated.provider;
+        job.progress=100;
+        job.status='done';
+        job.finishedAt=Date.now();
+      }catch(err){
+        console.error('Music generation error:',jobId,err);
+        if(job){job.status='error';job.progress=0;job.error=err.message||'No se pudo generar la música.'}
+      }
+    })();
+  }catch(err){res.status(500).json({error:err.message||'No se pudo iniciar la generación musical.'})}
+});
+app.get('/api/ai/music/:jobId',async(req,res)=>{
+  const job=musicJobs.get(req.params.jobId);
+  if(!job)return res.status(404).json({status:'missing',jobId:req.params.jobId,error:'Trabajo musical no encontrado.'});
+  const out={status:job.status,jobId:req.params.jobId,progress:job.progress||0};
+  if(job.status==='done'){out.provider=job.provider;out.bytes=job.buffer?.length||0;out.downloadUrl='/api/ai/music/'+encodeURIComponent(req.params.jobId)+'/download';}
+  if(job.status==='error')out.error=job.error;
+  res.json(out);
+});
+app.get('/api/ai/music/:jobId/download',async(req,res)=>{
+  const job=musicJobs.get(req.params.jobId);
+  if(!job||job.status!=='done'||!job.buffer)return res.status(404).json({error:'La música todavía no está disponible.'});
+  res.set('Content-Type','audio/wav');res.set('Content-Length',String(job.buffer.length));res.set('X-AutoTube-Music-Provider',String(job.provider||'Lyria'));res.send(job.buffer);
 });
 
 async function searchPexels(query){if(!process.env.PEXELS_API_KEY)return[];const r=await fetch('https://api.pexels.com/v1/videos/search?'+new URLSearchParams({query,orientation:'landscape',size:'medium',locale:'es-ES',per_page:'6'}),{headers:{Authorization:process.env.PEXELS_API_KEY}});if(!r.ok)throw new Error('Pexels API '+r.status);const d=await r.json();return(d.videos||[]).map(v=>({provider:'Pexels',id:v.id,title:'Vídeo Pexels',duration:v.duration,thumbnail:v.image,url:v.url,downloadUrl:(v.video_files||[]).filter(x=>x.link).sort((a,b)=>{const sa=(a.width||0)<=1280?0:1,sb=(b.width||0)<=1280?0:1;if(sa!==sb)return sa-sb;return Math.abs((a.width||0)-1920)-Math.abs((b.width||0)-1920)})[0]?.link||''})).filter(x=>x.downloadUrl)}
