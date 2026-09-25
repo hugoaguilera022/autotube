@@ -8,7 +8,6 @@ const ffmpegPath = require('ffmpeg-static');
 const fs = require('fs/promises');
 const os = require('os');
 const { spawn } = require('child_process');
-const { jsonrepair } = require('jsonrepair');
 const multer = require('multer');
 const youtubedl = require('youtube-dl-exec');
 const upload = multer({ storage: multer.diskStorage({ destination: (_req,_file,cb)=>cb(null,os.tmpdir()), filename: (_req,file,cb)=>cb(null,'autotube-upload-'+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+'-'+String(file.originalname||'upload').replace(/[^a-zA-Z0-9._-]/g,'_')) }), limits: { fileSize: 250 * 1024 * 1024 } });
@@ -18,17 +17,68 @@ const renderJobDir = path.join(os.tmpdir(), 'autotube-render-jobs');
 fs.mkdir(renderJobDir, { recursive: true }).catch(() => {});
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 async function callGemini({system,user,images=[],files=[],temperature=0.7,maxOutputTokens=1200,json=false}){const k=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();if(!k)throw new Error('Falta la clave de Gemini.');const parts=[{text:String(user||'')}];for(const im of images)parts.push({inline_data:{mime_type:im.mimeType||'image/jpeg',data:im.data}});for(const file of files){if(file?.uri)parts.push({file_data:{mime_type:file.mimeType||'application/octet-stream',file_uri:file.uri}});}const headers={'Content-Type':'application/json'};headers['x-goog-'+'api-key']=k;const models=[...new Set([String(GEMINI_MODEL||'').trim(),'gemini-3.5-flash-lite','gemini-3.1-flash-lite'].filter(Boolean))];let lastError='';for(const model of models){for(const structured of (json?[true,false]:[false])){const body={system_instruction:{parts:[{text:String(system||'')}]},contents:[{role:'user',parts}],generationConfig:{maxOutputTokens,...(structured?{responseMimeType:'application/json'}:{})}};const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers,body:JSON.stringify(body)});const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}if(response.ok){const text=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';if(text)return text;lastError='Gemini no devolvió contenido.';continue}const message=data?.error?.message||raw.slice(0,500)||'Error desconocido';lastError='Gemini '+response.status+': '+message;if(response.status===429||response.status>=500)break;if(response.status===400&&structured)continue;if(response.status===404||/model|not found|unsupported/i.test(message))break;break}}throw new Error(lastError||'Gemini no pudo procesar la solicitud.');}
-function parseJsonResponse(text){
-  const raw=String(text||'').replace(/^\\s*\\`\\`\\`(?:json)?\\s*/i,'').replace(/\\s*\\`\\`\\`\\s*$/i,'').trim();
-  let candidate=raw;
-  const first=Math.min(...['{','['].map(ch=>{const i=raw.indexOf(ch);return i<0?Infinity:i}));
-  const last=Math.max(raw.lastIndexOf('}'),raw.lastIndexOf(']'));
-  if(Number.isFinite(first)&&last>=first)candidate=raw.slice(first,last+1);
-  try{return JSON.parse(candidate)}catch(err){
-    try{return JSON.parse(jsonrepair(candidate))}catch(repairErr){
-      const repaired=candidate.replace(/,\\s*([}\\]])/g,'$1');
-      try{return JSON.parse(repaired)}catch(_){throw new Error('Respuesta JSON inválida de Gemini: '+(err.message||String(err)))}}
+function parseJsonResponse(text){const raw=String(text||'').replace(/^\s*```(?:json)?\s*/i,'').replace(/\s*```\s*$/i,'').trim();let candidate=raw;const first=Math.min(...['{','['].map(ch=>{const i=raw.indexOf(ch);return i<0?Infinity:i}));const last=Math.max(raw.lastIndexOf('}'),raw.lastIndexOf(']'));if(Number.isFinite(first)&&last>=first)candidate=raw.slice(first,last+1);try{return JSON.parse(candidate)}catch(err){const repaired=candidate.replace(/,\s*([}\]])/g,'$1');try{return JSON.parse(repaired)}catch(_){throw new Error('Respuesta JSON inválida de Gemini: '+(err.message||String(err)))}}}
+const app=express();
+let youtubeTokens=null,youtubeProfileCache=null,youtubeLoaded=false;
+function cleanEnvValue(value){return String(value||'').replace(/\s+/g,'').replace(/^(['"])(.*)\\1$/,'$2').trim();}
+function supabaseEnv(){return{url:cleanEnvValue(process.env.SUPABASE_URL).replace(/\/+$/,''),key:cleanEnvValue(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY)}}
+function supabaseConfigured(){const{url,key}=supabaseEnv();return Boolean(url&&key&&process.env.YOUTUBE_TOKEN_ENCRYPTION_KEY)}
+function encryptionKey(){const raw=process.env.YOUTUBE_TOKEN_ENCRYPTION_KEY||'';if(/^[0-9a-fA-F]{64}$/.test(raw))return Buffer.from(raw,'hex');return crypto.createHash('sha256').update(raw).digest()}
+function encryptTokens(tokens){const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',encryptionKey(),iv),encrypted=Buffer.concat([cipher.update(JSON.stringify(tokens),'utf8'),cipher.final()]);return[iv,cipher.getAuthTag(),encrypted].map(x=>x.toString('base64')).join('.')}
+function decryptTokens(value){const[iv64,tag64,data64]=String(value||'').split('.');if(!iv64||!tag64||!data64)throw new Error('Token cifrado inválido.');const decipher=crypto.createDecipheriv('aes-256-gcm',encryptionKey(),Buffer.from(iv64,'base64'));decipher.setAuthTag(Buffer.from(tag64,'base64'));return JSON.parse(Buffer.concat([decipher.update(Buffer.from(data64,'base64')),decipher.final()]).toString('utf8'))}
+async function supabaseRequest(route,options={}){if(!supabaseConfigured())return null;const{url,key}=supabaseEnv();const supabase=createClient(url,key,{auth:{autoRefreshToken:false,persistSession:false,detectSessionInUrl:false}});const p=String(route),q=p.includes('?')?p.slice(p.indexOf('?')+1):'',params=new URLSearchParams(q);if(p.startsWith('youtube_connections')&&options.method==='GET'){let request=supabase.from('youtube_connections').select(params.get('select')||'*');if(params.has('id')){const rawId=params.get('id');request=request.eq('id',rawId.startsWith('eq.')?rawId.slice(3):rawId)}if(params.has('limit'))request=request.limit(Number(params.get('limit')));const result=await request;if(result.error)throw new Error(`Supabase ${result.status||400}: ${result.error.message}`);return result.data}if(p.startsWith('youtube_connections')&&options.method==='DELETE'){let request=supabase.from('youtube_connections').delete();if(params.has('id')){const rawId=params.get('id');request=request.eq('id',rawId.startsWith('eq.')?rawId.slice(3):rawId)}const result=await request;if(result.error)throw new Error(`Supabase ${result.status||400}: ${result.error.message}`);return result.data}if(p.startsWith('youtube_connections')&&options.method==='POST'){const body=JSON.parse(options.body||'{}'),result=await supabase.from('youtube_connections').upsert(body,{onConflict:'id',ignoreDuplicates:false});if(result.error)throw new Error(`Supabase ${result.status||400}: ${result.error.message}`);return result.data}throw new Error('Método Supabase no soportado.')}
+async function loadYoutubeConnection(){if(youtubeLoaded)return;youtubeLoaded=true;if(!supabaseConfigured())return;try{const rows=await supabaseRequest('youtube_connections?id=eq.default&select=*',{method:'GET'}),row=rows?.[0];if(row?.tokens_encrypted)youtubeTokens=decryptTokens(row.tokens_encrypted);if(row?.profile)youtubeProfileCache=row.profile}catch(err){youtubeLoaded=false;console.error('No se pudo cargar la conexión de YouTube desde Supabase:',err.message)}}
+async function saveYoutubeConnection(){if(!supabaseConfigured()||!youtubeTokens)return;await supabaseRequest('youtube_connections?on_conflict=id',{method:'POST',body:JSON.stringify({id:'default',tokens_encrypted:encryptTokens(youtubeTokens),profile:youtubeProfileCache,updated_at:new Date().toISOString()})})}
+const PORT=process.env.PORT||3000;function youtubeClient(){return new google.auth.OAuth2(process.env.YOUTUBE_CLIENT_ID,process.env.YOUTUBE_CLIENT_SECRET,process.env.YOUTUBE_REDIRECT_URI||`${process.env.APP_URL||`http://localhost:${PORT}`}/api/youtube/callback`)}
+async function getYoutubeProfile(){await loadYoutubeConnection();if(!youtubeTokens)return youtubeProfileCache;const auth=youtubeClient();auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.channels.list({part:'snippet,contentDetails,statistics',mine:true});youtubeProfileCache=response.data.items?.[0]||null;return youtubeProfileCache}
+app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true}));app.use(express.static(path.join(__dirname,'public')));
+app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
+function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
+async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
+async function downloadYoutubeReference(url,dir){
+  const output=path.join(dir,'reference.%(ext)s');
+  const potScript=path.join(process.cwd(),'.pot-provider','server','build','generate_once.js');
+  const pluginDirs=path.join(process.cwd(),'yt-dlp-plugins');
+  const strategies=[
+    {name:'mweb_bgutil_pot',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['mweb']},'youtubepot-bgutilscript':{script_path:potScript}}},
+    {name:'web_safari_hls',format:'best[protocol^=m3u8]/best[height<=360]',extractor_args:{youtube:{player_client:['web_safari']}}},
+    {name:'android_vr',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['android_vr']}}},
+    {name:'tv',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['tv']}}},
+    {name:'tv_simply',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['tv_simply']}}},
+    {name:'web_embedded',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['web_embedded']}}},
+    {name:'ios',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['ios']}}}
+  ];
+  let lastError='';
+  for(const strategy of strategies){
+    try{
+      await fs.rm(dir,{recursive:true,force:false}).catch(()=>{});
+      await fs.mkdir(dir,{recursive:true});
+      const result=await youtubedl(url,{
+        format:strategy.format,
+        mergeOutputFormat:'mp4',
+        output,
+        noPlaylist:true,
+        noWarnings:true,
+        noCheckCertificates:true,
+        restrictFilenames:true,
+        preferFreeFormats:false,
+        extractor_args:strategy.extractor_args,
+        ffmpegLocation:path.dirname(ffmpegPath)
+      },{timeout:180000,killSignal:'SIGKILL'});
+      const files=await fs.readdir(dir);
+      const videoFile=files.find(name=>/^reference\.(mp4|mkv|webm|mov)$/i.test(name));
+      if(!videoFile)throw new Error('yt-dlp no produjo un archivo de vídeo.');
+      const file=path.join(dir,videoFile);
+      const stat=await fs.stat(file);
+      if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
+      return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1000),strategy:strategy.name};
+    }catch(err){
+      lastError=String(err?.stderr||err?.message||err||'').slice(-1600);
+      const files=await fs.readdir(dir).catch(()=>[]);
+      for(const name of files.filter(x=>/^reference\./i.test(x)))await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
+    }
   }
+  throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. Se probaron múltiples clientes de yt-dlp y, cuando está disponible, un proveedor automático de PO tokens. Último error: '+lastError);
 }
 async function uploadGeminiFile(filePath,mimeType){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
@@ -1671,18 +1721,3 @@ const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening o
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
-const startupSelfTestReference=String(process.env.AUTOTUBE_SELF_TEST_REFERENCE||'').trim();
-if(startupSelfTestReference){
-  setTimeout(async()=>{
-    const selfTestId='selftest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
-    const job={id:selfTestId,reference:startupSelfTestReference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
-    urlVideoJobs.set(selfTestId,job);
-    console.log('AutoTube E2E self-test started:',selfTestId,startupSelfTestReference);
-    try{
-      const result=await executeUrlToVideo(startupSelfTestReference,selfTestId);
-      console.log('AutoTube E2E self-test SUCCESS:',JSON.stringify({jobId:selfTestId,durationSeconds:result.durationSeconds,size:result.size,validation:result.validation,scenes:result.scenes}));
-    }catch(err){
-      console.error('AutoTube E2E self-test FAILED:',selfTestId,err?.message||String(err));
-    }
-  },15000);
-}
