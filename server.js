@@ -627,7 +627,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       if(aiClip?.path){await fs.copyFile(aiClip.path,input)}else if(aiClip?.buffer){await fs.writeFile(input,aiClip.buffer)}else{await downloadToFile(media.downloadUrl,input)}
       let audioInput=null;
       if(audio){audioInput=path.join(dir,'voice-'+i+'.bin');await downloadAudioBuffer(audio,audioInput);}
-      const args=['-y'];if(String(media?.mediaType||found.mediaType||scene.mediaType||'video').toLowerCase()==='image')args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
+      const args=['-y'];if(String(media?.mediaType||found?.mediaType||scene.mediaType||'video').toLowerCase()==='image')args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
       args.push('-t',String(duration),'-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p,fps=30','-map','0:v:0','-map','1:a:0','-c:a','aac','-b:a','192k','-af','apad');
       args.push('-c:v','libx264','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1','-avoid_negative_ts','make_zero',output);
