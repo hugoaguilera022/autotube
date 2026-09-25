@@ -17,6 +17,7 @@
     "googleapis": "^144.0.0",
     "@supabase/supabase-js": "^2.57.4",
     "ffmpeg-static": "^5.2.0",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "youtube-dl-exec": "^3.1.15"
   }
 }
