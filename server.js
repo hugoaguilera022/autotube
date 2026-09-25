@@ -1360,16 +1360,39 @@ async function executeUrlToVideo(reference,jobId){
   const started=Date.now();
   try{
     const video=await getReferenceVideo(reference);
-    const style=await analyzeYoutubeReferenceMedia(reference,video);
+    let style=await analyzeYoutubeReferenceMedia(reference,video);
     const referenceTitle=String(video?.title||'Contenido original').slice(0,300);
     const visualReferenceAnalysis=style?.visualAnalysis||{};
     const audioProfile=visualReferenceAnalysis?.audioProfile&&typeof visualReferenceAnalysis.audioProfile==='object'?{...visualReferenceAnalysis.audioProfile}:{};
+    // Keep only the reference fields actually consumed downstream. This avoids
+    // retaining the full Gemini scene-by-scene analysis in memory during render.
+    const va=visualReferenceAnalysis||{};
+    const sp=va.structureProfile||{};
+    const compactSceneSegments=Array.isArray(sp.sceneSegments)
+      ? sp.sceneSegments.slice(0,12).map(s=>({
+          startSeconds:s?.startSeconds,endSeconds:s?.endSeconds,summary:String(s?.summary||'').slice(0,500),
+          subject:String(s?.subject||'').slice(0,300),shotScale:s?.shotScale,composition:s?.composition,
+          cameraMovement:s?.cameraMovement,motionIntensity:s?.motionIntensity,lighting:s?.lighting,palette:s?.palette,
+          transitionIn:s?.transitionIn,transitionOut:s?.transitionOut,audioRole:s?.audioRole,
+          narrationRole:s?.narrationRole,continuityAnchor:String(s?.continuityAnchor||'').slice(0,300),
+          generationPrompt:String(s?.generationPrompt||'').slice(0,700)
+        }))
+      : [];
+    const referenceStyleForGeneration={
+      visualAnalysis:{
+        videoProfile:va.videoProfile||{},
+        animationProfile:va.animationProfile||{},
+        audioProfile:va.audioProfile||{},
+        structureProfile:{...sp,sceneSegments:compactSceneSegments},
+        generationDirectives:va.generationDirectives||{}
+      }
+    };
 
     const outlineRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({topic:referenceTitle,reference,referenceTopic:referenceTitle,
         referenceData:{title:referenceTitle,videoId:video?.videoId||'',channelTitle:video?.channelTitle||''},
-        visualReferenceAnalysis,referenceStyle:style,language:'es',duration:'1'})
+        visualReferenceAnalysis,referenceStyle:referenceStyleForGeneration,language:'es',duration:'1'})
     });
     const outline=await outlineRes.json();
     if(!outlineRes.ok)throw new Error(outline?.error||'No se pudo generar la estructura.');
@@ -1378,11 +1401,13 @@ async function executeUrlToVideo(reference,jobId){
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({topic:referenceTitle,reference,referenceTopic:referenceTitle,
         referenceData:{title:referenceTitle,videoId:video?.videoId||'',channelTitle:video?.channelTitle||''},
-        visualReferenceAnalysis,referenceStyle:style,language:'es',duration:'1',
+        visualReferenceAnalysis:referenceStyleForGeneration?.visualAnalysis||{},
+        referenceStyle:referenceStyleForGeneration,language:'es',duration:'1',
         title:outline?.title||referenceTitle,outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]})
     });
     const plan=await planRes.json();
     if(!planRes.ok||!Array.isArray(plan?.scenes)||!plan.scenes.length)throw new Error(plan?.error||'Plan de producción inválido.');
+    style=null;
 
     const scenes=plan.scenes.map((s,i)=>({...s,number:i+1,duration:Math.max(4,Math.min(60,Number(s.duration)||8)),mediaType:'video',constantImage:false}));
     if(job)job.progress=20;
