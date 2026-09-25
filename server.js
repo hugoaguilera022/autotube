@@ -50,7 +50,7 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana'){
     contents:[{role:'user',parts:[{text:'Lee exactamente el siguiente texto como narración profesional para YouTube. Estilo: '+String(style||'Natural y cercana')+'. No añadas palabras, introducciones ni comentarios.\n\n'+safeText}]}],
     generationConfig:{
       responseModalities:['AUDIO'],
-      responseMimeType:'audio/L16',
+      responseFormat:{audio:{mimeType:'AUDIO_L16',sampleRate:24000}},
       speechConfig:{voiceConfig:{voice:'Kore'},languageCode:lang}
     }
   };
