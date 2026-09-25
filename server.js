@@ -739,7 +739,7 @@ async function runVideoAiSmokeTest(){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-video-test-'));
   try{
     const prompt='Original cinematic documentary video, 16:9 landscape. A remote unexplored snowy mountain range in the Himalayas at dawn, clouds moving naturally across the peaks, subtle aerial camera push-in, realistic lighting, atmospheric mist, professional documentary cinematography. No text, no logos, no copyrighted characters, no imitation of any specific existing video.';
-    const generated=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:2,width:704,height:512,improveTexture:false});
+    const generated=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:3,width:256,height:256,improveTexture:false});
     const validation=await validateGeneratedVideoClip(generated.outputPath);
     return{ok:Boolean(validation.ok),provider:generated.provider,model:generated.model,bytes:generated.bytes,durationSeconds:validation.durationSeconds,width:validation.width,height:validation.height,videoCodec:validation.videoCodec,status:generated.status};
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
