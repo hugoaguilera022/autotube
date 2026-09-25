@@ -1424,7 +1424,7 @@ async function executeUrlToVideo(reference,jobId){
       if(!results.length)results=await searchPixabayImages(query);
       const media=results.find(x=>x?.downloadUrl);
       if(!media)throw new Error('No se encontró visual para la escena '+scene.number+'.');
-      mediaResults.push({number:scene.number,media:[{...media,mediaType:'video'}],mediaType:'video'});
+      mediaResults.push({number:scene.number,media:[{...media,mediaType:String(media.mediaType||'image').toLowerCase()}],mediaType:String(media.mediaType||'image').toLowerCase()});
       const narration=await generateNarrationTts(
         scene.narration||('Contenido original sobre '+referenceTitle+'.'),
         'es',audioProfile.voiceStyle||'Natural y cercana',audioProfile
