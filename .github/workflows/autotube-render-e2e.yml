@@ -22,9 +22,9 @@ jobs:
             code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 15 https://autotube-hfeu.onrender.com/api/health || true)
             if [ "$code" = "200" ]; then
               cat /tmp/health.json
-            echo
-            sleep 180
-            exit 0
+              echo
+              sleep 180
+              exit 0
             fi
             echo "Waiting for Render... HTTP $code"
             sleep 10
@@ -62,7 +62,9 @@ jobs:
                 echo "AUTOTUBE_REAL_URL_TO_MP4_PASS"
                 curl -fL --retry 3 --max-time 1200 "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID/download" -o autotube-final.mp4
                 test -s autotube-final.mp4
-                sudo apt-get update -qq\n                sudo apt-get install -y -qq ffmpeg\n                ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,sample_rate,channels -of json autotube-final.mp4 | tee autotube-ffprobe.json
+                sudo apt-get update -qq
+                sudo apt-get install -y -qq ffmpeg
+                ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,sample_rate,channels -of json autotube-final.mp4 | tee autotube-ffprobe.json
                 exit 0
               fi
               echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL"; exit 1
