@@ -170,7 +170,7 @@ async function analyzeDownloadedReferenceMedia(file,video){
     const durationSeconds=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
     if(!durationSeconds)throw new Error('No se pudo determinar la duración del vídeo de referencia.');
 
-    const frameCount=Math.min(10,Math.max(5,Math.ceil(durationSeconds/20)));
+    const frameCount=Math.min(24,Math.max(8,Math.ceil(durationSeconds/12)));
     const fps=Math.max(1/60,Math.min(1/3,frameCount/durationSeconds));
     const pattern=path.join(dir,'frame-%02d.jpg');
     await runFfmpeg([
