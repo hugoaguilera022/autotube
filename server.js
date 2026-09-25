@@ -555,7 +555,7 @@ async function generateFallbackMusic(prompt,durationSeconds,dir,audioProfile={})
   const airAmp=(0.012*energy).toFixed(3);
   const gate=Math.max(0.08,Math.min(0.5,beat*0.45));
   const pattern=[
-    'aevalsrc=if(lt(mod(t\\,'+bar.toFixed(4)+'\\,'+(beat*0.35).toFixed(4)+'\\,sin(2*PI*'+Math.round(root*2)+'*t)*'+kickAmp+'\\,0):s=44100:d='+duration,
+    'aevalsrc=expr=if(lt(mod(t,'+bar.toFixed(4)+'),' +(beat*0.35).toFixed(4)+'),sin(2*PI*'+Math.round(root*2)+'*t)*'+kickAmp+',0):s=44100:d='+duration,
     'sine=frequency='+root+':sample_rate=44100:duration='+duration,
     'sine=frequency='+third+':sample_rate=44100:duration='+duration,
     'sine=frequency='+fifth+':sample_rate=44100:duration='+duration,
