@@ -184,7 +184,15 @@ async function analyzeYoutubeReferenceMedia(url,video){
       break;
     }
     if(r?.ok){
-      const text=String(d?.output_text||'').trim();
+      const text=String(
+        d?.output_text ||
+        d?.steps?.filter(s=>s?.type==='model_output')
+          ?.flatMap(s=>Array.isArray(s?.content)?s.content:[])
+          ?.filter(c=>c?.type==='text')
+          ?.map(c=>c.text||'')
+          ?.join('') ||
+        ''
+      ).trim();
       if(text){
         const analysis=parseJsonResponse(text);
         const vp=analysis?.videoProfile||{},sp=analysis?.structureProfile||{},gd=analysis?.generationDirectives||{};
