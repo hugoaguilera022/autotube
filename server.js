@@ -1757,7 +1757,7 @@ const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening o
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
-const startupSelfTestReference=String(process.env.AUTOTUBE_SELF_TEST_REFERENCE||'').trim();
+const startupSelfTestReference='https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 if(startupSelfTestReference){
   setTimeout(async()=>{
     const selfTestId='selftest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
