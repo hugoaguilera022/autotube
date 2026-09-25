@@ -9,6 +9,7 @@ const fs = require('fs/promises');
 const os = require('os');
 const { spawn } = require('child_process');
 const multer = require('multer');
+const youtubedl = require('youtube-dl-exec');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 250 * 1024 * 1024 } });
 const renderJobs = new Map();
 const renderJobDir = path.join(os.tmpdir(), 'autotube-render-jobs');
@@ -33,12 +34,156 @@ app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true})
 app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
 function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
 async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
-async function analyzeYoutubeReferenceStyle(video){const thumbnails=[...(video?.thumbnails||[])].filter(Boolean).slice(0,2);const images=[];for(const url of thumbnails){try{const r=await fetch(url);if(!r.ok)continue;const type=String(r.headers.get('content-type')||'image/jpeg').split(';')[0];const data=Buffer.from(await r.arrayBuffer());if(data.length)images.push({mimeType:type,data:data.toString('base64')});}catch{}}if(!images.length)return{visualAnalysis:null,visualSource:'metadata-only',thumbnailCount:0};const content=await callGemini({system:'Eres un analista de estilo audiovisual. Analiza únicamente rasgos generales visibles en las miniaturas proporcionadas y combínalos con los metadatos. No identifiques ni reproduzcas contenido protegido. Devuelve JSON válido con visualStyle, environment, lighting, palette, composition, shotScale, cameraMovement, pacing, people, texture, depth, atmosphere, editingLanguage, audioStyle, structure y uncertainty. Para audioStyle y structure usa solo inferencias prudentes basadas en título, descripción, duración, idioma, categoría y subtítulos disponibles; no inventes una transcripción ni una pista musical concreta.',user:JSON.stringify({metadata:{title:video?.title||'',description:String(video?.description||'').slice(0,4000),duration:video?.duration||'',categoryId:video?.categoryId||'',defaultLanguage:video?.defaultLanguage||'',defaultAudioLanguage:video?.defaultAudioLanguage||'',captionAvailable:Boolean(video?.caption),definition:video?.definition||''},task:'Extrae un perfil reutilizable para crear un vídeo ORIGINAL del mismo tipo y lenguaje audiovisual general.'}),images,temperature:0.25,maxOutputTokens:1800,json:true});return{visualAnalysis:parseJsonResponse(content),visualSource:'youtube-thumbnails+metadata',thumbnailCount:images.length}}
-app.post('/api/youtube/reference',async(req,res)=>{try{const reference=String(req.body?.reference||'').trim();if(!reference)return res.status(400).json({error:'Indica una URL de YouTube.'});const video=await getReferenceVideo(reference);const referenceStyle=await analyzeYoutubeReferenceStyle(video);res.json({ok:true,reference,video,referenceStyle,analysis:{basis:'Metadatos públicos + miniaturas públicas del vídeo de referencia',note:'La URL de YouTube aporta metadatos y señales visuales de miniatura. No se descarga ni reutiliza el vídeo ni su audio; el perfil sonoro se limita a inferencias prudentes y el resultado usa audio original.'}})}catch(err){res.status(400).json({error:err.message||'No se pudo analizar la referencia.'})}});
+async function downloadYoutubeReference(url,dir){
+  const output=path.join(dir,'reference.%(ext)s');
+  const result=await youtubedl(url,{
+    format:'bv*[height<=360]+ba/b[height<=360]',
+    mergeOutputFormat:'mp4',
+    output,
+    noPlaylist:true,
+    noWarnings:true,
+    noCheckCertificates:true,
+    restrictFilenames:true,
+    preferFreeFormats:false
+  },{timeout:180000,killSignal:'SIGKILL'});
+  const files=await fs.readdir(dir);
+  const videoFile=files.find(name=>/^reference\.(mp4|mkv|webm|mov)$/i.test(name));
+  if(!videoFile)throw new Error('yt-dlp no pudo descargar una copia temporal de análisis del vídeo de YouTube.');
+  const file=path.join(dir,videoFile);
+  const stat=await fs.stat(file);
+  if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
+  return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1000)};
+}
+
+async function uploadGeminiFile(filePath,mimeType){
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('Falta GEMINI_API_KEY.');
+  const stat=await fs.stat(filePath);
+  const startResponse=await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files',{
+    method:'POST',
+    headers:{
+      'x-goog-api-key':key,
+      'X-Goog-Upload-Protocol':'resumable',
+      'X-Goog-Upload-Command':'start',
+      'X-Goog-Upload-Header-Content-Length':String(stat.size),
+      'X-Goog-Upload-Header-Content-Type':mimeType,
+      'Content-Type':'application/json'
+    },
+    body:JSON.stringify({file:{display_name:path.basename(filePath)}})
+  });
+  if(!startResponse.ok)throw new Error('Gemini Files no pudo iniciar la subida ('+startResponse.status+').');
+  const uploadUrl=startResponse.headers.get('x-goog-upload-url');
+  if(!uploadUrl)throw new Error('Gemini Files no devolvió una URL de subida.');
+  const data=await fs.readFile(filePath);
+  const uploadResponse=await fetch(uploadUrl,{
+    method:'POST',
+    headers:{
+      'Content-Length':String(data.length),
+      'X-Goog-Upload-Offset':'0',
+      'X-Goog-Upload-Command':'upload, finalize'
+    },
+    body:data
+  });
+  const raw=await uploadResponse.text();
+  let fileInfo=null;try{fileInfo=raw?JSON.parse(raw):null}catch{}
+  if(!uploadResponse.ok)throw new Error('Gemini Files no pudo subir el vídeo ('+uploadResponse.status+'): '+(fileInfo?.error?.message||raw.slice(0,400)));
+  const name=fileInfo?.file?.name;
+  const uri=fileInfo?.file?.uri;
+  if(!name||!uri)throw new Error('Gemini Files no devolvió el recurso subido.');
+  let state=String(fileInfo?.file?.state?.name||fileInfo?.file?.state||'PROCESSING');
+  for(let i=0;i<60&&state==='PROCESSING';i++){
+    await new Promise(r=>setTimeout(r,2000));
+    const check=await fetch('https://generativelanguage.googleapis.com/v1beta/'+name,{headers:{'x-goog-api-key':key}});
+    const checkRaw=await check.text();let checkData=null;try{checkData=checkRaw?JSON.parse(checkRaw):null}catch{}
+    if(!check.ok)throw new Error('Gemini Files no pudo consultar el estado ('+check.status+').');
+    state=String(checkData?.state?.name||checkData?.state||'');
+    if(state==='FAILED')throw new Error('Gemini no pudo procesar el vídeo de referencia.');
+  }
+  if(state!=='ACTIVE')throw new Error('Gemini tardó demasiado en procesar el vídeo de referencia.');
+  return{name,uri,mimeType};
+}
+
+async function analyzeYoutubeReferenceMedia(url,video){
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-youtube-reference-'));
+  try{
+    const downloaded=await downloadYoutubeReference(url,dir);
+    const file=await uploadGeminiFile(downloaded.file,'video/mp4');
+    const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+    const prompt='Analiza el vídeo completo proporcionado como referencia audiovisual. Debes estudiar tanto imagen como audio y devolver ÚNICAMENTE JSON válido. El objetivo es extraer un perfil de producción reutilizable para crear un vídeo ORIGINAL, no copiar el vídeo. Determina especialmente si la imagen es constante durante todo el vídeo o si hay cambios de plano/escena. Analiza duración, frecuencia de cambios, movimiento de cámara, composición, paleta, iluminación, profundidad, textura, presencia de texto/personas/objetos, ritmo visual, transiciones y continuidad. En audio analiza si hay voz, música, ambiente, efectos, energía, dinámica, carácter, instrumentación perceptible, estilo de voz y una estimación prudente del BPM si es posible. No reproduzcas la letra ni transcribas contenido protegido. Devuelve exactamente estas claves: videoProfile, audioProfile, structureProfile, generationDirectives. Dentro de videoProfile incluye durationSeconds, constantImage, estimatedSceneCount, sceneChangeRate, cameraMovement, composition, palette, lighting, visualStyle, continuity. Dentro de audioProfile incluye hasSpeech, hasMusic, hasAmbience, musicMood, energy, dynamics, instrumentation, voiceStyle, bpmEstimate, audioContinuity. Dentro de structureProfile incluye opening, pacing, transitions, segmentCount, segmentDurations, visualContinuity. Dentro de generationDirectives incluye useSingleContinuousVisual, preferredSceneCount, preserveVisualContinuity, preserveAudioContinuity, visualSearchStrategy, musicStrategy.';
+    const models=['gemini-3.8-flash','gemini-3.6-flash','gemini-3.5-flash-lite'];
+    let lastError='';
+    for(const model of models){
+      const body={
+        contents:[{role:'user',parts:[
+          {text:prompt},
+          {file_data:{mime_type:file.mimeType,file_uri:file.uri}}
+        ]}],
+        generationConfig:{responseMimeType:'application/json',maxOutputTokens:2600,temperature:0.2}
+      };
+      const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-goog-api-key':key},
+        body:JSON.stringify(body)
+      });
+      const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
+      if(r.ok){
+        const text=d?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';
+        if(text){
+          const analysis=parseJsonResponse(text);
+          const vp=analysis?.videoProfile||{},ap=analysis?.audioProfile||{},sp=analysis?.structureProfile||{},gd=analysis?.generationDirectives||{};
+          return{
+            visualAnalysis:analysis,
+            visualSource:'youtube-full-video+audio',
+            analysisSource:'yt-dlp+Gemini-video-understanding',
+            thumbnailCount:Number(video?.thumbnails?.length||0),
+            referenceFileBytes:downloaded.bytes,
+            hasFullVideoAnalysis:true,
+            hasAudioAnalysis:true,
+            constantImage:Boolean(vp.constantImage),
+            estimatedSceneCount:Number(vp.estimatedSceneCount||sp.segmentCount||0),
+            preferredSceneCount:Number(gd.preferredSceneCount||0),
+            durationSeconds:Number(vp.durationSeconds||0),
+            audioStyle:ap,
+            structure:sp
+          };
+        }
+        lastError='Gemini no devolvió análisis.';
+      }else{
+        lastError='Gemini '+r.status+': '+(d?.error?.message||raw.slice(0,500));
+      }
+      if(r.status!==400&&r.status!==404&&r.status!==429&&r.status<500)break;
+    }
+    throw new Error(lastError||'Gemini no pudo analizar el vídeo completo.');
+  }finally{
+    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
+}
+
+app.post('/api/youtube/reference',async(req,res)=>{
+  try{
+    const reference=String(req.body?.reference||'').trim();
+    if(!reference)return res.status(400).json({error:'Indica una URL de YouTube.'});
+    const video=await getReferenceVideo(reference);
+    const referenceStyle=await analyzeYoutubeReferenceMedia(reference,video);
+    res.json({
+      ok:true,
+      reference,
+      video,
+      referenceStyle,
+      analysis:{
+        basis:'Vídeo completo de YouTube descargado temporalmente para análisis audiovisual + audio mediante Gemini.',
+        note:'El archivo se usa únicamente como entrada temporal de análisis y se elimina al terminar. AutoTube no reutiliza el vídeo ni su audio en el MP4 generado.'
+      }
+    });
+  }catch(err){
+    console.error('YouTube full reference analysis error:',err);
+    res.status(502).json({error:err.message||'No se pudo analizar el vídeo completo de YouTube.'});
+  }
+});
 
 app.post('/api/ai/outline',async(req,res)=>{const{topic,language='es',duration='8',reference='',referenceData=null,visualReferenceAnalysis=null,referenceStyle=null,referenceTopic=''}=req.body||{};const effectiveTopic=String(topic||referenceTopic||referenceData?.title||'').trim();if(!effectiveTopic)return res.status(400).json({error:'Indica un tema o proporciona una referencia de YouTube.'});if(!process.env['GEM'+'INI_'+'API_'+'KEY'])return res.json({demo:true,title:`Ideas para un vídeo sobre ${effectiveTopic}`,outline:['Gancho inicial','Contexto y promesa','Desarrollo en 3 bloques','Cierre y llamada a la acción'],note:'Conecta GEMINI_API_KEY para generar con IA.'});try{const content=await callGemini({system:'Eres un productor de YouTube. Devuelve JSON con title, hook, outline, visualIdeas, description y tags. No copies textos de otros vídeos.',user:JSON.stringify({task:'Crea una estructura audiovisual original sobre el tema indicado. Si referenceTopic contiene el título/tema de la referencia y el usuario no ha proporcionado otro tema, usa ese tema como asunto principal del nuevo vídeo. No sustituyas el tema de la referencia por otro asunto no relacionado.',topic:effectiveTopic,language,duration,reference:referenceData||(reference?{url:reference}:null),visualReferenceAnalysis,referenceStyle}),temperature:0.8,maxOutputTokens:1400,json:true});return res.json(parseJsonResponse(content))}catch(err){console.error('Outline Gemini error:',err);return res.json({demo:true,fallback:true,title:`${effectiveTopic} — The AI Movie`,hook:`Una historia audiovisual original sobre ${effectiveTopic}.`,outline:['Gancho inicial','Contexto y promesa','Desarrollo en 3 bloques','Momento principal','Cierre'],visualIdeas:[`Cinematic realistic footage about ${effectiveTopic}, opening scene, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, development, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, main moment, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, ending, 16:9`],description:`Vídeo original sobre ${effectiveTopic}.`,tags:[effectiveTopic,'AI','YouTube'],warning:'Gemini no respondió correctamente en este intento; se ha creado una estructura local para continuar.'})}});
 
-app.post('/api/ai/production-plan',async(req,res)=>{try{const{topic,language='es',duration='8',title='',outline=[],visualIdeas=[],visualReferenceAnalysis=null,referenceStyle=null,referenceTopic=''}=req.body||{};const effectiveTopic=String(topic||referenceTopic||'').trim();if(!effectiveTopic)return res.status(400).json({error:'Indica un tema o proporciona una referencia.'});const sceneCount=Math.max(4,Math.min(12,Math.round(Number(duration)/2)));const content=await callGemini({system:'Eres director de producción audiovisual de YouTube. Puedes trabajar con cualquier género, tema o formato de vídeo. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. El género y contenido deben determinarse por el tema y por las referencias proporcionadas; no presupongas naturaleza, paisajes, relajación ni bienestar. Cada escena debe tener number, title, narration, visualPrompt, searchQuery, duration y transition. Si existe visualReferenceAnalysis, úsalo como guía principal de ESTILO VISUAL: paisaje y entorno, iluminación, hora del día, paleta, composición, escala de planos, movimiento de cámara, velocidad/ritmo, presencia o ausencia de personas, textura, profundidad y atmósfera. Mantén esas características de forma consistente entre escenas. Si existe referenceStyle, úsalo como perfil principal de referencia: conserva el tipo de estructura, densidad de edición, composición, iluminación, paleta, escala de planos y ritmo general. Usa audioStyle solo como guía de diseño para crear música y sonido ORIGINAL; no copies ninguna pista, voz o audio. Si la referencia procede únicamente de una URL, recuerda que su audio no ha sido escuchado directamente y evita afirmar detalles no evidenciados. Si existe una referencia de YouTube, úsala para rasgos generales de formato y temática. NO copies escenas, textos, personajes, encuadres concretos ni contenido identificable. Genera escenas y búsquedas originales que reproduzcan el tipo de experiencia visual, no el vídeo fuente. En visualPrompt describe explícitamente los rasgos de estilo que deben conservarse. En searchQuery incluye las palabras necesarias para encontrar vídeos reales compatibles con ese estilo, además del contenido de la escena. Crea contenido original.',user:JSON.stringify({topic:effectiveTopic,language,duration,title,outline,visualIdeas,visualReferenceAnalysis,referenceStyle,sceneCount,stylePriority:'Cuando haya análisis visual, la similitud buscada es de características audiovisuales generales (ambiente, luz, composición, movimiento y ritmo), no de contenido ni de planos concretos.'}),temperature:0.75,maxOutputTokens:2600,json:true});return res.json(parseJsonResponse(content))}catch(err){console.error('Production plan error:',err);const fallbackCount=Math.max(4,Math.min(12,Math.round(Number(req.body?.duration||8)/2))),fallbackTopic=String(req.body?.topic||req.body?.referenceTopic||'el tema del vídeo').trim(),fallbackScenes=Array.from({length:fallbackCount},(_,i)=>({number:i+1,title:i===0?'Introducción':'Desarrollo · escena '+(i+1),narration:i===0?'Presentación del tema y promesa principal del vídeo.':'Desarrollo del contenido con una explicación clara y visual.',visualPrompt:'Realistic cinematic footage about '+fallbackTopic+', scene '+(i+1)+', natural light, detailed, 16:9, original composition',searchQuery:fallbackTopic,duration:Math.round((Number(req.body?.duration||8)*60)/fallbackCount),transition:'Fundido suave'}));res.json({demo:true,fallback:true,title:req.body?.title||'Vídeo sobre '+fallbackTopic,musicMood:'Ambient cinematográfico',voiceStyle:'Natural y cercana',scenes:fallbackScenes,warning:'La API de IA no respondió. Se ha creado un plan local para que puedas continuar.'})}});
+app.post('/api/ai/production-plan',async(req,res)=>{try{const{topic,language='es',duration='8',title='',outline=[],visualIdeas=[],visualReferenceAnalysis=null,referenceStyle=null,referenceTopic=''}=req.body||{};const effectiveTopic=String(topic||referenceTopic||'').trim();if(!effectiveTopic)return res.status(400).json({error:'Indica un tema o proporciona una referencia.'});const refProfile=referenceStyle?.visualAnalysis||visualReferenceAnalysis||{};const refDirectives=refProfile?.generationDirectives||{};const refVideo=refProfile?.videoProfile||{};const sceneCount=Boolean(refDirectives.useSingleContinuousVisual||refVideo.constantImage)?1:Math.max(4,Math.min(12,Math.round(Number(duration)/2)));const content=await callGemini({system:'Eres director de producción audiovisual de YouTube. Puedes trabajar con cualquier género, tema o formato de vídeo. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. El género y contenido deben determinarse por el tema y por las referencias proporcionadas; no presupongas naturaleza, paisajes, relajación ni bienestar. Cada escena debe tener number, title, narration, visualPrompt, searchQuery, duration y transition. Si generationDirectives.useSingleContinuousVisual=true o videoProfile.constantImage=true, genera UNA SOLA escena que cubra toda la duración y exige continuidad visual absoluta; no inventes cambios de plano ni varias escenas. Si el perfil indica una imagen fija, la búsqueda visual debe priorizar una fotografía/imagen horizontal única y el montaje debe mantenerla durante toda la duración. Si existe visualReferenceAnalysis, úsalo como guía principal de ESTILO VISUAL: paisaje y entorno, iluminación, hora del día, paleta, composición, escala de planos, movimiento de cámara, velocidad/ritmo, presencia o ausencia de personas, textura, profundidad y atmósfera. Mantén esas características de forma consistente entre escenas. Si existe referenceStyle, úsalo como perfil principal de referencia: conserva el tipo de estructura, densidad de edición, composición, iluminación, paleta, escala de planos y ritmo general. Usa audioStyle solo como guía de diseño para crear música y sonido ORIGINAL; no copies ninguna pista, voz o audio. Si la referencia procede únicamente de una URL, recuerda que su audio no ha sido escuchado directamente y evita afirmar detalles no evidenciados. Si existe una referencia de YouTube, úsala para rasgos generales de formato y temática. NO copies escenas, textos, personajes, encuadres concretos ni contenido identificable. Genera escenas y búsquedas originales que reproduzcan el tipo de experiencia visual, no el vídeo fuente. En visualPrompt describe explícitamente los rasgos de estilo que deben conservarse. En searchQuery incluye las palabras necesarias para encontrar vídeos reales compatibles con ese estilo, además del contenido de la escena. Crea contenido original.',user:JSON.stringify({topic:effectiveTopic,language,duration,title,outline,visualIdeas,visualReferenceAnalysis,referenceStyle,sceneCount,stylePriority:'Cuando haya análisis visual, la similitud buscada es de características audiovisuales generales (ambiente, luz, composición, movimiento y ritmo), no de contenido ni de planos concretos.'}),temperature:0.75,maxOutputTokens:2600,json:true});return res.json(parseJsonResponse(content))}catch(err){console.error('Production plan error:',err);const fallbackCount=Math.max(4,Math.min(12,Math.round(Number(req.body?.duration||8)/2))),fallbackTopic=String(req.body?.topic||req.body?.referenceTopic||'el tema del vídeo').trim(),fallbackScenes=Array.from({length:fallbackCount},(_,i)=>({number:i+1,title:i===0?'Introducción':'Desarrollo · escena '+(i+1),narration:i===0?'Presentación del tema y promesa principal del vídeo.':'Desarrollo del contenido con una explicación clara y visual.',visualPrompt:'Realistic cinematic footage about '+fallbackTopic+', scene '+(i+1)+', natural light, detailed, 16:9, original composition',searchQuery:fallbackTopic,duration:Math.round((Number(req.body?.duration||8)*60)/fallbackCount),transition:'Fundido suave'}));res.json({demo:true,fallback:true,title:req.body?.title||'Vídeo sobre '+fallbackTopic,musicMood:'Ambient cinematográfico',voiceStyle:'Natural y cercana',scenes:fallbackScenes,warning:'La API de IA no respondió. Se ha creado un plan local para que puedas continuar.'})}});
 
 
 async function generateGeminiTts(text,language='es',style='Natural y cercana'){
@@ -264,8 +409,8 @@ async function executePreflight(){
   const run=async(name,fn)=>{const started=Date.now();try{const value=await fn();checks[name]={ok:true,ms:Date.now()-started,...(value&&typeof value==='object'?value:{})};}catch(err){checks[name]={ok:false,ms:Date.now()-started,error:err.message||String(err)};}};
   await run('ffmpeg',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-'));try{const out=path.join(dir,'test.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x180:r=10','-t','1','-an','-c:v','libx264','-pix_fmt','yuv420p',out]);const st=await fs.stat(out);if(!st.size)throw new Error('FFmpeg produjo un archivo vacío.');return{bytes:st.size};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
   await run('gemini',async()=>{const text=await callGemini({system:'Responde únicamente con JSON válido.',user:'Devuelve {"ok":true}.',maxOutputTokens:80,json:true});return{response:parseJsonResponse(text)}});
-  const referenceUrl='https://www.youtube.com/watch?v=1PAEeroCy9w';
-  await run('youtube-reference',async()=>{const r=await fetch('http://127.0.0.1:'+PORT+'/api/youtube/reference',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:referenceUrl})});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'YouTube reference '+r.status);if(!d?.video?.title)throw new Error('No se obtuvo el título de la referencia.');if(!d?.referenceStyle)throw new Error('No se obtuvo el perfil de referencia.');return{title:d.video.title,visualSource:d.referenceStyle.visualSource||'metadata-only',thumbnailCount:Number(d.referenceStyle.thumbnailCount)||0,hasVisualAnalysis:Boolean(d.referenceStyle.visualAnalysis),hasAudioProfile:Boolean(d.referenceStyle.visualAnalysis?.audioStyle),hasStructureProfile:Boolean(d.referenceStyle.visualAnalysis?.structure)}});
+  const referenceUrl='https://www.youtube.com/watch?v=DtNJMSoerWU';
+  await run('youtube-reference',async()=>{const r=await fetch('http://127.0.0.1:'+PORT+'/api/youtube/reference',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:referenceUrl})});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'YouTube reference '+r.status);if(!d?.video?.title)throw new Error('No se obtuvo el título de la referencia.');if(!d?.referenceStyle)throw new Error('No se obtuvo el perfil de referencia.');return{title:d.video.title,visualSource:d.referenceStyle.visualSource||'unknown',thumbnailCount:Number(d.referenceStyle.thumbnailCount)||0,hasVisualAnalysis:Boolean(d.referenceStyle.hasFullVideoAnalysis),hasAudioProfile:Boolean(d.referenceStyle.hasAudioAnalysis),hasStructureProfile:Boolean(d.referenceStyle.structure),constantImage:Boolean(d.referenceStyle.constantImage),estimatedSceneCount:Number(d.referenceStyle.estimatedSceneCount||0),preferredSceneCount:Number(d.referenceStyle.preferredSceneCount||0)}});
   await run('pexels',async()=>{if(!process.env.PEXELS_API_KEY)throw new Error('Falta PEXELS_API_KEY.');const rows=await searchPexels('cinematic');if(!rows.length)throw new Error('Pexels no devolvió vídeos.');return{results:rows.length}});
   await run('pixabay',async()=>{if(!process.env.PIXABAY_API_KEY)throw new Error('Falta PIXABAY_API_KEY.');const rows=await searchPixabay('cinematic');if(!rows.length)throw new Error('Pixabay no devolvió vídeos.');return{results:rows.length}});
   await run('visual-reference',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-reference-'));try{const input=path.join(dir,'reference.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=5','-t','1','-an','-c:v','libx264','-pix_fmt','yuv420p',input]);const video=await fs.readFile(input);const form=new FormData();form.append('video',new Blob([video],{type:'video/mp4'}),'preflight-reference.mp4');const r=await fetch('http://127.0.0.1:'+PORT+'/api/reference/visual-analysis',{method:'POST',body:form});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'Visual analysis '+r.status);if(!d?.analysis||typeof d.analysis!=='object')throw new Error('El análisis visual no devolvió JSON estructurado.');return{framesAnalyzed:Number(d.framesAnalyzed)||0};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
