@@ -1,8 +1,11 @@
 const $ = (s) => document.querySelector(s);
 let currentVideoPlan = null;
 const views = [...document.querySelectorAll('.view')];
-function go(name){views.forEach(v=>v.classList.toggle('active-view',v.id===name));document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===name));const titles={dashboard:'Tu contenido, automatizado.',create:'Crear un vídeo con IA.',production:'Producción del vídeo',projects:'Tus proyectos.',automation:'Automatiza tu canal.',connections:'Conexiones & API'};$('#pageTitle').textContent=titles[name]||'AutoTube';}
-document.querySelectorAll('.nav').forEach(b=>b.onclick=()=>go(b.dataset.view));document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
+const pageTitles={dashboard:'Tu contenido, automatizado.',create:'Crear un vídeo con IA.',production:'Producción del vídeo',projects:'Tus proyectos.',automation:'Automatiza tu canal.',connections:'Conexiones & API'};
+function go(name){views.forEach(v=>v.classList.toggle('active-view',v.id===name));document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===name));const title=$('#pageTitle');if(title)title.textContent=pageTitles[name]||'AutoTube';}
+// Navegación robusta: delegación de eventos para que las secciones sigan funcionando aunque otro módulo registre handlers.
+document.addEventListener('click',e=>{const b=e.target.closest('.nav,[data-go]');if(!b)return;const name=b.dataset.view||b.dataset.go;if(name){e.preventDefault();go(name);}});
+window.go=go;
 async function health(){try{const r=await fetch('/api/health');const d=await r.json();$('#serverStatus').textContent='Servidor conectado';$('#openaiBadge').textContent=d.configured.gemini?'Conectado':'Revisar'}catch{$('#serverStatus').textContent='Servidor no disponible'}}health();
 function connectYoutube(){window.location.href='/api/youtube/auth';}
 $('#youtubeBtn').onclick=connectYoutube;$('#youtubeConnect2').onclick=connectYoutube;$('#youtubeConnected').onclick=()=>go('connections');
