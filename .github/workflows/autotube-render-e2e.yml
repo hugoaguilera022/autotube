@@ -19,7 +19,7 @@ jobs:
             if [ "$code" = "200" ]; then
               cat /tmp/health.json
             echo
-            sleep 75
+            sleep 180
             exit 0
             fi
             echo "Waiting for Render... HTTP $code"
