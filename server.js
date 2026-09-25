@@ -49,6 +49,40 @@ function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!v
 async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
 async function downloadYoutubeReference(url,dir){
   await fs.mkdir(dir,{recursive:true});
+  // Reuse the already validated exact URL->MP4 downloader exposed by the preload.
+  // This avoids duplicating YouTube extraction logic and gives the reference analyzer
+  // the same proven source file used by the exact-media validation path.
+  try{
+    const base=`http://127.0.0.1:${PORT}`;
+    const start=await fetch(base+'/api/url-to-mp4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:url})});
+    const startData=await start.json().catch(()=>null);
+    if(start.ok&&startData?.jobId){
+      const jobId=String(startData.jobId);
+      const deadline=Date.now()+12*60*1000;
+      while(Date.now()<deadline){
+        await new Promise(r=>setTimeout(r,2000));
+        const status=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId));
+        const data=await status.json().catch(()=>null);
+        if(data?.status==='done'&&data?.downloadUrl){
+          const dl=await fetch(base+String(data.downloadUrl));
+          if(dl.ok){
+            const bytes=Buffer.from(await dl.arrayBuffer());
+            if(bytes.length){
+              const file=path.join(dir,'reference.mp4');
+              await fs.writeFile(file,bytes);
+              const stat=await fs.stat(file);
+              if(stat.size)return{file,bytes:stat.size,ytDlpOutput:'Internal exact URL->MP4 pipeline',strategy:'exact-url-to-mp4'};
+            }
+          }
+          break;
+        }
+        if(data?.status==='error')break;
+      }
+    }
+  }catch(err){
+    console.warn('Internal exact URL->MP4 reference acquisition failed:',err?.message||String(err));
+  }
+  const output=path.join(dir,'reference.%(ext)s');
   const output=path.join(dir,'reference.%(ext)s');
   const strategies=[
     {name:'mp4-avc-aac',format:'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]/best[ext=mp4]'},
