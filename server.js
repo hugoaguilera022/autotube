@@ -846,7 +846,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
         // instance memory ceiling. The source is still cropped to 16:9.
         '-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p,fps=30',
         '-map','0:v:0','-map','1:a:0',
-        '-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-threads','2',
+        '-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-threads','4',
         '-c:a','aac','-b:a','192k','-ar','44100','-ac','2','-af','apad',
         '-avoid_negative_ts','make_zero',output);
       await runFfmpeg(args);
@@ -862,7 +862,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',videoOnly]);
     }catch(copyErr){
       console.warn('Concat copy falló; usando recodificación final:',copyErr.message);
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c:v','libx264','-c:a','aac','-ar','44100','-ac','2','-b:a','192k','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-threads','2','-movflags','+faststart',videoOnly]);
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c:v','libx264','-c:a','aac','-ar','44100','-ac','2','-b:a','192k','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-threads','4','-movflags','+faststart',videoOnly]);
     }
     let out=videoOnly;
     if(musicBuffer){
