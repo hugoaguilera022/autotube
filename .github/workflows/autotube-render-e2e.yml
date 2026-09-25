@@ -18,8 +18,9 @@ jobs:
             code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 15 https://autotube-hfeu.onrender.com/api/health || true)
             if [ "$code" = "200" ]; then
               cat /tmp/health.json
-              echo
-              exit 0
+            echo
+            sleep 75
+            exit 0
             fi
             echo "Waiting for Render... HTTP $code"
             sleep 10
@@ -68,4 +69,38 @@ jobs:
             sleep 5
           done
           echo "AUTOTUBE_E2E_TEST_FAIL timeout"
+          exit 1
+      - name: Test real URL-to-MP4 pipeline
+        id: urlvideo
+        shell: bash
+        run: |
+          set -euo pipefail
+          reference='https://www.youtube.com/watch?v=qMUk5jrgENE'
+          response=$(curl -sS --max-time 30 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "{\"reference\":\"$reference\"}")
+          echo "$response"
+          job_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("jobId", ""))')
+          if [ -z "$job_id" ]; then echo "URL-to-MP4 did not return jobId"; exit 1; fi
+          echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+
+      - name: Poll real URL-to-MP4 job until MP4 is ready
+        shell: bash
+        env:
+          JOB_ID: ${{ steps.urlvideo.outputs.job_id }}
+        run: |
+          set -euo pipefail
+          for i in {1..360}; do
+            response=$(curl -sS --max-time 30 "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID")
+            echo "--- urlvideo poll $i ---"
+            echo "$response"
+            status=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))')
+            if [ "$status" = "done" ]; then
+              ok=$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("ok", False)).lower())')
+              size=$(printf '%s' "$response" | python -c 'import json,sys; print(int(json.load(sys.stdin).get("size", 0) or 0))')
+              if [ "$ok" = "true" ] && [ "$size" -gt 0 ]; then echo "AUTOTUBE_REAL_URL_TO_MP4_PASS"; exit 0; fi
+              echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL"; exit 1
+            fi
+            if [ "$status" = "error" ] || [ "$status" = "restart" ]; then echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL status=$status"; exit 1; fi
+            sleep 5
+          done
+          echo "AUTOTUBE_REAL_URL_TO_MP4_FAIL timeout"
           exit 1
