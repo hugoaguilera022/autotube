@@ -256,7 +256,124 @@ app.post('/api/youtube/reference',async(req,res)=>{
 
 app.post('/api/ai/outline',async(req,res)=>{const{topic,language='es',duration='8',reference='',referenceData=null,visualReferenceAnalysis=null,referenceStyle=null,referenceTopic=''}=req.body||{};const effectiveTopic=String(topic||referenceTopic||referenceData?.title||'').trim();if(!effectiveTopic)return res.status(400).json({error:'Indica un tema o proporciona una referencia de YouTube.'});if(!process.env['GEM'+'INI_'+'API_'+'KEY'])return res.json({demo:true,title:`Ideas para un vídeo sobre ${effectiveTopic}`,outline:['Gancho inicial','Contexto y promesa','Desarrollo en 3 bloques','Cierre y llamada a la acción'],note:'Conecta GEMINI_API_KEY para generar con IA.'});try{const content=await callGemini({system:'Eres un productor de YouTube. Devuelve JSON con title, hook, outline, visualIdeas, description y tags. No copies textos de otros vídeos.',user:JSON.stringify({task:'Crea una estructura audiovisual original sobre el tema indicado. Si referenceTopic contiene el título/tema de la referencia y el usuario no ha proporcionado otro tema, usa ese tema como asunto principal del nuevo vídeo. No sustituyas el tema de la referencia por otro asunto no relacionado.',topic:effectiveTopic,language,duration,reference:referenceData||(reference?{url:reference}:null),visualReferenceAnalysis,referenceStyle}),temperature:0.8,maxOutputTokens:1400,json:true});return res.json(parseJsonResponse(content))}catch(err){console.error('Outline Gemini error:',err);return res.json({demo:true,fallback:true,title:`${effectiveTopic} — The AI Movie`,hook:`Una historia audiovisual original sobre ${effectiveTopic}.`,outline:['Gancho inicial','Contexto y promesa','Desarrollo en 3 bloques','Momento principal','Cierre'],visualIdeas:[`Cinematic realistic footage about ${effectiveTopic}, opening scene, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, development, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, main moment, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, ending, 16:9`],description:`Vídeo original sobre ${effectiveTopic}.`,tags:[effectiveTopic,'AI','YouTube'],warning:'Gemini no respondió correctamente en este intento; se ha creado una estructura local para continuar.'})}});
 
-app.post('/api/ai/production-plan',async(req,res)=>{try{const{topic,language='es',duration='8',title='',outline=[],visualIdeas=[],visualReferenceAnalysis=null,referenceStyle=null,referenceTopic=''}=req.body||{};const effectiveTopic=String(topic||referenceTopic||'').trim();if(!effectiveTopic)return res.status(400).json({error:'Indica un tema o proporciona una referencia.'});const refProfile=referenceStyle?.visualAnalysis||visualReferenceAnalysis||{};const refDirectives=refProfile?.generationDirectives||{};const refVideo=refProfile?.videoProfile||{};const sceneCount=Boolean(refDirectives.useSingleContinuousVisual||refVideo.constantImage)?1:Math.max(4,Math.min(12,Math.round(Number(duration)/2)));const content=await callGemini({system:'Eres director de producción audiovisual de YouTube. Puedes trabajar con cualquier género, tema o formato de vídeo. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. El género y contenido deben determinarse por el tema y por las referencias proporcionadas; no presupongas naturaleza, paisajes, relajación ni bienestar. Cada escena debe tener number, title, narration, visualPrompt, searchQuery, duration y transition. Si generationDirectives.useSingleContinuousVisual=true o videoProfile.constantImage=true, genera UNA SOLA escena que cubra toda la duración y exige continuidad visual absoluta; no inventes cambios de plano ni varias escenas. Si el perfil indica una imagen fija, la búsqueda visual debe priorizar una fotografía/imagen horizontal única y el montaje debe mantenerla durante toda la duración. Añade también mediaType ("image" o "video") y constantImage (boolean). Si existe visualReferenceAnalysis, úsalo como guía principal de ESTILO VISUAL: paisaje y entorno, iluminación, hora del día, paleta, composición, escala de planos, movimiento de cámara, velocidad/ritmo, presencia o ausencia de personas, textura, profundidad y atmósfera. Mantén esas características de forma consistente entre escenas. Si existe referenceStyle, úsalo como perfil principal de referencia: conserva el tipo de estructura, densidad de edición, composición, iluminación, paleta, escala de planos y ritmo general. Usa audioStyle solo como guía de diseño para crear música y sonido ORIGINAL; no copies ninguna pista, voz o audio. Si la referencia procede de una URL de YouTube, usa el análisis audiovisual y sonoro obtenido directamente de esa URL como guía principal, sin copiar contenido identificable. Si existe una referencia de YouTube, úsala para rasgos generales de formato y temática. NO copies escenas, textos, personajes, encuadres concretos ni contenido identificable. Genera escenas y búsquedas originales que reproduzcan el tipo de experiencia visual, no el vídeo fuente. En visualPrompt describe explícitamente los rasgos de estilo que deben conservarse. En searchQuery incluye las palabras necesarias para encontrar vídeos reales compatibles con ese estilo, además del contenido de la escena. Crea contenido original.',user:JSON.stringify({topic:effectiveTopic,language,duration,title,outline,visualIdeas,visualReferenceAnalysis,referenceStyle,sceneCount,stylePriority:'Cuando haya análisis visual, la similitud buscada es de características audiovisuales generales (ambiente, luz, composición, movimiento y ritmo), no de contenido ni de planos concretos.'}),temperature:0.75,maxOutputTokens:2600,json:true});return res.json(parseJsonResponse(content))}catch(err){console.error('Production plan error:',err);const fallbackCount=Math.max(4,Math.min(12,Math.round(Number(req.body?.duration||8)/2))),fallbackTopic=String(req.body?.topic||req.body?.referenceTopic||'el tema del vídeo').trim(),fallbackScenes=Array.from({length:fallbackCount},(_,i)=>({number:i+1,title:i===0?'Introducción':'Desarrollo · escena '+(i+1),narration:i===0?'Presentación del tema y promesa principal del vídeo.':'Desarrollo del contenido con una explicación clara y visual.',visualPrompt:'Realistic cinematic footage about '+fallbackTopic+', scene '+(i+1)+', natural light, detailed, 16:9, original composition',searchQuery:fallbackTopic,duration:Math.round((Number(req.body?.duration||8)*60)/fallbackCount),transition:'Fundido suave'}));res.json({demo:true,fallback:true,title:req.body?.title||'Vídeo sobre '+fallbackTopic,musicMood:'Ambient cinematográfico',voiceStyle:'Natural y cercana',scenes:fallbackScenes,warning:'La API de IA no respondió. Se ha creado un plan local para que puedas continuar.'})}});
+app.post('/api/ai/production-plan',async(req,res)=>{try{
+  const {
+    topic,language='es',duration='8',title='',outline=[],visualIdeas=[],
+    visualReferenceAnalysis=null,referenceStyle=null,referenceTopic='',
+    referenceData=null,reference=''
+  }=req.body||{};
+  const effectiveTopic=String(topic||referenceTopic||referenceData?.title||'').trim();
+  if(!effectiveTopic)return res.status(400).json({error:'Indica un tema o proporciona una referencia.'});
+
+  const refProfile=referenceStyle?.visualAnalysis||visualReferenceAnalysis||{};
+  const refDirectives=refProfile?.generationDirectives||{};
+  const refVideo=refProfile?.videoProfile||{};
+  const refAudio=refProfile?.audioProfile||{};
+  const refStructure=refProfile?.structureProfile||{};
+  const singleVisual=Boolean(refDirectives.useSingleContinuousVisual||refVideo.constantImage);
+  const requestedSceneCount=singleVisual?1:Math.max(4,Math.min(12,Math.round(Number(duration)/2)));
+
+  const referenceContext={
+    sourceUrl:reference||'',
+    title:String(referenceData?.title||referenceTopic||effectiveTopic),
+    description:String(referenceData?.description||'').slice(0,6000),
+    channelTitle:String(referenceData?.channelTitle||''),
+    tags:Array.isArray(referenceData?.tags)?referenceData.tags.slice(0,30):[],
+    categoryId:String(referenceData?.categoryId||''),
+    duration:String(referenceData?.duration||''),
+    videoProfile:refVideo,
+    audioProfile:refAudio,
+    structureProfile:refStructure,
+    generationDirectives:refDirectives
+  };
+
+  const system='Eres director de producción audiovisual de YouTube. Debes generar escenas para un vídeo ORIGINAL basado en una referencia de YouTube. La referencia es la fuente principal del TEMA, TIPO DE CONTENIDO y LENGUAJE AUDIOVISUAL. No inventes un tema distinto. Si el usuario no escribió un tema explícito, el asunto DEBE permanecer alineado con referenceContext.title, description, tags y videoProfile. No conviertas automáticamente ningún vídeo en naturaleza, relajación, bienestar, documentales genéricos ni Fosa de las Marianas. Usa el contenido real de la referencia y su análisis para decidir qué aparece en las escenas. El estilo visual se reutiliza solo como características generales, nunca planos, textos, personajes o contenido identificable. Devuelve JSON válido con title, musicMood, voiceStyle y scenes. Cada escena debe tener number,title,narration,visualPrompt,searchQuery,duration,transition,mediaType y constantImage. Si useSingleContinuousVisual=true o constantImage=true, genera EXACTAMENTE UNA escena con toda la duración, mediaType=image, constantImage=true y una searchQuery que busque una única imagen horizontal coherente con el TEMA REAL de la referencia. No inventes cambios de escena. Si no es imagen constante, crea escenas cuyo contenido siga estrictamente el tema y la estructura de la referencia. En cada visualPrompt y searchQuery incluye el sujeto/tema concreto derivado de la referencia, además de los rasgos visuales generales. Antes de responder comprueba internamente que ninguna escena se ha desviado del tema principal. Crea contenido original.';
+
+  const userPayload={
+    task:'Crear el plan de escenas del vídeo nuevo manteniendo el mismo tipo de contenido y tema general de la referencia, pero con contenido original.',
+    effectiveTopic,referenceTopic,referenceContext,language,duration,title,outline,visualIdeas,
+    visualReferenceAnalysis,referenceStyle,sceneCount:requestedSceneCount,
+    hardRules:{
+      themeAnchor:referenceContext.title,
+      singleVisual,
+      neverInventUnrelatedTopic:true,
+      neverDefaultToNatureOrRelaxation:true
+    }
+  };
+
+  const content=await callGemini({
+    system,
+    user:JSON.stringify(userPayload),
+    temperature:0.45,
+    maxOutputTokens:3000,
+    json:true
+  });
+  const parsed=parseJsonResponse(content);
+  let scenes=Array.isArray(parsed?.scenes)?parsed.scenes:[];
+  if(!scenes.length)throw new Error('El plan de producción no devolvió escenas.');
+
+  if(singleVisual){
+    const first=scenes[0];
+    const totalSeconds=Math.max(30,Math.round(Number(duration)*60));
+    scenes=[{
+      ...first,
+      number:1,
+      title:first.title||referenceContext.title,
+      duration:totalSeconds,
+      mediaType:'image',
+      constantImage:true,
+      transition:'Continuidad visual completa',
+      searchQuery:String(first.searchQuery||referenceContext.title).trim()
+    }];
+  }else{
+    scenes=scenes.slice(0,requestedSceneCount).map((s,i)=>({
+      ...s,
+      number:i+1,
+      duration:Math.max(2,Number(s.duration)||Math.round((Number(duration)*60)/Math.max(1,requestedSceneCount))),
+      mediaType:String(s.mediaType||'video').toLowerCase()==='image'?'image':'video',
+      constantImage:Boolean(s.constantImage)
+    }));
+  }
+
+  // Conservamos siempre la referencia y el perfil en la respuesta para que el frontend no los pierda al pasar a media/render.
+  return res.json({
+    ...parsed,
+    title:String(parsed?.title||effectiveTopic),
+    scenes,
+    referenceTopic:referenceContext.title,
+    referenceData,
+    reference,
+    referenceStyle,
+    visualReferenceAnalysis,
+    referenceContext,
+    sceneCount:scenes.length
+  });
+}catch(err){
+  console.error('Production plan error:',err);
+  const body=req.body||{};
+  const fallbackTopic=String(body.topic||body.referenceTopic||body.referenceData?.title||'el tema del vídeo').trim();
+  const refProfile=body.referenceStyle?.visualAnalysis||body.visualReferenceAnalysis||{};
+  const singleVisual=Boolean(refProfile?.generationDirectives?.useSingleContinuousVisual||refProfile?.videoProfile?.constantImage);
+  const count=singleVisual?1:Math.max(4,Math.min(12,Math.round(Number(body.duration||8)/2)));
+  const totalSeconds=Math.max(30,Math.round(Number(body.duration||8)*60));
+  const fallbackScenes=singleVisual?[{
+    number:1,title:fallbackTopic,narration:'Contenido original centrado en '+fallbackTopic+'.',
+    visualPrompt:'Una única imagen horizontal original relacionada directamente con '+fallbackTopic+', composición '+String(refProfile?.videoProfile?.composition||'cinematográfica')+', iluminación '+String(refProfile?.videoProfile?.lighting||'coherente')+', sin cambios de escena.',
+    searchQuery:fallbackTopic,duration:totalSeconds,transition:'Continuidad visual completa',mediaType:'image',constantImage:true
+  }]:Array.from({length:count},(_,i)=>({
+    number:i+1,title:i===0?fallbackTopic:'Desarrollo · '+fallbackTopic+' · '+(i+1),
+    narration:i===0?'Presentación original de '+fallbackTopic+'.':'Desarrollo original sobre '+fallbackTopic+' relacionado directamente con la referencia.',
+    visualPrompt:'Visual original relacionado directamente con '+fallbackTopic+', manteniendo el estilo audiovisual de la referencia, 16:9.',
+    searchQuery:fallbackTopic,duration:Math.max(2,Math.round(totalSeconds/count)),transition:'Fundido suave',mediaType:'video',constantImage:false
+  }));
+  res.json({
+    demo:true,fallback:true,title:body.title||fallbackTopic,musicMood:'Ambient original',voiceStyle:'Natural y cercana',
+    scenes:fallbackScenes,referenceTopic:body.referenceTopic||body.referenceData?.title||fallbackTopic,
+    referenceData:body.referenceData||null,reference:body.reference||'',referenceStyle:body.referenceStyle||null,
+    visualReferenceAnalysis:body.visualReferenceAnalysis||null,
+    warning:'La API de IA no respondió; se ha creado un plan local anclado al tema de la referencia.'
+  });
+}});
 
 
 async function generateGeminiTts(text,language='es',style='Natural y cercana'){
