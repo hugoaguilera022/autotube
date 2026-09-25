@@ -1096,32 +1096,6 @@ app.get('/api/preflight',async(_req,res)=>{
 });
 
 
-async function generateDiagnosticLtxClip(prompt,dir,options={}){
-  return await new Promise((resolve,reject)=>{
-    const workerPath=path.join(__dirname,'ltx-worker.js');
-    const payload=JSON.stringify({
-      prompt,dir,
-      space:String(process.env.LTX_SPACE||'Lightricks/ltx-video-distilled'),
-      durationSeconds:Math.max(0.3,Math.min(8.5,Number(options.durationSeconds)||3)),
-      width:Math.max(256,Math.min(1280,Number(options.width)||256)),
-      height:Math.max(256,Math.min(1280,Number(options.height)||256)),
-      negativePrompt:options.negativePrompt,
-      guidanceScale:options.guidanceScale,
-      improveTexture:Boolean(options.improveTexture??false)
-    });
-    const child=spawn(process.execPath,[workerPath,payload],{env:process.env,stdio:['ignore','pipe','pipe']});
-    let out='',err='';
-    child.stdout.on('data',x=>{out+=x.toString();if(out.length>20000)out=out.slice(-20000)});
-    child.stderr.on('data',x=>{err+=x.toString();if(err.length>20000)err=err.slice(-20000)});
-    child.on('error',reject);
-    child.on('close',(code,signal)=>{
-      if(code!==0)return reject(new Error('LTX worker terminó con código '+code+(signal?' ('+signal+')':'')+': '+err.slice(-1200)));
-      try{const result=JSON.parse(out);if(!result?.ok)throw new Error('LTX worker no devolvió un resultado válido.');resolve(result);}
-      catch(e){reject(new Error('LTX worker devolvió una respuesta inválida: '+(e.message||String(e))));}
-    });
-  });
-}
-
 const fullPipelineTestJobs=new Map();
 async function executeFullPipelineTest(reference){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-full-test-'));
@@ -1168,7 +1142,7 @@ async function executeFullPipelineTest(reference){
         vp.cameraMovement&&('camera: '+vp.cameraMovement),ap.cameraMotion&&('camera motion: '+ap.cameraMotion),
         ap.effects&&('effects: '+ap.effects),sp.pacing&&('pacing: '+sp.pacing),
         'Original content only; preserve general audiovisual characteristics, no copied frames, text, logos or recordings; 16:9 realistic cinematography.'].filter(Boolean).join('. ');
-      clip=await generateDiagnosticLtxClip(prompt,dir,{durationSeconds:3,width:256,height:256,improveTexture:false});
+      clip=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:3,width:256,height:256,improveTexture:false});
       const check=await validateGeneratedVideoClip(clip.outputPath);
       return{provider:clip.provider,bytes:clip.bytes,durationSeconds:check.durationSeconds,width:check.width,height:check.height};
     });
