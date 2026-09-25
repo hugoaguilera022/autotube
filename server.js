@@ -328,7 +328,8 @@ async function generateFallbackMusic(prompt,durationSeconds,dir){
   const root=110+(seed[0]%6)*11,fifth=Math.round(root*1.5),octave=root*2;
   const filter='[0:a]volume=0.10,lowpass=f=900[bass];[1:a]volume=0.055,lowpass=f=1800[mid];[2:a]volume=0.035,lowpass=f=3200[high];[3:a]volume=0.018,highpass=f=7000[air];[4:a]volume=0.025,lowpass=f=1400[pulse];[bass][mid][high][air][pulse]amix=inputs=5:duration=longest:dropout_transition=2,aresample=44100,afade=t=in:st=0:d=3,afade=t=out:st='+Math.max(3,duration-3)+':d=3,volume=0.9[a]';
   await runFfmpeg(['-y','-f','lavfi','-i','sine=frequency='+root+':sample_rate=44100:duration='+duration,'-f','lavfi','-i','sine=frequency='+fifth+':sample_rate=44100:duration='+duration,'-f','lavfi','-i','sine=frequency='+octave+':sample_rate=44100:duration='+duration,'-f','lavfi','-i','anoisesrc=color=pink:amplitude=0.012:sample_rate=44100:duration='+duration,'-f','lavfi','-i','sine=frequency='+Math.max(55,root/2)+':sample_rate=44100:duration='+duration,'-filter_complex',filter,'-map','[a]','-ar','44100','-ac','2','-c:a','pcm_s16le',output]);
-  const audio=await fs.readFile(output);if(!audio.length)throw new Error('La música de respaldo está vacía.');
+  const audio=await fs.readFile(output);
+  if(!audio.length)throw new Error('La música de respaldo está vacía.');
   return{buffer:audio,mime:'audio/wav',provider:'FFmpeg procedural reference-style fallback'};
 }
 
@@ -355,10 +356,7 @@ app.post('/api/ai/music',async(req,res)=>{
       'Maintain a coherent continuous bed suitable for narration.'
     ].join('\n');
     let generated=await generateLyriaMusic(prompt);
-    if(!generated){
-      generated=await generateFallbackMusic(prompt,duration,dir);
-      console.warn('Lyria no disponible en la cuota actual; usando música procedural original basada en el perfil audiovisual de referencia.');
-    }
+    if(!generated)generated=await generateFallbackMusic(prompt,duration,dir);
     const raw=path.join(dir,'generated-audio');
     const output=path.join(dir,'music.wav');
     await fs.writeFile(raw,generated.buffer);
@@ -589,3 +587,13 @@ app.get('/api/preflight',async(_req,res)=>{
   const id='preflight_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
   preflightJobs.set(id,{id,status:'running',startedAt:Date.now(),result:null});
   res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/preflight/'+encodeURIComponent(id),message:'Preflight iniciado. Consulta statusUrl para ver el resultado completo.'});
+  executePreflight().then(result=>{const job=preflightJobs.get(id);if(job){job.status=result.ok?'done':'failed';job.result=result;job.finishedAt=Date.now();}}).catch(err=>{const job=preflightJobs.get(id);if(job){job.status='failed';job.result={ok:false,checks:{},failed:[{name:'preflight',error:err.message||String(err)}]};job.finishedAt=Date.now();}});
+});
+app.get('/api/preflight/:jobId',async(req,res)=>{
+  const job=preflightJobs.get(String(req.params.jobId||''));
+  if(!job)return res.status(410).json({ok:false,error:'La instancia se reinició durante el preflight y perdió el estado temporal. No se inició ningún vídeo real. Vuelve a abrir /api/preflight para lanzar una prueba nueva.'});
+  if(job.status==='running')return res.status(202).json({ok:false,status:'running',jobId:job.id,elapsedMs:Date.now()-job.startedAt});
+  return res.status(job.result?.ok?200:503).json({status:job.status,jobId:job.id,...(job.result||{ok:false,checks:{},failed:[]})});
+});
+
+app.listen(PORT,()=>console.log(`AutoTube listening on ${PORT}`));
