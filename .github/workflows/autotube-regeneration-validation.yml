@@ -1,0 +1,35 @@
+name: AutoTube regeneration validation
+on:
+  push:
+    branches: [main]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start
+        run: |
+          set -e
+          curl -fsS -X POST https://autotube-hfeu.onrender.com/api/url-to-video -H 'Content-Type: application/json' --data '{"reference":"https://youtu.be/gklcNX9EcW0?si=cl-YmRd3CkGyXTC5"}' > start.json
+          cat start.json
+          test -n "$(jq -r '.jobId' start.json)"
+      - name: Poll
+        run: |
+          set -e
+          id=$(jq -r .jobId start.json)
+          for i in $(seq 1 180); do
+            sleep 5
+            curl -fsS "https://autotube-hfeu.onrender.com/api/url-to-video/$id" > status.json || true
+            cat status.json
+            s=$(jq -r '.status // empty' status.json)
+            if [ "$s" = done ]; then
+              u=$(jq -r .downloadUrl status.json)
+              curl -fsSL "https://autotube-hfeu.onrender.com$u" -o final.mp4
+              test -s final.mp4
+              ffprobe -v error -show_entries format=duration,size:stream=codec_type,codec_name,width,height -of json final.mp4 | tee probe.json
+              jq -e '.streams | map(select(.codec_type=="video")) | length > 0' probe.json
+              jq -e '.streams | map(select(.codec_type=="audio")) | length >= 0' probe.json
+              exit 0
+            fi
+            if [ "$s" = error ]; then exit 1; fi
+          done
+          exit 1
