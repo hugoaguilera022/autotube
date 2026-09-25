@@ -40,7 +40,7 @@ async function downloadYoutubeReference(url,dir){
   const potScript=path.join(process.cwd(),'.pot-provider','server','build','generate_once.js');
   const pluginDirs=path.join(process.cwd(),'yt-dlp-plugins');
   const strategies=[
-    {name:'mweb_bgutil_pot',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['mweb']},'youtubepot-bgutilscript':{script_path:potScript}},pluginDirs},
+    {name:'mweb_bgutil_pot',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['mweb']},'youtubepot-bgutilscript':{script_path:potScript}}},
     {name:'web_safari_hls',format:'best[protocol^=m3u8]/best[height<=360]',extractor_args:{youtube:{player_client:['web_safari']}}},
     {name:'android_vr',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['android_vr']}}},
     {name:'tv',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['tv']}}},
@@ -63,7 +63,6 @@ async function downloadYoutubeReference(url,dir){
         restrictFilenames:true,
         preferFreeFormats:false,
         extractor_args:strategy.extractor_args,
-        ...(strategy.pluginDirs?{pluginDirs:strategy.pluginDirs}:{}),
         ffmpegLocation:path.dirname(ffmpegPath)
       },{timeout:180000,killSignal:'SIGKILL'});
       const files=await fs.readdir(dir);
