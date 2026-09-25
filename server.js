@@ -539,6 +539,26 @@ async function executePreflight(){
   });
   const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
   await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const remoteClip=rows.find(x=>x.downloadUrl);if(!remoteClip)throw new Error('No hay un clip descargable para la prueba de render.');if(!ttsAudio||!musicBuffer)throw new Error('Faltan audio de narración o música para la prueba integrada.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const source=path.join(dir,'smoke-source.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=5','-t','2','-an','-c:v','libx264','-pix_fmt','yuv420p',source]);const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2,narration:'Prueba de narración.'}],mediaResults:[{number:1,title:'Preflight',media:[{downloadUrl:source}]}],narrationAudio:[ttsAudio],musicBuffer,finalOutputPath:out});const validated=await validateRenderedMp4(out);return{bytes:result.size,provider:mediaSource,hasNarration:true,hasMusic:true,validatedAudioStream:true,...validated};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
+  await run('render-image-smoke',async()=>{
+    if(!musicBuffer||!ttsAudio)throw new Error('Faltan audio de narración o música para la prueba de imagen fija.');
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-image-'));
+    try{
+      const image=path.join(dir,'reference.jpg');
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=0x202020:s=320x180','-frames:v','1','-q:v','2',image]);
+      const out=path.join(dir,'image-smoke.mp4');
+      const result=await renderAutotubeVideo({
+        scenes:[{number:1,title:'Imagen fija',duration:2,narration:'Prueba de imagen fija.',mediaType:'image',constantImage:true}],
+        mediaResults:[{number:1,title:'Imagen fija',mediaType:'image',media:[{downloadUrl:image,mediaType:'image'}]}],
+        narrationAudio:[ttsAudio],
+        musicBuffer,
+        finalOutputPath:out
+      });
+      const validated=await validateRenderedMp4(out);
+      return{bytes:result.size,mediaType:'image',hasNarration:true,hasMusic:true,...validated};
+    }finally{
+      await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+    }
+  });
   const failed=Object.entries(checks).filter(([,v])=>!v.ok).map(([k,v])=>({name:k,error:v.error}));
   return{ok:failed.length===0,checks,failed};
 }
