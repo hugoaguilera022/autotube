@@ -113,7 +113,41 @@ async function searchPexels(query){if(!process.env.PEXELS_API_KEY)return[];const
 async function searchPixabay(query){if(!process.env.PIXABAY_API_KEY)return[];const r=await fetch('https://pixabay.com/api/videos/?'+new URLSearchParams({key:process.env.PIXABAY_API_KEY,q:query,lang:'es',video_type:'film',safesearch:'true',order:'popular',per_page:'6'}));if(!r.ok)throw new Error('Pixabay API '+r.status);const d=await r.json();return(d.hits||[]).map(v=>({provider:'Pixabay',id:v.id,title:'Vídeo Pixabay',duration:v.duration,thumbnail:v.videos?.medium?.thumbnail||v.videos?.small?.thumbnail||'',url:v.pageURL,downloadUrl:v.videos?.large?.url||v.videos?.medium?.url||v.videos?.small?.url||''})).filter(x=>x.downloadUrl)}
 app.post('/api/media/search',async(req,res)=>{try{const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];if(!scenes.length)return res.status(400).json({error:'No hay escenas para buscar.'});const results=[];for(const scene of scenes.slice(0,12)){const query=String(scene.searchQuery||scene.visualPrompt||scene.title||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim().slice(0,100);const[pexels,pixabay]=await Promise.allSettled([searchPexels(query),searchPixabay(query)]);results.push({number:scene.number,title:scene.title,query,media:[...(pexels.status==='fulfilled'?pexels.value:[]),...(pixabay.status==='fulfilled'?pixabay.value:[])]})}res.json({ok:true,results,credits:{pexels:'Vídeos proporcionados por Pexels',pixabay:'Vídeos proporcionados por Pixabay'}})}catch(err){res.status(502).json({error:err.message||'No se pudieron buscar visuales.'})}});
 
-async function downloadToFile(url,file){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),60000);try{const r=await fetch(url,{signal:controller.signal});if(!r.ok)throw new Error('No se pudo descargar el recurso ('+r.status+').');if(!r.body)throw new Error('La fuente de vídeo no devolvió datos.');const handle=await fs.open(file,'w');try{const reader=r.body.getReader();let total=0;const maxBytes=180*1024*1024;while(true){const part=await reader.read();if(part.done)break;total+=part.value.byteLength;if(total>maxBytes){await reader.cancel().catch(()=>{});throw new Error('El vídeo fuente supera el límite de 180 MB.');}await handle.write(Buffer.from(part.value));}if(total===0)throw new Error('El recurso descargado está vacío.');}finally{await handle.close().catch(()=>{});}}catch(err){if(err?.name==='AbortError')throw new Error('Tiempo de espera agotado al descargar el vídeo.');throw err}finally{clearTimeout(timer)}}
+async function downloadToFile(source,file){
+  const value=String(source||'');
+  if(value && path.isAbsolute(value)){
+    const stat=await fs.stat(value).catch(()=>null);
+    if(!stat?.isFile()||!stat.size)throw new Error('El recurso de vídeo local está vacío o no existe.');
+    await fs.copyFile(value,file);
+    const copied=await fs.stat(file);
+    if(!copied.size)throw new Error('No se pudo copiar el recurso de vídeo local.');
+    return;
+  }
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),60000);
+  try{
+    const r=await fetch(value,{signal:controller.signal});
+    if(!r.ok)throw new Error('No se pudo descargar el recurso ('+r.status+').');
+    if(!r.body)throw new Error('La fuente de vídeo no devolvió datos.');
+    const handle=await fs.open(file,'w');
+    try{
+      const reader=r.body.getReader();
+      let total=0;
+      const maxBytes=180*1024*1024;
+      while(true){
+        const part=await reader.read();
+        if(part.done)break;
+        total+=part.value.byteLength;
+        if(total>maxBytes){await reader.cancel().catch(()=>{});throw new Error('El vídeo fuente supera el límite de 180 MB.');}
+        await handle.write(Buffer.from(part.value));
+      }
+      if(total===0)throw new Error('El recurso descargado está vacío.');
+    }finally{await handle.close().catch(()=>{})}
+  }catch(err){
+    if(err?.name==='AbortError')throw new Error('Tiempo de espera agotado al descargar el vídeo.');
+    throw err;
+  }finally{clearTimeout(timer)}
+}
 function runFfmpeg(args){return new Promise((resolve,reject)=>{const p=spawn(ffmpegPath,args,{stdio:['ignore','ignore','pipe']});let err='';p.stderr.on('data',d=>{err+=d.toString();if(err.length>12000)err=err.slice(-12000)});p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))))})}
 app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=>{
   try{
