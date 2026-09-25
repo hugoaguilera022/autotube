@@ -423,11 +423,19 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana',au
         speechConfig:{voiceConfig:{voice:'Kore'},languageCode:lang}
       }
     };
-    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{      method:'POST',
-      headers:{'Content-Type':'application/json','x-goog-api-key':key},
-      body:JSON.stringify(body)
-    });
-    const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}    if(r.ok){
+    let r=null,raw='',d=null;
+    for(let attempt=0;attempt<2;attempt++){
+      r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{      method:'POST',
+        headers:{'Content-Type':'application/json','x-goog-api-key':key},
+        body:JSON.stringify(body)
+      });
+      raw=await r.text();d=null;try{d=raw?JSON.parse(raw):null}catch{}
+      if(r.status!==429||attempt===1)break;
+      const retryMatch=String(d?.error?.message||'').match(/retry in\s+([0-9.]+)s/i);
+      const waitMs=Math.min(15000,Math.max(1000,Math.ceil(Number(retryMatch?.[1]||5)*1000)+250));
+      await new Promise(resolve=>setTimeout(resolve,waitMs));
+    }
+    if(r.ok){
       const data=d?.candidates?.[0]?.content?.parts?.find(p=>p?.inlineData?.data)?.inlineData?.data;
       if(!data)throw new Error('Gemini TTS no devolvió audio.');
       const pcm=Buffer.from(data,'base64');
