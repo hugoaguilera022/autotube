@@ -83,6 +83,39 @@ async function downloadYoutubeReference(url,dir){
   throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. Se probaron múltiples clientes de yt-dlp y, cuando está disponible, un proveedor automático de PO tokens. Último error: '+lastError);
 }
 
+async function downloadYoutubeReference(url,dir){
+  const output=path.join(dir,'reference.%(ext)s');
+  const potScript=path.join(process.cwd(),'.pot-provider','server','build','generate_once.js');
+  const strategies=[
+    {name:'mweb_bgutil_pot',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['mweb']},'youtubepot-bgutilscript':{script_path:potScript}}},
+    {name:'web_safari_hls',format:'best[protocol^=m3u8]/best[height<=360]',extractor_args:{youtube:{player_client:['web_safari']}}},
+    {name:'android_vr',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['android_vr']}}},
+    {name:'tv',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['tv']}}},
+    {name:'tv_simply',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['tv_simply']}}},
+    {name:'web_embedded',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['web_embedded']}}},
+    {name:'ios',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['ios']}}}
+  ];
+  let lastError='';
+  for(const strategy of strategies){
+    try{
+      await fs.rm(dir,{recursive:true,force:false}).catch(()=>{});
+      await fs.mkdir(dir,{recursive:true});
+      const result=await youtubedl(url,{format:strategy.format,mergeOutputFormat:'mp4',output,noPlaylist:true,noWarnings:true,noCheckCertificates:true,restrictFilenames:true,preferFreeFormats:false,extractor_args:strategy.extractor_args,ffmpegLocation:path.dirname(ffmpegPath)},{timeout:180000,killSignal:'SIGKILL'});
+      const files=await fs.readdir(dir);
+      const videoFile=files.find(name=>/^reference\\.(mp4|mkv|webm|mov)$/i.test(name));
+      if(!videoFile)throw new Error('yt-dlp no produjo un archivo de vídeo.');
+      const file=path.join(dir,videoFile);
+      const stat=await fs.stat(file);
+      if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
+      return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1000),strategy:strategy.name};
+    }catch(err){
+      lastError=String(err?.stderr||err?.message||err||'').slice(-1600);
+      const files=await fs.readdir(dir).catch(()=>[]);
+      for(const name of files.filter(x=>/^reference\\./i.test(x)))await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
+    }
+  }
+  throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. Se probaron múltiples clientes de yt-dlp y, cuando está disponible, un proveedor automático de PO tokens. Último error: '+lastError);
+}
 async function uploadGeminiFile(filePath,mimeType){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
