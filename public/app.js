@@ -90,11 +90,10 @@ async function analyzeReferenceForCreation(reference){
 }
 
 $('#generateBtn').onclick=async()=>{
-const topic=$('#topic').value.trim();if(!topic)return alert('Escribe primero el tema del vídeo.');
+const typedTopic=$('#topic').value.trim();const referenceValue=$('#reference').value.trim();if(!typedTopic&&!referenceValue)return alert('Escribe el tema del vídeo o añade una referencia de YouTube.');
 const btn=$('#generateBtn'),state=$('#generationState'),preview=$('#preview');btn.disabled=true;btn.textContent='Generando…';state.textContent='Procesando';
 preview.innerHTML='<div class="empty"><div class="empty-icon">✦</div><b>La IA está preparando la estructura…</b><p>Esto puede tardar unos segundos.</p></div>';
 try{
-const referenceValue=$('#reference').value.trim();
 const referenceFile=$('#referenceVideo')?.files?.[0]||null;
 let referenceAnalysis=null;
 let visualReferenceAnalysis=null;
@@ -111,7 +110,9 @@ if(referenceValue){
   referenceStyle=referenceAnalysis?.referenceStyle||null;
   if(!visualReferenceAnalysis) visualReferenceAnalysis=referenceStyle?.visualAnalysis||null;
 }
-const d=await apiJson('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis,referenceStyle})},'la generación de la estructura');
+const topic=typedTopic||referenceAnalysis?.video?.title||'';
+if(!topic)throw new Error('No se pudo obtener el tema de la referencia de YouTube.');
+const d=await apiJson('/api/ai/outline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis,referenceStyle,referenceTopic:referenceAnalysis?.video?.title||''})},'la generación de la estructura');
 currentVideoPlan={...d,topic,duration:$('#duration').value,language:$('#language').value,reference:referenceValue,referenceData:referenceAnalysis?.video||null,visualReferenceAnalysis,referenceStyle};
 preview.innerHTML='<div style="text-align:left"><span class="pill">'+(d.demo?'DEMO':'IA GENERATIVA')+'</span><h3 style="font-size:21px;margin:14px 0 7px">'+escapeHtml(d.title||'Nuevo vídeo')+'</h3><p class="muted">'+escapeHtml(d.hook||d.note||'Estructura preparada.')+'</p><ol style="color:#cbd0db;line-height:1.8">'+(d.outline||[]).map(x=>'<li>'+escapeHtml(x)+'</li>').join('')+'</ol><button class="primary" id="continueProductionBtn">Continuar a producción →</button></div>';
 state.textContent='Listo';$('#continueProductionBtn').onclick=()=>openProduction(d);}catch(e){state.textContent='Error';preview.innerHTML='<div class="empty"><div class="empty-icon">!</div><b>No se pudo generar</b><p>'+escapeHtml(e.message)+'</p></div>'}finally{btn.disabled=false;btn.textContent='Generar estructura con IA'}};
