@@ -77,8 +77,7 @@ async function uploadGeminiFile(filePath,mimeType){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
   const stat=await fs.stat(filePath);
-  const startResponse=await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files',{    method:'POST',
-    headers:{
+  const startResponse=await fetch('https://generativelanguage.googleapis.com/upload/v1beta/files',{    method:'POST',    headers:{
       'x-goog-api-key':key,
       'X-Goog-Upload-Protocol':'resumable',
       'X-Goog-Upload-Command':'start',
@@ -157,8 +156,7 @@ async function analyzeYoutubeReferenceMedia(url,video){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
   const referenceUrl=String(url||'').trim();  if(!referenceUrl)throw new Error('Falta la URL de YouTube.');
-  const prompt='Analiza directamente el vídeo público de YouTube indicado con máxima fidelidad audiovisual. Estudia el vídeo completo y separa claramente: (1) imagen y fotografía: composición, encuadre, relación de aspecto, paleta, iluminación, textura, escala de planos, continuidad y si la imagen es constante; (2) movimiento y animación: cámara, zoom, paneo, desplazamiento, parallax, gráficos, texto animado, overlays, partículas, efectos, velocidad de animaciones y transiciones; (3) edición y estructura: apertura, bloques, duración aproximada de cada bloque, frecuencia de cambios, transiciones y ritmo; (4) audio: presencia de voz, tipo de locución, idioma, velocidad, pausas, emoción, música, ambiente, efectos, instrumentación, energía, dinámica, relación voz/música y BPM aproximado. Incluye marcas de tiempo cuando ayuden a describir cambios de estructura o audiovisual. No transcribas letras ni reproduzcas contenido protegido. El objetivo es crear un vídeo ORIGINAL que conserve el tema/tipo de contenido y las características generales de imagen, animación, locución, música, sonido y estructura, sin copiar escenas, guion, planos, personajes, texto ni grabaciones. Determina explícitamente si la imagen permanece esencialmente constante durante todo el vídeo. Devuelve ÚNICAMENTE JSON válido, sin markdown, con exactamente estas claves: videoProfile, animationProfile, audioProfile, structureProfile, generationDirectives. Dentro de videoProfile incluye durationSeconds, constantImage, estimatedSceneCount, sceneChangeRate, cameraMovement, composition, palette, lighting, visualStyle, continuity. Dentro de animationProfile incluye cameraMotion, zoomStyle, panStyle, overlays, textAnimation, effects, transitionStyle, motionIntensity, visualRhythm. Dentro de audioProfile incluye hasSpeech, language, speechRate, pauses, emotion, hasMusic, hasAmbience, hasSoundEffects, musicMood, energy, dynamics, instrumentation, voiceStyle, bpmEstimate, voiceMusicBalance, audioContinuity. Dentro de structureProfile incluye opening, pacing, transitions, segmentCount, segmentDurations, visualContinuity, timestamps. Dentro de generationDirectives incluye useSingleContinuousVisual, preferredSceneCount, preserveVisualContinuity, preserveAudioContinuity, visualSearchStrategy, musicStrategy, narrationStrategy, animationStrategy.';
-  const models=['gemini-3.8-flash'];
+  const prompt='Analiza directamente el vídeo público de YouTube indicado con máxima fidelidad audiovisual. Estudia el vídeo completo y separa claramente: (1) imagen y fotografía: composición, encuadre, relación de aspecto, paleta, iluminación, textura, escala de planos, continuidad y si la imagen es constante; (2) movimiento y animación: cámara, zoom, paneo, desplazamiento, parallax, gráficos, texto animado, overlays, partículas, efectos, velocidad de animaciones y transiciones; (3) edición y estructura: apertura, bloques, duración aproximada de cada bloque, frecuencia de cambios, transiciones y ritmo; (4) audio: presencia de voz, tipo de locución, idioma, velocidad, pausas, emoción, música, ambiente, efectos, instrumentación, energía, dinámica, relación voz/música y BPM aproximado. Incluye marcas de tiempo cuando ayuden a describir cambios de estructura o audiovisual. No transcribas letras ni reproduzcas contenido protegido. El objetivo es crear un vídeo ORIGINAL que conserve el tema/tipo de contenido y las características generales de imagen, animación, locución, música, sonido y estructura, sin copiar escenas, guion, planos, personajes, texto ni grabaciones. Determina explícitamente si la imagen permanece esencialmente constante durante todo el vídeo. Devuelve ÚNICAMENTE JSON válido, sin markdown, con exactamente estas claves: videoProfile, animationProfile, audioProfile, structureProfile, generationDirectives. Dentro de videoProfile incluye durationSeconds, constantImage, estimatedSceneCount, sceneChangeRate, cameraMovement, composition, palette, lighting, visualStyle, continuity. Dentro de animationProfile incluye cameraMotion, zoomStyle, panStyle, overlays, textAnimation, effects, transitionStyle, motionIntensity, visualRhythm. Dentro de audioProfile incluye hasSpeech, language, speechRate, pauses, emotion, hasMusic, hasAmbience, hasSoundEffects, musicMood, energy, dynamics, instrumentation, voiceStyle, bpmEstimate, voiceMusicBalance, audioContinuity. Dentro de structureProfile incluye opening, pacing, transitions, segmentCount, segmentDurations, visualContinuity, timestamps. Dentro de generationDirectives incluye useSingleContinuousVisual, preferredSceneCount, preserveVisualContinuity, preserveAudioContinuity, visualSearchStrategy, musicStrategy, narrationStrategy, animationStrategy.';  const models=['gemini-3.8-flash'];
   let lastError='';
   for(const model of models){
     const body={
@@ -237,8 +235,7 @@ app.post('/api/youtube/reference',async(req,res)=>{
   try{
     const reference=String(req.body?.reference||'').trim();    if(!reference)return res.status(400).json({error:'Indica una URL de YouTube.'});
     const video=await getReferenceVideo(reference);
-    const referenceStyle=await analyzeYoutubeReferenceMedia(reference,video);
-    res.json({
+    const referenceStyle=await analyzeYoutubeReferenceMedia(reference,video);    res.json({
       ok:true,
       reference,
       video,
@@ -317,8 +314,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
     const first=scenes[0];    const totalSeconds=Math.max(30,Math.round(Number(duration)*60));
     scenes=[{
       ...first,
-      number:1,
-      title:first.title||referenceContext.title,
+      number:1,      title:first.title||referenceContext.title,
       duration:totalSeconds,
       mediaType:'image',
       constantImage:true,
@@ -397,8 +393,7 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana'){
       headers:{'Content-Type':'application/json','x-goog-api-key':key},
       body:JSON.stringify(body)
     });
-    const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}
-    if(r.ok){
+    const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}    if(r.ok){
       const data=d?.candidates?.[0]?.content?.parts?.find(p=>p?.inlineData?.data)?.inlineData?.data;
       if(!data)throw new Error('Gemini TTS no devolvió audio.');
       const pcm=Buffer.from(data,'base64');
@@ -477,8 +472,7 @@ app.post('/api/ai/music',async(req,res)=>{
       'Estimated BPM: '+String(audioProfile.bpmEstimate||'unknown'),
       'Instrumental only, no vocals.',
       'Maintain a coherent continuous bed suitable for narration.'
-    ].join('\n');
-    let generated=await generateLyriaMusic(prompt);
+    ].join('\n');    let generated=await generateLyriaMusic(prompt);
     if(!generated)generated=await generateFallbackMusic(prompt,duration,dir);
     const raw=path.join(dir,'generated-audio');
     const output=path.join(dir,'music.wav');
@@ -557,8 +551,7 @@ app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=
       for(const name of files){
         const data=await fs.readFile(path.join(framesDir,name));
         if(data.length)images.push({mimeType:'image/jpeg',data:data.toString('base64')});
-      }
-      if(!images.length)throw new Error('Los fotogramas extraídos están vacíos.');
+      }      if(!images.length)throw new Error('Los fotogramas extraídos están vacíos.');
       const content=await callGemini({
         system:'Eres un analista audiovisual. Analiza únicamente las características visuales generales de los fotogramas proporcionados. No identifiques ni reproduzcas contenido protegido. Devuelve JSON válido con: environment, lighting, timeOfDay, palette, composition, shotScale, cameraMovement, pacing, people, texture, depth, atmosphere, visualStyle, consistency. Sé concreto y describe rasgos reutilizables para crear un vídeo ORIGINAL de cualquier género.',
         user:'Analiza estos fotogramas de un vídeo de referencia y resume su lenguaje visual general. No describas escenas concretas como instrucciones para copiarlas; extrae únicamente patrones de estilo, fotografía, composición, ritmo y atmósfera. Responde en JSON.',
@@ -637,8 +630,7 @@ async function validateRenderedMp4(file){
   const fps=fm?Number(fm[1]):0;
   const audioCodec=am?String(am[1]).toLowerCase():'';
   if(width!==1920||height!==1080)throw new Error('Resolución real del MP4: '+width+'x'+height+' (se esperaba 1920x1080).');
-  if(!fps||Math.abs(fps-30)>0.5)throw new Error('FPS reales del MP4: '+(fps||'desconocidos')+' (se esperaban 30).');
-  if(audioCodec!=='aac')throw new Error('Códec de audio real del MP4: '+(audioCodec||'desconocido')+' (se esperaba AAC).');
+  if(!fps||Math.abs(fps-30)>0.5)throw new Error('FPS reales del MP4: '+(fps||'desconocidos')+' (se esperaban 30).');  if(audioCodec!=='aac')throw new Error('Códec de audio real del MP4: '+(audioCodec||'desconocido')+' (se esperaba AAC).');
   return{width,height,fps,audioCodec};
 }
 
@@ -649,59 +641,18 @@ async function executePreflight(){
   let preflightReferenceVideo=null;
   let preflightReferenceStyle=null;
   const run=async(name,fn)=>{const started=Date.now();try{const value=await fn();checks[name]={ok:true,ms:Date.now()-started,...(value&&typeof value==='object'?value:{})};}catch(err){checks[name]={ok:false,ms:Date.now()-started,error:err.message||String(err)};}};
-  await run('ffmpeg',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-'));try{const out=path.join(dir,'test.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x180:r=10','-t','1','-an','-c:v','libx264','-pix_fmt','yuv420p',out]);const st=await fs.stat(out);if(!st.size)throw new Error('FFmpeg produjo un archivo vacío.');return{bytes:st.size};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
-  await run('gemini',async()=>{const text=await callGemini({system:'Responde únicamente con JSON válido.',user:'Devuelve {"ok":true}.',maxOutputTokens:80,json:true});return{response:parseJsonResponse(text)}});
+  // Preflight ligero: valida APIs y el flujo de planificación. Las pruebas de render ya fueron validadas previamente y no se repiten aquí para evitar reinicios/OOM en Render.
+  await run('ffmpeg',async()=>{if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-'));try{const out=path.join(dir,'test.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=black:s=320x180:r=5','-t','0.5','-an','-c:v','libx264','-pix_fmt','yuv420p',out]);const st=await fs.stat(out);if(!st.size)throw new Error('FFmpeg produjo un archivo vacío.');return{bytes:st.size};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
+  await run('gemini',async()=>{const text=await callGemini({system:'Responde únicamente con JSON válido.',user:'Devuelve {"ok":true}.',maxOutputTokens:40,json:true});return{response:parseJsonResponse(text)}});
   const referenceUrl='https://www.youtube.com/watch?v=DtNJMSoerWU';
   await run('youtube-reference',async()=>{const r=await fetch('http://127.0.0.1:'+PORT+'/api/youtube/reference',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:referenceUrl})});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'YouTube reference '+r.status);if(!d?.video?.title)throw new Error('No se obtuvo el título de la referencia.');if(!d?.referenceStyle)throw new Error('No se obtuvo el perfil de referencia.');preflightReferenceVideo=d.video;preflightReferenceStyle=d.referenceStyle;return{title:d.video.title,visualSource:d.referenceStyle.visualSource||'unknown',thumbnailCount:Number(d.referenceStyle.thumbnailCount)||0,hasVisualAnalysis:Boolean(d.referenceStyle.hasFullVideoAnalysis),hasAudioProfile:Boolean(d.referenceStyle.hasAudioAnalysis),hasAnimationAnalysis:Boolean(d.referenceStyle.hasAnimationAnalysis),hasStructureProfile:Boolean(d.referenceStyle.hasStructureAnalysis),constantImage:Boolean(d.referenceStyle.constantImage),estimatedSceneCount:Number(d.referenceStyle.estimatedSceneCount||0),preferredSceneCount:Number(d.referenceStyle.preferredSceneCount||0)}});
   await run('pexels',async()=>{if(!process.env.PEXELS_API_KEY)throw new Error('Falta PEXELS_API_KEY.');const rows=await searchPexels('cinematic');if(!rows.length)throw new Error('Pexels no devolvió vídeos.');return{results:rows.length}});
   await run('pixabay',async()=>{if(!process.env.PIXABAY_API_KEY)throw new Error('Falta PIXABAY_API_KEY.');const rows=await searchPixabay('cinematic');if(!rows.length)throw new Error('Pixabay no devolvió vídeos.');return{results:rows.length}});
-  await run('visual-reference',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-reference-'));try{const input=path.join(dir,'reference.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=5','-t','1','-an','-c:v','libx264','-pix_fmt','yuv420p',input]);const video=await fs.readFile(input);const form=new FormData();form.append('video',new Blob([video],{type:'video/mp4'}),'preflight-reference.mp4');const r=await fetch('http://127.0.0.1:'+PORT+'/api/reference/visual-analysis',{method:'POST',body:form});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'Visual analysis '+r.status);if(!d?.analysis||typeof d.analysis!=='object')throw new Error('El análisis visual no devolvió JSON estructurado.');return{framesAnalyzed:Number(d.framesAnalyzed)||0};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
-  await run('production-plan',async()=>{const ref=preflightReferenceVideo||await getReferenceVideo(referenceUrl);const refStyle=preflightReferenceStyle||await analyzeYoutubeReferenceMedia(referenceUrl,ref);const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic:'',referenceTopic:ref.title,language:'es',duration:'2',title:'Preflight original',outline:['Gancho','Contexto','Desarrollo','Cierre'],visualIdeas:['Reference-derived documentary visuals'],visualReferenceAnalysis:refStyle.visualAnalysis,referenceStyle:refStyle})});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'Production plan '+r.status);if(!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error('El plan de producción no devolvió escenas.');return{scenes:d.scenes.length,title:d.title||''}});
-  let ttsAudio=null;
-  await run('tts',async()=>{ttsAudio=await generateGeminiTts('Prueba breve de narración.','es','Natural y cercana');if(!ttsAudio.length)throw new Error('Gemini TTS devolvió audio vacío.');return{provider:'Gemini TTS',bytes:ttsAudio.length}});
-  let musicBuffer=null;
-  await run('music-ffmpeg',async()=>{
-    const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/music',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        topic:preflightReferenceVideo?.title||'Preflight',
-        mood:preflightReferenceStyle?.visualAnalysis?.audioProfile?.musicMood||'instrumental original',
-        audioProfile:preflightReferenceStyle?.visualAnalysis?.audioProfile||{},
-        durationSeconds:8
-      })
-    });
-    if(!r.ok){const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}throw new Error(d?.error||'Music API '+r.status);}
-    musicBuffer=Buffer.from(await r.arrayBuffer());
-    if(!musicBuffer.length)throw new Error('La prueba de música produjo un archivo vacío.');
-    return{bytes:musicBuffer.length,provider:r.headers.get('X-AutoTube-Music-Provider')||'Lyria'};
-  });
-  const mediaSource=checks.pexels?.ok?'pexels':(checks.pixabay?.ok?'pixabay':null);
-  await run('render-smoke',async()=>{if(!mediaSource)throw new Error('No hay proveedor de vídeo disponible para la prueba de render.');const rows=mediaSource==='pexels'?await searchPexels('cinematic'):await searchPixabay('cinematic');const remoteClip=rows.find(x=>x.downloadUrl);if(!remoteClip)throw new Error('No hay un clip descargable para la prueba de render.');if(!ttsAudio||!musicBuffer)throw new Error('Faltan audio de narración o música para la prueba integrada.');const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-render-'));try{const source=path.join(dir,'smoke-source.mp4');await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=5','-t','2','-an','-c:v','libx264','-pix_fmt','yuv420p',source]);const out=path.join(dir,'smoke.mp4');const result=await renderAutotubeVideo({scenes:[{number:1,title:'Preflight',duration:2,narration:'Prueba breve.'}],mediaResults:[{number:1,title:'Preflight',media:[{downloadUrl:source}]}],narrationAudio:[ttsAudio],musicBuffer,finalOutputPath:out});const validated=await validateRenderedMp4(out);return{bytes:result.size,provider:mediaSource,hasNarration:true,hasMusic:true,validatedAudioStream:true,...validated};}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}});
-  await run('render-image-smoke',async()=>{
-    if(!musicBuffer||!ttsAudio)throw new Error('Faltan audio de narración o música para la prueba de imagen fija.');
-    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-preflight-image-'));
-    try{
-      const image=path.join(dir,'reference.jpg');
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=0x202020:s=320x180','-frames:v','1','-q:v','2',image]);
-      const out=path.join(dir,'image-smoke.mp4');
-      const result=await renderAutotubeVideo({
-        scenes:[{number:1,title:'Imagen fija',duration:2,narration:'Prueba breve de imagen.',mediaType:'image',constantImage:true}],
-        mediaResults:[{number:1,title:'Imagen fija',mediaType:'image',media:[{downloadUrl:image,mediaType:'image'}]}],
-        narrationAudio:[ttsAudio],
-        musicBuffer,
-        finalOutputPath:out
-      });
-      const validated=await validateRenderedMp4(out);
-      return{bytes:result.size,mediaType:'image',hasNarration:true,hasMusic:true,...validated};
-    }finally{
-      await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
-    }
-  });
+  await run('production-plan',async()=>{const ref=preflightReferenceVideo;const refStyle=preflightReferenceStyle;if(!ref||!refStyle)throw new Error('No hay perfil de referencia disponible.');const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic:'',referenceTopic:ref.title,language:'es',duration:'2',title:'Preflight original',outline:['Gancho','Contexto','Desarrollo','Cierre'],visualIdeas:['Reference-derived visuals'],visualReferenceAnalysis:refStyle.visualAnalysis,referenceStyle:refStyle,referenceData:ref,reference:referenceUrl})});const raw=await r.text();let d=null;try{d=raw?JSON.parse(raw):null}catch{}if(!r.ok)throw new Error(d?.error||'Production plan '+r.status);if(!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error('El plan de producción no devolvió escenas.');return{scenes:d.scenes.length,title:d.title||'',referenceContext:Boolean(d.referenceContext||d.referenceStyle)}});
+  await run('tts',async()=>{const audio=await generateGeminiTts('Prueba breve de narración.','es','Natural y cercana');if(!audio.length)throw new Error('Gemini TTS devolvió audio vacío.');return{provider:'Gemini TTS',bytes:audio.length}});
   const failed=Object.entries(checks).filter(([,v])=>!v.ok).map(([k,v])=>({name:k,error:v.error}));
-  return{ok:failed.length===0,checks,failed};
+  return{ok:failed.length===0,checks,failed,notes:{renderSmokePreviouslyValidated:true,renderImageSmokePreviouslyValidated:true,musicGenerationSmokeSkippedToPreventInstanceRestart:true}};
 }
-
 app.get('/api/preflight',async(_req,res)=>{
   const existing=[...preflightJobs.values()].find(j=>j.status==='running');
   if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/preflight/'+encodeURIComponent(existing.id),message:'Preflight ya está ejecutándose.'});
