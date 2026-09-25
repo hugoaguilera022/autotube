@@ -605,6 +605,7 @@ app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=
       return res.json({ok:true,analysis:parseJsonResponse(content),framesAnalyzed:images.length});
     }finally{
       await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+      await fs.rm(file.path,{force:true}).catch(()=>{});
     }
   }catch(err){
     console.error('Visual reference analysis error:',err);
