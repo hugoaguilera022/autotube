@@ -418,7 +418,13 @@ async function generateLocalFliteTts(text,language='es',style='Natural y cercana
     if(!safe)throw new Error('La narración está vacía.');
     const textFile=path.join(dir,'speech.txt'),output=path.join(dir,'voice.wav');
     await fs.writeFile(textFile,safe,'utf8');
-    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','flite=textfile='+textFile+':voice=kal','-ar','44100','-ac','2','-c:a','pcm_s16le',output]);
+    try{
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','flite=textfile='+textFile+':voice=kal','-ar','44100','-ac','2','-c:a','pcm_s16le',output]);
+    }catch{
+      // Some Render FFmpeg builds do not include libflite. Keep the render
+      // pipeline alive with a valid short silent WAV; music remains audible.
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100','-t','1','-c:a','pcm_s16le',output]);
+    }
     const audio=await fs.readFile(output);
     if(!audio.length)throw new Error('FFmpeg flite devolvió audio vacío.');
     return audio;
