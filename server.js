@@ -440,12 +440,26 @@ async function generateLyriaMusic(prompt){
   }
   return null;
 }
-async function generateFallbackMusic(prompt,durationSeconds,dir){
+async function generateFallbackMusic(prompt,durationSeconds,dir,audioProfile={}){
   const duration=Math.max(30,Math.min(300,Number(durationSeconds)||60));
   const output=path.join(dir,'fallback-music.wav');
-  const seed=crypto.createHash('sha256').update(String(prompt||'')).digest();
-  const root=110+(seed[0]%6)*11,fifth=Math.round(root*1.5),octave=root*2;
-  const filter='[0:a]volume=0.10,lowpass=f=900[bass];[1:a]volume=0.055,lowpass=f=1800[mid];[2:a]volume=0.035,lowpass=f=3200[high];[3:a]volume=0.018,highpass=f=7000[air];[4:a]volume=0.025,lowpass=f=1400[pulse];[bass][mid][high][air][pulse]amix=inputs=5:duration=longest:dropout_transition=2,aresample=44100,afade=t=in:st=0:d=3,afade=t=out:st='+Math.max(3,duration-3)+':d=3,volume=0.9[a]';
+  const seed=crypto.createHash('sha256').update(JSON.stringify(audioProfile)+String(prompt||'')).digest();
+  const energyText=String(audioProfile.energy||'').toLowerCase();
+  const moodText=String(audioProfile.musicMood||audioProfile.musicMoodDescription||'').toLowerCase();
+  const dynamicsText=String(audioProfile.dynamics||'').toLowerCase();
+  const bpmMatch=String(audioProfile.bpmEstimate||'').match(/(\\d{2,3})/);
+  const bpm=Math.max(45,Math.min(140,Number(bpmMatch?.[1]||72)));
+  const highEnergy=/high|alta|intensa|intenso|energetic|rápid|fast/.test(energyText+' '+dynamicsText+' '+moodText);
+  const lowEnergy=/low|baja|suave|calm|slow|tranquil|ambient|relax|mister|dark|sombr/.test(energyText+' '+dynamicsText+' '+moodText);
+  const baseRoot=lowEnergy?82:(highEnergy?123:98);
+  const root=baseRoot+(seed[0]%5)*5;
+  const fifth=Math.round(root*1.5),octave=root*2,sub=Math.max(45,Math.round(root/2));
+  const pulseFreq=Math.max(48,Math.min(140,Math.round(55*bpm/72)));
+  const bassVol=lowEnergy?0.075:0.105;
+  const midVol=lowEnergy?0.045:0.065;
+  const highVol=lowEnergy?0.022:0.040;
+  const pulseVol=highEnergy?0.035:0.018;
+  const filter='[0:a]volume='+bassVol+',lowpass=f=850[bass];[1:a]volume='+midVol+',lowpass=f=1700[mid];[2:a]volume='+highVol+',lowpass=f=3000[high];[3:a]volume=0.014,highpass=f=6500[air];[4:a]volume='+pulseVol+',lowpass=f=1200[pulse];[bass][mid][high][air][pulse]amix=inputs=5:duration=longest:dropout_transition=2,aresample=44100,afade=t=in:st=0:d=3,afade=t=out:st='+Math.max(3,duration-3)+':d=3,volume=0.9[a]';
   await runFfmpeg(['-y','-f','lavfi','-i','sine=frequency='+root+':sample_rate=44100:duration='+duration,'-f','lavfi','-i','sine=frequency='+fifth+':sample_rate=44100:duration='+duration,'-f','lavfi','-i','sine=frequency='+octave+':sample_rate=44100:duration='+duration,'-f','lavfi','-i','anoisesrc=color=pink:amplitude=0.012:sample_rate=44100:duration='+duration,'-f','lavfi','-i','sine=frequency='+Math.max(55,root/2)+':sample_rate=44100:duration='+duration,'-filter_complex',filter,'-map','[a]','-ar','44100','-ac','2','-c:a','pcm_s16le',output]);
   const audio=await fs.readFile(output);
   if(!audio.length)throw new Error('La música de respaldo está vacía.');
@@ -473,7 +487,7 @@ app.post('/api/ai/music',async(req,res)=>{
       'Instrumental only, no vocals.',
       'Maintain a coherent continuous bed suitable for narration.'
     ].join('\n');    let generated=await generateLyriaMusic(prompt);
-    if(!generated)generated=await generateFallbackMusic(prompt,duration,dir);
+    if(!generated)generated=await generateFallbackMusic(prompt,duration,dir,audioProfile);
     const raw=path.join(dir,'generated-audio');
     const output=path.join(dir,'music.wav');
     await fs.writeFile(raw,generated.buffer);
@@ -493,7 +507,7 @@ async function searchPexels(query){if(!process.env.PEXELS_API_KEY)return[];const
 async function searchPexelsPhotos(query){if(!process.env.PEXELS_API_KEY)return[];const r=await fetch('https://api.pexels.com/v1/search?'+new URLSearchParams({query,orientation:'landscape',size:'large',locale:'es-ES',per_page:'6'}),{headers:{Authorization:process.env.PEXELS_API_KEY}});if(!r.ok)throw new Error('Pexels Photos API '+r.status);const d=await r.json();return(d.photos||[]).map(v=>({provider:'Pexels',id:v.id,title:'Imagen Pexels',duration:0,thumbnail:v.src?.medium||v.src?.small||'',url:v.url,downloadUrl:v.src?.large2x||v.src?.large||v.src?.original||'',mediaType:'image'})).filter(x=>x.downloadUrl)}
 async function searchPixabay(query){if(!process.env.PIXABAY_API_KEY)return[];const r=await fetch('https://pixabay.com/api/videos/?'+new URLSearchParams({key:process.env.PIXABAY_API_KEY,q:query,lang:'es',video_type:'film',safesearch:'true',order:'popular',per_page:'6'}));if(!r.ok)throw new Error('Pixabay API '+r.status);const d=await r.json();return(d.hits||[]).map(v=>({provider:'Pixabay',id:v.id,title:'Vídeo Pixabay',duration:v.duration,thumbnail:v.videos?.medium?.thumbnail||v.videos?.small?.thumbnail||'',url:v.pageURL,downloadUrl:v.videos?.large?.url||v.videos?.medium?.url||v.videos?.small?.url||''})).filter(x=>x.downloadUrl)}
 async function searchPixabayImages(query){if(!process.env.PIXABAY_API_KEY)return[];const r=await fetch('https://pixabay.com/api/?'+new URLSearchParams({key:process.env.PIXABAY_API_KEY,q:query,lang:'es',image_type:'photo',orientation:'horizontal',safesearch:'true',order:'popular',per_page:'6'}));if(!r.ok)throw new Error('Pixabay Images API '+r.status);const d=await r.json();return(d.hits||[]).map(v=>({provider:'Pixabay',id:v.id,title:'Imagen Pixabay',duration:0,thumbnail:v.webformatURL||v.previewURL||'',url:v.pageURL,downloadUrl:v.largeImageURL||v.webformatURL||'',mediaType:'image'})).filter(x=>x.downloadUrl)}
-app.post('/api/media/search',async(req,res)=>{try{const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];if(!scenes.length)return res.status(400).json({error:'No hay escenas para buscar.'});const results=[];for(const scene of scenes.slice(0,12)){const query=String(scene.searchQuery||scene.visualPrompt||scene.title||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim().slice(0,100);const wantImage=String(scene.mediaType||'').toLowerCase()==='image'||Boolean(scene.constantImage);const[pexels,pixabay]=await Promise.allSettled(wantImage?[searchPexelsPhotos(query),searchPixabayImages(query)]:[searchPexels(query),searchPixabay(query)]);results.push({number:scene.number,title:scene.title,query,mediaType:wantImage?'image':'video',media:[...(pexels.status==='fulfilled'?pexels.value:[]),...(pixabay.status==='fulfilled'?pixabay.value:[])]})}res.json({ok:true,results,credits:{pexels:'Visuales proporcionados por Pexels',pixabay:'Visuales proporcionados por Pixabay'}})}catch(err){res.status(502).json({error:err.message||'No se pudieron buscar visuales.'})}});
+app.post('/api/media/search',async(req,res)=>{try{const scenes=Array.isArray(req.body?.scenes)?req.body.scenes:[];const referenceTopic=String(req.body?.referenceTopic||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim();if(!scenes.length)return res.status(400).json({error:'No hay escenas para buscar.'});const results=[];for(const scene of scenes.slice(0,12)){const sceneQuery=String(scene.searchQuery||scene.visualPrompt||scene.title||'').replace(/[^\p{L}\p{N}\s-]/gu,' ').replace(/\s+/g,' ').trim();const anchoredQuery=[sceneQuery,referenceTopic].filter(Boolean).join(' ').slice(0,120);const query=anchoredQuery||sceneQuery;const wantImage=String(scene.mediaType||'').toLowerCase()==='image'||Boolean(scene.constantImage);const[pexels,pixabay]=await Promise.allSettled(wantImage?[searchPexelsPhotos(query),searchPixabayImages(query)]:[searchPexels(query),searchPixabay(query)]);results.push({number:scene.number,title:scene.title,query,mediaType:wantImage?'image':'video',media:[...(pexels.status==='fulfilled'?pexels.value:[]),...(pixabay.status==='fulfilled'?pixabay.value:[])]})}res.json({ok:true,results,credits:{pexels:'Visuales proporcionados por Pexels',pixabay:'Visuales proporcionados por Pixabay'}})}catch(err){res.status(502).json({error:err.message||'No se pudieron buscar visuales.'})}});
 
 async function downloadToFile(source,file){
   const value=String(source||'');
