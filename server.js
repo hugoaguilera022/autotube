@@ -648,21 +648,24 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       if(aiClip?.path){await fs.copyFile(aiClip.path,input)}else if(aiClip?.buffer){await fs.writeFile(input,aiClip.buffer)}else{await downloadToFile(media.downloadUrl,input)}
       let audioInput=null;
       if(audio){audioInput=path.join(dir,'voice-'+i+'.bin');await downloadAudioBuffer(audio,audioInput);}
-      const args=['-y'];if(String(media?.mediaType||found?.mediaType||scene.mediaType||'video').toLowerCase()==='image')args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
+      const args=['-y','-hide_banner','-loglevel','error'];
+      if(String(media?.mediaType||found?.mediaType||scene.mediaType||'video').toLowerCase()==='image')args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
       args.push('-t',String(duration),'-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p,fps=30','-map','0:v:0','-map','1:a:0','-c:a','aac','-b:a','192k','-af','apad');
-      args.push('-c:v','libx264','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1','-avoid_negative_ts','make_zero',output);
+      // Render uses a faster encoder preset to avoid CPU spikes/timeouts on Render while
+      // keeping the final delivery at 1080p/30fps. The output remains H.264 + AAC.
+      args.push('-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-threads','1','-avoid_negative_ts','make_zero',output);
       await runFfmpeg(args);
       const stat=await fs.stat(output);if(!stat.size)throw new Error('FFmpeg creó una escena vacía.');clips.push(output);onProgress(Math.min(80,Math.round(((i+1)/total)*70)+5));
     }
     const list=path.join(dir,'concat.txt');await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
     const videoOnly=path.join(dir,'video-only.mp4');
-    try{await runFfmpeg(['-y','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',videoOnly]);}
-    catch(copyErr){console.warn('Concat copy falló; usando recodificación final:',copyErr.message);await runFfmpeg(['-y','-f','concat','-safe','0','-i',list,'-c:v','libx264','-c:a','aac','-b:a','192k','-preset','medium','-crf','20','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',videoOnly]);}
+    try{await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',videoOnly]);}
+    catch(copyErr){console.warn('Concat copy falló; usando recodificación final:',copyErr.message);await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c:v','libx264','-c:a','aac','-b:a','192k','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',videoOnly]);}
     let out=videoOnly;
     if(musicBuffer){
       const musicFile=path.join(dir,'music.bin');await downloadAudioBuffer(musicBuffer,musicFile);out=path.join(dir,'autotube-final.mp4');
-      await runFfmpeg(['-y','-i',videoOnly,'-stream_loop','-1','-i',musicFile,'-filter_complex','[1:a]volume=0.18,aresample=async=1[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]','-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',videoOnly,'-stream_loop','-1','-i',musicFile,'-filter_complex','[1:a]volume=0.18,aresample=async=1[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]','-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart',out]);
     }
     const stat=await fs.stat(out);if(!stat.size)throw new Error('El MP4 final está vacío.');
     if(finalOutputPath){await fs.copyFile(out,finalOutputPath);const finalStat=await fs.stat(finalOutputPath);if(!finalStat.size)throw new Error('No se pudo guardar el MP4 final.');onProgress(100);return{outputPath:finalOutputPath,size:finalStat.size,duration:usableScenes.reduce((n,x)=>n+(Number(x.scene.duration)||8),0)}}
