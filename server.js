@@ -37,12 +37,17 @@ function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!v
 async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
 async function downloadYoutubeReference(url,dir){
   const output=path.join(dir,'reference.%(ext)s');
+  const potScript=path.join(process.cwd(),'.pot-provider','server','build','generate_once.js');
+  const pluginDirs=path.join(process.cwd(),'yt-dlp-plugins');
+  const potReady=fsSync.existsSync?false:false;
   const strategies=[
+    {name:'mweb_bgutil_pot',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['mweb']},'youtubepot-bgutilscript':{script_path:potScript}},pluginDirs},
     {name:'web_safari_hls',format:'best[protocol^=m3u8]/best[height<=360]',extractor_args:{youtube:{player_client:['web_safari']}}},
     {name:'android_vr',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['android_vr']}}},
+    {name:'tv',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['tv']}}},
+    {name:'tv_simply',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['tv_simply']}}},
     {name:'web_embedded',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['web_embedded']}}},
-    {name:'ios',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['ios']}}},
-    {name:'mweb',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['mweb']}}}
+    {name:'ios',format:'bv*[height<=360]+ba/b[height<=360]',extractor_args:{youtube:{player_client:['ios']}}}
   ];
   let lastError='';
   for(const strategy of strategies){
@@ -59,6 +64,7 @@ async function downloadYoutubeReference(url,dir){
         restrictFilenames:true,
         preferFreeFormats:false,
         extractor_args:strategy.extractor_args,
+        ...(strategy.pluginDirs?{pluginDirs:strategy.pluginDirs}:{}),
         ffmpegLocation:path.dirname(ffmpegPath)
       },{timeout:180000,killSignal:'SIGKILL'});
       const files=await fs.readdir(dir);
@@ -74,7 +80,7 @@ async function downloadYoutubeReference(url,dir){
       for(const name of files.filter(x=>/^reference\./i.test(x)))await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
     }
   }
-  throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. Se probaron 5 clientes de yt-dlp. Último error: '+lastError);
+  throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. Se probaron múltiples clientes de yt-dlp y, cuando está disponible, un proveedor automático de PO tokens. Último error: '+lastError);
 }
 async function uploadGeminiFile(filePath,mimeType){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
