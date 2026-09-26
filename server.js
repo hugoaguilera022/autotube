@@ -1638,7 +1638,8 @@ const batch=Math.max(0,Math.min(22,Number(new URLSearchParams(location.search).g
 
 app.get('/api/test/ltx-batch',async(req,res)=>{try{
   const batch=Math.max(0,Math.min(22,Number(req.query.batch||0)));
-  const hfToken=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const headerToken=String(req.get('x-autotube-hf-token')||'').trim();
+  const hfToken=headerToken||String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   if(!hfToken)return res.status(503).json({error:'HF_TOKEN/HUGGINGFACE_TOKEN no está configurado en Render.'});
   const {Client}=require('@gradio/client');
   const ideas=["an original footballer in a fictional unbranded kit running across a vast cinematic stadium landscape at sunrise","an original football floating above a surreal ocean cliff with dramatic clouds and atmospheric haze","two fictional unbranded footballers crossing a futuristic stadium tunnel with cinematic practical lighting","an original player controlling a glowing ball on rain-soaked pavement in a modern city","a fictional footballer sprinting through a desert landscape with monumental mountains and golden light","an original goalkeeper reaching toward a luminous ball in a surreal stadium surrounded by mist","a fictional footballer standing in shallow reflective water beneath floating islands and waterfalls","an original football team in fictional kits walking toward a distant stadium horizon under dramatic clouds","a crystalline fictional football spinning above warm sand with realistic reflections and shallow depth of field","an original player dribbling through a night stadium with powerful beams of light and atmospheric smoke","a fictional footballer moving through a volcanic landscape with glowing lava and dramatic backlight","an original footballer performing a powerful kick on a cinematic coastal pitch at sunset"];
