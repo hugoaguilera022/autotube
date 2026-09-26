@@ -1,0 +1,95 @@
+name: Patch reference analysis memory
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch server.js
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('server.js')
+          s=p.read_text()
+          old="""  // Reuse the already validated exact URL->MP4 downloader exposed by the preload.
+  // This avoids duplicating YouTube extraction logic and gives the reference analyzer
+  // the same proven source file used by the exact-media validation path.
+  try{
+    const base=`http://127.0.0.1:${PORT}`;
+"""
+          new="""  // Reference analysis is intentionally low-resolution. The final generated video
+  // never needs the original reference bytes; keeping this analysis copy small avoids
+  // crossing Render Free's 512 MB memory ceiling.
+  try{
+    if(process.env.AUTOTUBE_REFERENCE_ANALYSIS_LOWRES !== '0') throw new Error('lowres-analysis');
+    const base=`http://127.0.0.1:${PORT}`;
+"""
+          if old in s: s=s.replace(old,new,1)
+          old2="""  const strategies=[
+    {name:'mp4-avc-aac',format:'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]/best[ext=mp4]'},
+    {name:'best-compatible',format:'bestvideo*+bestaudio/best'},
+    {name:'best-single',format:'best'}
+  ];
+"""
+          new2="""  const strategies=[
+    {name:'lowres-analysis',format:'best[height<=360][ext=mp4]/best[height<=360]/worst[ext=mp4]/worst'},
+    {name:'lowres-analysis-fallback',format:'best[height<=480][ext=mp4]/best[height<=480]/worst[ext=mp4]/worst'}
+  ];
+"""
+          if old2 not in s: raise SystemExit('strategy block not found')
+          s=s.replace(old2,new2,1)
+          old3="""        concurrentFragments:2
+"""
+          new3="""        concurrentFragments:1,
+        httpChunkSize:1048576
+"""
+          if old3 in s: s=s.replace(old3,new3,1)
+          old4="""    const frameCount=Math.min(24,Math.max(8,Math.ceil(durationSeconds/12)));
+"""
+          new4="""    const frameCount=Math.min(8,Math.max(4,Math.ceil(durationSeconds/30)));
+"""
+          if old4 in s: s=s.replace(old4,new4,1)
+          old5="""    const data=await fs.readFile(filePath);
+  const uploadResponse=await fetch(uploadUrl,{
+    method:'POST',
+    headers:{
+      'Content-Length':String(data.length),
+      'X-Goog-Upload-Offset':'0',
+      'X-Goog-Upload-Command':'upload, finalize'
+    },
+    body:data
+  });
+"""
+          new5="""    const {createReadStream}=require('fs');
+  const uploadResponse=await fetch(uploadUrl,{
+    method:'POST',
+    headers:{
+      'Content-Length':String(stat.size),
+      'X-Goog-Upload-Offset':'0',
+      'X-Goog-Upload-Command':'upload, finalize'
+    },
+    body:createReadStream(filePath),
+    duplex:'half'
+  });
+"""
+          if old5 not in s: raise SystemExit('Gemini upload block not found')
+          s=s.replace(old5,new5,1)
+          p.write_text(s)
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server.js
+          git diff --cached --quiet && exit 0
+          git commit -m 'Make reference analysis memory safe on Render Free'
+          git push
+      - name: Remove one-time workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/patch-reference-memory.yml
+          git commit -m 'Remove one-time memory patch workflow'
+          git push
