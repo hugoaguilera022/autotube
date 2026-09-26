@@ -18,8 +18,14 @@ jobs:
               status=$(curl -fsS "https://api.github.com/repos/hugoaguilera022/autotube/compare/$GITHUB_SHA...$commit" | python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
               if [ "$status" = "identical" ] || [ "$status" = "ahead" ]; then
                 echo "$h"
-                sleep 20
-                exit 0
+                sleep 45
+                h2=$(curl -fsS https://autotube-hfeu.onrender.com/api/health)
+                commit2=$(printf '%s' "$h2" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
+                status2=$(curl -fsS "https://api.github.com/repos/hugoaguilera022/autotube/compare/$GITHUB_SHA...$commit2" | python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+                if [ "$status2" = "identical" ] || [ "$status2" = "ahead" ]; then
+                  echo "$h2"
+                  exit 0
+                fi
               fi
             fi
             sleep 5
