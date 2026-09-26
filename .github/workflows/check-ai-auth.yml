@@ -11,3 +11,4 @@ jobs:
       - name: Check config without exposing secret
         run: |
           curl -fsS https://autotube-hfeu.onrender.com/api/ai/ltx-config
+          curl -fsS https://autotube-hfeu.onrender.com/api/ai/goalsave-api
