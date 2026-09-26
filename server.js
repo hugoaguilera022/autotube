@@ -580,8 +580,8 @@ app.post('/api/ai/ltx-clip',async(req,res)=>{
   try{
     const result=await generateFreeLtxVideoClip(prompt,dir,{
       durationSeconds:Math.min(8.5,Math.max(0.3,Number(req.body?.durationSeconds)||8.5)),
-      width:Number(req.body?.width)||1216,
-      height:Number(req.body?.height)||704,
+      width:Number(req.body?.width)||512,
+      height:Number(req.body?.height)||288,
       improveTexture:Boolean(req.body?.improveTexture),
       guidanceScale:Number(req.body?.guidanceScale)||3,
       negativePrompt:String(req.body?.negativePrompt||'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos, watermark')
@@ -609,7 +609,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
   const refAudio=refProfile?.audioProfile||{};
   const refStructure=refProfile?.structureProfile||{};
   const singleVisual=Boolean(refDirectives.useSingleContinuousVisual||refVideo.constantImage);
-  const requestedSceneCount=singleVisual?1:Math.max(4,Math.ceil((Number(duration)*60)/3));
+  const requestedSceneCount=singleVisual?1:Math.max(4,Math.ceil((Number(duration)*60)/8.5));
 
   const referenceContext={
     sourceUrl:reference||'',
