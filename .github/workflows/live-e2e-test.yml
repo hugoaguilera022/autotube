@@ -1,6 +1,7 @@
 name: AutoTube E2E live regeneration test
 on:
   workflow_dispatch:
+  push:
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -9,7 +10,7 @@ jobs:
         id: start
         run: |
           set -e
-          URL='https://autotube-hfeu.onrender.com/api/full-pipeline-test?reference=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ'
+          URL='https://autotube-hfeu.onrender.com/api/full-pipeline-test?reference=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dmh48xOkLhgU'
           curl --fail --silent --show-error "$URL" -o start.json
           cat start.json
           JOB=$(python -c "import json; print(json.load(open('start.json'))['jobId'])")
