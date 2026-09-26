@@ -36,9 +36,14 @@ jobs:
         run: |
           set -e
           u='https://www.youtube.com/watch?v=mh48xOkLhgU'
-          r=$(curl -fsS --max-time 60 -X POST https://autotube-hfeu.onrender.com/api/url-to-mp4 -H 'Content-Type: application/json' --data "{\"reference\":\"$u\"}")
-          echo "$r"
-          j=$(printf '%s' "$r" | python -c 'import json,sys; print(json.load(sys.stdin)['jobId'])')
+          for attempt in $(seq 1 24); do
+            code=$(curl -sS -o /tmp/start.json -w '%{http_code}' --max-time 60 -X POST https://autotube-hfeu.onrender.com/api/url-to-mp4 -H 'Content-Type: application/json' --data "{\"reference\":\"$u\"}")
+            r=$(cat /tmp/start.json); echo "$r"
+            if [ "$code" = "202" ]; then break; fi
+            if [ "$code" != "409" ]; then echo "HTTP $code"; exit 1; fi
+            sleep 5
+          done
+          j=$(printf '%s' "$r" | python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])')
           for i in $(seq 1 120); do
             s=$(curl -sS https://autotube-hfeu.onrender.com/api/url-to-mp4/$j); echo "$s"
             st=$(printf '%s' "$s" | python -c 'import json,sys; print(json.load(sys.stdin).get(\"status\",\"\"))' 2>/dev/null || true)
