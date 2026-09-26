@@ -1749,7 +1749,20 @@ async function executeFullPipelineTest(reference){
     let video=null,style=null,outline=null,plan=null,narrationAudio=[],music=null,render=null,validation=null,mediaResults=[];
     await run('youtube-source-and-reference-analysis',async()=>{
       video=await getReferenceVideo(reference);
-      style=await analyzeYoutubeReferenceMedia(reference,video);
+      // Download the exact reference ONCE and reuse the verified file for the whole E2E.
+      const referenceDownloadDir=path.join(dir,'reference-source');
+      const downloaded=await downloadYoutubeReference(reference,referenceDownloadDir);
+      const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
+      style=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
+      style.referenceFileBytes=downloaded.bytes;
+      style.downloadStrategy=downloaded.strategy;
+      style.measuredVisualContinuity={...(style.measuredVisualContinuity||{}),...measured,source:'FFmpeg + Gemini sampled frames'};
+      if(measured.constantImage){
+        style.constantImage=true;
+        style.visualAnalysis.videoProfile.constantImage=true;
+        style.visualAnalysis.generationDirectives.useSingleContinuousVisual=true;
+        style.visualAnalysis.generationDirectives.preferredSceneCount=1;
+      }
       if(!video?.title||!style?.visualAnalysis)throw new Error('No se obtuvo un perfil audiovisual completo de YouTube.');
       return{
         title:video.title,
