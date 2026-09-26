@@ -1709,6 +1709,70 @@ async function executeFullPipelineTest(reference){
 const urlVideoJobs=new Map();
 function parseIsoDurationSeconds(value){if(Number.isFinite(Number(value))&&Number(value)>0)return Number(value);const raw=String(value||'').trim();const m=raw.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);if(!m)return 0;return Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0);}
 
+
+async function buildReferenceBlueprint({referenceTitle,transcript='',visualReferenceAnalysis={},referenceStyle={}}){
+  const audio=visualReferenceAnalysis?.audioProfile||{};
+  const structure=visualReferenceAnalysis?.structureProfile||{};
+  const video=visualReferenceAnalysis?.videoProfile||{};
+  const prompt={
+    title:referenceTitle,
+    transcript:String(transcript||'').slice(0,18000),
+    videoProfile:video,
+    structureProfile:structure,
+    audioProfile:audio,
+    style:referenceStyle
+  };
+  const raw=await callGemini({
+    system:`Analiza una referencia audiovisual para reconstruir su DIRECCIÓN, ESTRUCTURA Y RITMO con material completamente original. No copies frases, imágenes, audio ni elementos protegidos. Devuelve SOLO JSON válido con esta forma:
+{"targetDurationSeconds":0,"sections":[{"order":1,"startRatio":0,"endRatio":0.1,"purpose":"","narrationRole":"","visualSubject":"","shotType":"","cameraMotion":"","composition":"","motionIntensity":"low|medium|high","transition":"","onScreenText":"","musicRole":"","sfxRole":""}],"global":{"pacing":"","visualStyle":"","editingStyle":"","colorMood":"","captionStyle":"","cameraLanguage":""}}
+Divide la referencia en suficientes secciones para conservar su progresión. Las proporciones startRatio/endRatio deben sumar una línea temporal coherente. Describe lo que hay que recrear, no la obra concreta.`,
+    user:JSON.stringify(prompt),
+    temperature:0.2,
+    maxOutputTokens:2200,
+    json:true
+  });
+  const data=parseJsonResponse(raw);
+  if(!data||!Array.isArray(data.sections)||!data.sections.length)throw new Error('Gemini no devolvió una plantilla audiovisual válida.');
+  return data;
+}
+
+function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
+  const src=Array.isArray(scenes)?scenes:[];
+  const sections=Array.isArray(blueprint?.sections)?blueprint.sections:[];
+  if(!sections.length)return src;
+  const total=Math.max(4,Number(targetDurationSeconds)||60);
+  return sections.map((b,i)=>{
+    const ratioStart=Math.max(0,Math.min(1,Number(b.startRatio)||0));
+    const ratioEnd=Math.max(ratioStart+0.001,Math.min(1,Number(b.endRatio)||((i+1)/sections.length)));
+    const duration=Math.max(1,Math.round((ratioEnd-ratioStart)*total*10)/10);
+    const base=src[i%Math.max(1,src.length)]||{};
+    const visualParts=[
+      b.visualSubject&&('subject: '+b.visualSubject),
+      b.shotType&&('shot: '+b.shotType),
+      b.composition&&('composition: '+b.composition),
+      b.cameraMotion&&('camera motion: '+b.cameraMotion),
+      b.motionIntensity&&('motion intensity: '+b.motionIntensity),
+      blueprint?.global?.visualStyle&&('visual style: '+blueprint.global.visualStyle),
+      blueprint?.global?.colorMood&&('color mood: '+blueprint.global.colorMood),
+      'original material, no logos, no copied footage'
+    ].filter(Boolean).join('; ');
+    return {
+      ...base,
+      number:i+1,
+      duration,
+      title:String(base.title||b.purpose||('Section '+(i+1))),
+      visualPrompt:visualParts,
+      animationNotes:[b.cameraMotion,b.motionIntensity&&('intensity '+b.motionIntensity)].filter(Boolean).join('; ')||base.animationNotes||'Cinematic movement matching the reference pacing.',
+      transition:b.transition||base.transition||'Cut',
+      referenceStructure:{
+        order:i+1,startRatio:ratioStart,endRatio:ratioEnd,
+        shotType:b.shotType||'',cameraMotion:b.cameraMotion||'',composition:b.composition||'',
+        motionIntensity:b.motionIntensity||'',purpose:b.purpose||''
+      }
+    };
+  });
+}
+
 async function executeUrlToVideo(reference,jobId){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-'));
   const job=urlVideoJobs.get(jobId);
@@ -1727,7 +1791,8 @@ async function executeUrlToVideo(reference,jobId){
     const referenceTitle=String(video?.title||'Contenido original').slice(0,300);
     const targetDurationSeconds=Math.max(4,parseIsoDurationSeconds(video?.duration)||Number(style?.visualAnalysis?.videoProfile?.durationSeconds)||60);
     const visualReferenceAnalysis=style?.visualAnalysis||{};
-    if(job)job.progress=12;
+    const referenceBlueprint=await buildReferenceBlueprint({referenceTitle,transcript:transcript?.transcript||'',visualReferenceAnalysis,referenceStyle:style});
+    if(job)job.progress=15;
 
     const outlineRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
       method:'POST',headers:{'Content-Type':'application/json'},
@@ -1735,7 +1800,7 @@ async function executeUrlToVideo(reference,jobId){
         topic:referenceTitle,reference,referenceTopic:referenceTitle,
         referenceData:{...(video||{title:referenceTitle}),transcript:transcript?.transcript||''},
         transcript:transcript?.transcript||'',
-        visualReferenceAnalysis,referenceStyle:style,
+        visualReferenceAnalysis,referenceStyle:style,referenceBlueprint,
         language:'es',duration:String(Math.max(1,Math.ceil(targetDurationSeconds/60)))
       })
     });
@@ -1748,7 +1813,7 @@ async function executeUrlToVideo(reference,jobId){
         topic:referenceTitle,reference,referenceTopic:referenceTitle,
         referenceData:{...(video||{title:referenceTitle}),transcript:transcript?.transcript||''},
         transcript:transcript?.transcript||'',
-        visualReferenceAnalysis,referenceStyle:style,
+        visualReferenceAnalysis,referenceStyle:style,referenceBlueprint,
         language:'es',duration:String(Math.max(1,Math.ceil(targetDurationSeconds/60))),title:outline?.title||referenceTitle,
         outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
       })
@@ -1757,8 +1822,9 @@ async function executeUrlToVideo(reference,jobId){
     if(!planRes.ok||!Array.isArray(plan?.scenes)||!plan.scenes.length)
       throw new Error(plan?.error||'Plan de producción inválido.');
 
-    const scenes=plan.scenes.map((s,i)=>({
-      ...s,number:i+1,duration:Math.max(4,Math.min(20,Number(s.duration)||8)),
+    const blueprintScenes=applyReferenceBlueprint(plan.scenes,referenceBlueprint,targetDurationSeconds);
+    const scenes=blueprintScenes.map((s,i)=>({
+      ...s,number:i+1,duration:Math.max(1,Math.min(20,Number(s.duration)||8)),
       mediaType:'video',constantImage:false
     }));
 
@@ -1914,12 +1980,12 @@ async function executeUrlToVideo(reference,jobId){
     if(job){
       job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
       job.validation=validation;job.referenceTitle=referenceTitle;
-      job.sceneCount=finalScenes.length;job.durationSeconds=validation.durationSeconds;
+      job.sceneCount=finalScenes.length;job.durationSeconds=validation.durationSeconds;job.referenceBlueprint=referenceBlueprint;
       job.finishedAt=Date.now();
     }
     return{ok:true,jobId,reference:{url:reference,title:referenceTitle},
       scenes:finalScenes.length,durationSeconds:validation.durationSeconds,size:stat.size,
-      validation};
+      validation,referenceBlueprint};
   }catch(err){
     if(job){job.status='error';job.progress=0;job.error=err?.message||String(err);job.finishedAt=Date.now();}
     throw err;
