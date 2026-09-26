@@ -1033,7 +1033,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
     const missing=sceneInputs.filter(x=>!x.aiClip?.path&&!x.aiClip?.buffer&&!x.media?.downloadUrl);
     if(missing.length)throw new Error('Faltan visuales para las escenas: '+missing.map(x=>String(x.scene.number)).join(', ')+'. Genera los vídeos IA de esas escenas o busca visuales de respaldo.');
     const total=sceneInputs.length;
-    // Scene media downloads are independent I/O tasks and may be prepared concurrently.
+    const preparedInputs=await Promise.all(sceneInputs.map(async(x,i)=>{if(x.aiClip?.path||x.aiClip?.buffer)return null;if(!x.media?.downloadUrl)return null;const p=path.join(dir,'pre-'+i+'.mp4');await downloadToFile(x.media.downloadUrl,p);return p;}));
     for(let i=0;i<total;i++){
       const{scene,found,aiClip,media,audio}=sceneInputs[i];
       const input=path.join(dir,'in-'+i+'.mp4');
@@ -1041,7 +1041,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       const duration=Math.max(2,Math.min(180,Number(scene.duration)||8));
       if(aiClip?.path)await fs.copyFile(aiClip.path,input);
       else if(aiClip?.buffer)await fs.writeFile(input,aiClip.buffer);
-      else await downloadToFile(media.downloadUrl,input);
+      else await fs.copyFile(preparedInputs[i],input);
       let audioInput=null;
       if(audio){audioInput=path.join(dir,'voice-'+i+'.wav');await downloadAudioBuffer(audio,audioInput);}
       const isImage=String(aiClip?.mediaType||media?.mediaType||found?.mediaType||scene.mediaType||'video').toLowerCase()==='image';
