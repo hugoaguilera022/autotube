@@ -229,7 +229,9 @@ async function downloadViaAllDL(url,dir){
   const apiRelays=[
     api,
     'https://api.allorigins.win/raw?url='+encodeURIComponent(api),
-    'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(api)
+    'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(api),
+    'https://corsproxy.io/?url='+encodeURIComponent(api),
+    'https://cors.isomorphic-git.org/'+api
   ];
   let last='';
   for(const endpoint of apiRelays){
@@ -247,7 +249,9 @@ async function downloadViaAllDL(url,dir){
         for(const relay of [
           media,
           'https://api.allorigins.win/raw?url='+encodeURIComponent(media),
-          'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(media)
+          'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(media),
+          'https://corsproxy.io/?url='+encodeURIComponent(media),
+          'https://cors.isomorphic-git.org/'+media
         ]){
           try{
             const fr=await fetch(relay,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0','Referer':'https://ahm7xmakki.com/','Origin':'https://ahm7xmakki.com','Accept':'video/mp4,video/*,application/octet-stream,*/*'}});
