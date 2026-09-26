@@ -20,10 +20,14 @@ jobs:
           set -euo pipefail
           for i in {1..60}; do
             code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 15 https://autotube-hfeu.onrender.com/api/health || true)
-            if [ "$code" = "200" ]; then cat /tmp/health.json; exit 0; fi
+            if [ "$code" = "200" ]; then cat /tmp/health.json; break; fi
             sleep 10
           done
-          exit 1
+          test -s /tmp/health.json
+          # Render can return the old healthy instance for a short time while the
+          # new commit is being rolled out. Give the new container a brief window
+          # to replace it before starting a long-running render job.
+          sleep 75
 
       - name: Start AI URL-to-video pipeline
         id: aivideo
