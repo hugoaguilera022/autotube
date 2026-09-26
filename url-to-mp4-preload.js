@@ -34,11 +34,14 @@ async function downloadViaExternalProvider(url,dir){
 async function downloadViaPiped(url,dir){
   const u=new URL(url);
   let id='';
-  if(u.hostname.toLowerCase()==='youtu.be') id=u.pathname.split('/').filter(Boolean)[0]||'';
-  else if(u.searchParams.get('v')) id=u.searchParams.get('v');
-  else {
-    const parts=u.pathname.split('/').filter(Boolean);
-    if((parts[0]==='shorts'||parts[0]==='embed')&&parts[1]) id=parts[1];
+  if(u.hostname.toLowerCase()==='youtu.be'){
+    id=u.pathname.split('/').filter(Boolean)[0]||'';
+  }else{
+    id=u.searchParams.get('v')||'';
+    if(!id){
+      const parts=u.pathname.split('/').filter(Boolean);
+      if((parts[0]==='shorts'||parts[0]==='embed')&&parts[1])id=parts[1];
+    }
   }
   if(!id)throw new Error('No se pudo extraer el ID de YouTube.');
   const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz,https://pipedapi.nosebs.ru,https://pipedapi.adminforge.de,https://api.piped.yt,https://pipedapi.drgns.space').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
@@ -46,31 +49,38 @@ async function downloadViaPiped(url,dir){
   for(const base of instances){
     try{
       const r=await fetch(base+'/streams/'+encodeURIComponent(id),{headers:{Accept:'application/json'}});
-      if(!r.ok)throw new Error('HTTP '+r.status);
+      if(!r.ok)throw new Error('API HTTP '+r.status);
       const data=await r.json();
-      const videos=(Array.isArray(data.videoStreams)?data.videoStreams:[]).filter(x=>x?.url&&/^video\\/mp4/i.test(String(x.mimeType||''))).sort((a,b)=>(Number(b.width||0)*Number(b.height||0))-(Number(a.width||0)*Number(a.height||0))||Number(b.bitrate||0)-Number(a.bitrate||0));
-      const audios=(Array.isArray(data.audioStreams)?data.audioStreams:[]).filter(x=>x?.url).sort((a,b)=>Number(b.bitrate||0)-Number(a.bitrate||0));
+      const streams=Array.isArray(data.videoStreams)?data.videoStreams:[];
+      const videos=streams.filter(x=>x&&x.url&&String(x.mimeType||'').toLowerCase().startsWith('video/mp4')).sort((a,b)=>(Number(b.width||0)*Number(b.height||0))-(Number(a.width||0)*Number(a.height||0))||Number(b.bitrate||0)-Number(a.bitrate||0));
+      const audios=(Array.isArray(data.audioStreams)?data.audioStreams:[]).filter(x=>x&&x.url).sort((a,b)=>Number(b.bitrate||0)-Number(a.bitrate||0));
       const selected=videos[0];
       if(!selected)throw new Error('No hay stream MP4 de vídeo.');
       const out=path.join(dir,'source.mp4');
-      if(!selected.videoOnly){
+      if(selected.videoOnly===false||selected.videoOnly===undefined){
         const fr=await fetch(selected.url,{headers:{Referer:'https://piped.video/'}});
-        if(!fr.ok||!fr.body)throw new Error('stream HTTP '+fr.status);
-        const fh=await fs.open(out,'w');try{const reader=fr.body.getReader();while(true){const {done,value}=await reader.read();if(done)break;await fh.write(value)}}finally{await fh.close()}
+        if(!fr.ok||!fr.body)throw new Error('vídeo HTTP '+fr.status);
+        const fh=await fs.open(out,'w');try{const reader=fr.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
       }else if(audios[0]){
         const vp=path.join(dir,'piped-video.mp4'),ap=path.join(dir,'piped-audio.m4a');
-        for(const [src,target] of [[selected.url,vp],[audios[0].url,ap]]){
-          const fr=await fetch(src,{headers:{Referer:'https://piped.video/'}});
+        for(const pair of [[selected.url,vp],[audios[0].url,ap]]){
+          const fr=await fetch(pair[0],{headers:{Referer:'https://piped.video/'}});
           if(!fr.ok||!fr.body)throw new Error('stream HTTP '+fr.status);
-          const fh=await fs.open(target,'w');try{const reader=fr.body.getReader();while(true){const {done,value}=await reader.read();if(done)break;await fh.write(value)}}finally{await fh.close()}
+          const fh=await fs.open(pair[1],'w');try{const reader=fr.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
         }
         await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',vp,'-i',ap,'-map','0:v:0','-map','1:a:0','-c','copy','-movflags','+faststart',out]);
       }else throw new Error('No hay audio reproducible.');
-      const st=await fs.stat(out);if(!st.size)throw new Error('MP4 vacío.');
+      const st=await fs.stat(out);
+      if(!st.size)throw new Error('MP4 vacío.');
       return{source:out,bytes:st.size,strategy:'piped:'+base,external:{title:String(data.title||''),description:String(data.description||''),duration:Number(data.duration||0),thumbnail:String(data.thumbnailUrl||'')}};
-    }catch(e){last=base+': '+String(e?.message||e);for(const f of await fs.readdir(dir).catch(()=>[]))if(/^source\\.mp4$|^piped-(?:video|audio)\\./i.test(f))await fs.rm(path.join(dir,f),{force:true}).catch(()=>{})}
+    }catch(e){
+      last=base+': '+String(e&&e.message||e);
+      for(const name of await fs.readdir(dir).catch(()=>[])){
+        if(name==='source.mp4'||name==='piped-video.mp4'||name==='piped-audio.m4a')await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
+      }
+    }
   }
-  throw new Error('Piped no pudo obtener el vídeo. '+last);
+  throw new Error('Piped no pudo obtener el vídeo. Último error: '+last);
 }
 
 async function downloadViaInvidious(url,dir){
