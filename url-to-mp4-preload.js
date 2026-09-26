@@ -90,10 +90,17 @@ async function downloadViaCobalt(url,dir){
   const key=String(process.env.AUTOTUBE_COBALT_API_KEY||'').trim();
   if(key)headers.Authorization='Api-Key '+key;
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),180000);
-  let r;
-  try{r=await fetch(base+'/',{method:'POST',headers,body:JSON.stringify({url,videoQuality:'max',downloadMode:'auto',youtubeVideoCodec:'h264',youtubeVideoContainer:'mp4',youtubeBetterAudio:true,disableMetadata:false}),signal:controller.signal});}
-  finally{clearTimeout(timer)}
-  if(!r.ok)throw new Error('Cobalt HTTP '+r.status+' '+(await r.text().catch(()=>'')));
+  let r,lastBody='';
+  try{
+    for(let attempt=1;attempt<=3;attempt++){
+      r=await fetch(base+'/',{method:'POST',headers,body:JSON.stringify({url,videoQuality:'1080',downloadMode:'auto',youtubeVideoCodec:'h264',youtubeVideoContainer:'mp4',youtubeBetterAudio:true,disableMetadata:false}),signal:controller.signal});
+      if(r.ok)break;
+      lastBody=await r.text().catch(()=> '');
+      if(![502,503,504,429].includes(r.status)||attempt===3)break;
+      await new Promise(resolve=>setTimeout(resolve,attempt*5000));
+    }
+  }finally{clearTimeout(timer)}
+  if(!r.ok)throw new Error('Cobalt HTTP '+r.status+' '+lastBody);
   const data=await r.json();
   if(data.status==='error')throw new Error('Cobalt '+String(data.code||'error')+' '+JSON.stringify(data.context||{}));
   let fileUrl=data.url;
