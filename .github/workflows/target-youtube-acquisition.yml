@@ -11,10 +11,15 @@ jobs:
       - name: Wait for Render
         run: |
           set -e
-          for i in $(seq 1 90); do
-            if curl -fsS https://autotube-hfeu.onrender.com/api/health >/dev/null; then exit 0; fi
+          for i in $(seq 1 180); do
+            h=$(curl -fsS https://autotube-hfeu.onrender.com/api/health || true)
+            if [ "$(printf '%s' "$h" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)" = "$GITHUB_SHA" ]; then
+              echo "$h"
+              exit 0
+            fi
             sleep 5
           done
+          echo "Render did not expose the tested commit: $GITHUB_SHA"
           exit 1
       - name: Download target through AutoTube
         run: |
