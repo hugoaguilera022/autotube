@@ -549,6 +549,20 @@ app.post('/api/youtube/reference',async(req,res)=>{
     if(job){job.status='error';job.result={ok:false,error:err.message||'No se pudo analizar el vídeo completo de YouTube.'};job.finishedAt=Date.now();}
   });
 });
+app.get('/api/reference-e2e-test',async(req,res)=>{
+  if(String(req.query?.key||'')!=='autotube-e2e-20260926')return res.status(404).end();
+  try{
+    const reference='https://www.youtube.com/watch?v=jNQXAC9IVRw';
+    const jobId='urlvideo_test_'+Date.now();
+    const job={id:jobId,status:'processing',progress:1,reference,startedAt:Date.now(),testOnly:true};
+    jobs.set(jobId,job);
+    (async()=>{
+      try{await runUrlToVideoJob(jobId,reference);}
+      catch(err){job.status='error';job.error=err?.message||String(err);console.error('Reference E2E test error:',job.error);}
+    })();
+    return res.json({ok:true,testOnly:true,jobId,statusUrl:'/api/url-to-video/'+jobId,reference});
+  }catch(err){return res.status(500).json({ok:false,error:err?.message||String(err)});}
+});
 app.get('/api/youtube/transcript',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'Indica una URL de YouTube.'});
