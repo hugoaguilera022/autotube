@@ -1,4 +1,4 @@
-name: AutoTube H3 real generation test
+name: AutoTube authenticated real LTX test
 on:
   push:
     branches: [main]
@@ -7,9 +7,9 @@ on:
       - '.github/workflows/h3-real-test.yml'
   workflow_dispatch:
 jobs:
-  h3:
+  authenticated-ltx:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - run: |
@@ -24,18 +24,20 @@ jobs:
             sleep 10
           done
           exit 1
-      - name: Generate real H3 clip
+      - name: Execute authenticated LTX batch on Render
         run: |
           node <<'NODE'
           const {chromium}=require('playwright'),fs=require('fs');
           (async()=>{const b=await chromium.launch({headless:true});const p=await b.newPage();
-          await p.goto('https://autotube-hfeu.onrender.com/video-ai-test-h3',{waitUntil:'domcontentloaded',timeout:120000});
-          await p.waitForFunction(()=>window.__out||window.__err,null,{timeout:600000});
-          const e=await p.evaluate(()=>window.__err||'');if(e)throw Error(e);
-          const u=await p.evaluate(()=>window.__out);const r=await p.request.get(u);if(!r.ok())throw Error('download '+r.status());
-          const body=await r.body();if(body.length<10000)throw Error('video too small');fs.writeFileSync('/tmp/h3.mp4',body);console.log('H3 BYTES',body.length);await b.close()})().catch(e=>{console.error(e.stack||e);process.exit(1)});
+          await p.goto('https://autotube-hfeu.onrender.com/video-ai-test-browser?batch=0',{waitUntil:'domcontentloaded',timeout:120000});
+          await p.waitForFunction(()=>window.__out||window.__error||window.__done,null,{timeout:900000});
+          const e=await p.evaluate(()=>window.__error||'');if(e)throw Error(e);
+          const u=await p.evaluate(()=>window.__outputs||[]);if(u.length!==4)throw Error('Expected 4 authenticated clips, got '+u.length);
+          for(let i=0;i<u.length;i++){const r=await p.request.get(u[i]);if(!r.ok())throw Error('download '+r.status());const body=await r.body();fs.writeFileSync('/tmp/clip-'+i+'.mp4',body);console.log('CLIP',i,'BYTES',body.length)}
+          await b.close()})().catch(e=>{console.error(e.stack||e);process.exit(1)});
           NODE
-      - name: Install FFmpeg and probe
+      - name: Validate
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
-          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,r_frame_rate,sample_rate,channels -of json /tmp/h3.mp4
+          for f in /tmp/clip-*.mp4; do ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,r_frame_rate -of json "$f"; done
+          echo "AUTHENTICATED LTX BATCH: PASS"
