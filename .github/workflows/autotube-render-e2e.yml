@@ -18,17 +18,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for i in {1..60}; do
+          for i in {1..90}; do
             code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 15 https://autotube-hfeu.onrender.com/api/health || true)
             if [ "$code" = "200" ]; then cat /tmp/health.json; break; fi
-            sleep 10
+            sleep 5
           done
           test -s /tmp/health.json
-          # The health endpoint can be served by the old instance while Render
-          # is still switching containers. The deployment observed in Render
-          # takes about two minutes; wait long enough that the render job is not
-          # killed by the next container replacement.
-          sleep 180
+          # Allow the live instance to settle before starting a long render.
+          sleep 60
 
       - name: Start AI URL-to-video pipeline
         id: aivideo
@@ -41,17 +38,38 @@ jobs:
           job_id=$(printf '%s' "$response" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("jobId") or d.get("id") or "")')
           test -n "$job_id"
           echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
+          echo "reference=$reference" >> "$GITHUB_OUTPUT"
 
       - name: Poll AI render until a real MP4 exists
         shell: bash
         env:
-          JOB_ID: ${{ steps.aivideo.outputs.job_id }}
+          INITIAL_JOB_ID: ${{ steps.aivideo.outputs.job_id }}
+          REFERENCE: ${{ steps.aivideo.outputs.reference }}
         run: |
           set -euo pipefail
+          job_id="$INITIAL_JOB_ID"
+          restarted=0
           for i in {1..540}; do
-            response=$(curl -fsS --max-time 60 "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID")
-            echo "--- AI poll $i ---"
+            set +e
+            response=$(curl -sS --max-time 60 "https://autotube-hfeu.onrender.com/api/url-to-video/$job_id")
+            code=$?
+            set -e
+            echo "--- AI poll $i job=$job_id curl=$code ---"
             echo "$response"
+            if [ "$code" -ne 0 ] || printf '%s' "$response" | grep -q 'Trabajo no encontrado\|servidor se reinició\|restart'; then
+              if [ "$restarted" -eq 0 ]; then
+                echo 'AI job was lost during a Render restart; starting the URL-to-video job again.'
+                response2=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "{\"reference\":\"$REFERENCE\",\"url\":\"$REFERENCE\"}")
+                echo "$response2"
+                job_id=$(printf '%s' "$response2" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("jobId") or d.get("id") or "")')
+                test -n "$job_id"
+                restarted=1
+                sleep 5
+                continue
+              fi
+              echo 'AUTOTUBE_AI_RENDER_LOST_TWICE'
+              exit 1
+            fi
             status=$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("status","")).lower())')
             if [ "$status" = "done" ] || [ "$status" = "completed" ] || [ "$status" = "success" ]; then
               printf '%s' "$response" > ai-render-result.json
