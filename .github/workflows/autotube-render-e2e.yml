@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          reference='https://www.youtube.com/watch?v=mMggTkdN3Eo'
+          reference='https://www.youtube.com/watch?v=jNQXAC9IVRw'
           response=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "{\"reference\":\"$reference\",\"url\":\"$reference\"}")
           echo "$response"
           job_id=$(printf '%s' "$response" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("jobId") or d.get("id") or "")')
