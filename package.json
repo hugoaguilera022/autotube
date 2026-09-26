@@ -5,8 +5,8 @@
   "description": "AutoTube - AI-assisted YouTube content automation dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "node -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js server.js",
-    "dev": "node -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js --watch server.js",
+    "start": "node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js server.js",
+    "dev": "node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js --watch server.js",
     "postinstall": "node setup-pot-provider.js"
   },
   "engines": {
