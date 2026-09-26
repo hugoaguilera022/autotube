@@ -20,7 +20,8 @@ async function fallback(url,opts){
   let ok=false;
   for(const u of candidates){try{const r=await fetch(u);if(r.ok){const b=Buffer.from(await r.arrayBuffer());if(b.length>10000){await fs.writeFile(thumb,b);ok=true;break}}}catch{}}
   if(!ok)throw new Error('No se pudo obtener la miniatura pública de YouTube para el fallback.');
-  await ffmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',thumb,'-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100','-t','30','-vf','scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,zoompan=z=min(zoom+0.0008,1.12):d=750:s=1920x1080:fps=25','-r','25','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',output]);
+  const zoom='zoompan=z=min(zoom+0.0008\\,1.12):d=750:s=1920x1080:fps=25';
+  await ffmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',thumb,'-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100','-t','30','-vf','scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,'+zoom,'-r','25','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',output]);
   await fs.rm(thumb,{force:true}).catch(()=>{});
   console.warn('AutoTube YouTube download fallback used:',url,'->',output);
   return 'AutoTube thumbnail fallback MP4';
