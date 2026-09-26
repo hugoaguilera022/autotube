@@ -86,7 +86,7 @@ async function downloadViaPiped(url,dir){
 async function downloadViaInvidious(url,dir){
   const u=new URL(url);
   let id='';
-  if(u.hostname.toLowerCase()==='youtu.be') id=u.pathname.replace(/^\/+|\/+$/g,'').split('/')[0];
+  if(u.hostname.toLowerCase()==='youtu.be') id=u.pathname.split('/').filter(Boolean)[0]||'';
   else if(u.searchParams.get('v')) id=u.searchParams.get('v');
   else { const parts=u.pathname.split('/').filter(Boolean); if((parts[0]==='shorts'||parts[0]==='embed')&&parts[1]) id=parts[1]; }
   if(!id) throw new Error('No se pudo extraer el ID de YouTube.');
