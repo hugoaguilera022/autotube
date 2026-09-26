@@ -1886,8 +1886,15 @@ async function executeUrlToVideo(reference,jobId){
       if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
     }
 
-    if(activeRenderJobId && activeRenderJobId!==jobId)
-      throw new Error('Ya hay otro render en curso. Espera a que termine.');
+    // La fase de preparación puede ejecutarse mientras otro render termina.
+    // En lugar de fallar por una colisión transitoria, esperamos a que se libere
+    // el único slot de FFmpeg disponible en Render Free.
+    const renderLockDeadline=Date.now()+10*60*1000;
+    while(activeRenderJobId && activeRenderJobId!==jobId){
+      if(job)job.progress=Math.min(58,Number(job.progress||30)+1);
+      if(Date.now()>renderLockDeadline)throw new Error('Otro render lleva demasiado tiempo en curso. Inténtalo de nuevo cuando termine.');
+      await new Promise(r=>setTimeout(r,2000));
+    }
     activeRenderJobId=jobId;
 
     const outputPath=path.join(renderJobDir,jobId+'.mp4');
