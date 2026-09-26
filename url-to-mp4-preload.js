@@ -44,7 +44,7 @@ async function downloadViaPiped(url,dir){
     }
   }
   if(!id)throw new Error('No se pudo extraer el ID de YouTube.');
-  const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz,https://pipedapi.nosebs.ru,https://pipedapi.adminforge.de,https://api.piped.yt,https://pipedapi.drgns.space').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
+  const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi-libre.kavin.rocks,https://pipedapi.adminforge.de,https://pipedapi.leptons.xyz,https://api.piped.yt,https://pipedapi.drgns.space').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
   let last='';
   for(const base of instances){
     try{
@@ -74,7 +74,7 @@ async function downloadViaPiped(url,dir){
       if(!st.size)throw new Error('MP4 vacío.');
       return{source:out,bytes:st.size,strategy:'piped:'+base,external:{title:String(data.title||''),description:String(data.description||''),duration:Number(data.duration||0),thumbnail:String(data.thumbnailUrl||'')}};
     }catch(e){
-      last=base+': '+String(e&&e.message||e);
+      last=base+': '+String(e&&e.message||e);console.error('AUTOTUBE PIPED FAILED',last);
       for(const name of await fs.readdir(dir).catch(()=>[])){
         if(name==='source.mp4'||name==='piped-video.mp4'||name==='piped-audio.m4a')await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
       }
@@ -120,7 +120,7 @@ async function downloadViaInvidious(url,dir){
       }else throw new Error('La instancia no devolvió streams reproducibles.');
       const st=await fs.stat(out);if(!st.size)throw new Error('MP4 vacío.');
       return{source:out,bytes:st.size,strategy:'invidious:'+base,external:{title:String(data.title||''),description:String(data.description||''),duration:Number(data.lengthSeconds||0),channelTitle:String(data.author||''),captions:Array.isArray(data.captions)?data.captions:[]}};
-    }catch(e){last=base+': '+String(e?.message||e);for(const f of await fs.readdir(dir).catch(()=>[]))if(/^source\.mp4$|^iv-(?:video|audio)\./i.test(f))await fs.rm(path.join(dir,f),{force:true}).catch(()=>{})}
+    }catch(e){last=base+': '+String(e?.message||e);console.error('AUTOTUBE INVIDIOUS FAILED',last);for(const f of await fs.readdir(dir).catch(()=>[]))if(/^source\.mp4$|^iv-(?:video|audio)\./i.test(f))await fs.rm(path.join(dir,f),{force:true}).catch(()=>{})}
   }
   throw new Error('Invidious no pudo obtener el vídeo. Último error: '+last);
 }
