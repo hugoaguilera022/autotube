@@ -1,0 +1,41 @@
+name: AutoTube H3 real generation test
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server.js'
+      - '.github/workflows/h3-real-test.yml'
+  workflow_dispatch:
+jobs:
+  h3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          npm init -y
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Wait for Render
+        run: |
+          for i in {1..30}; do
+            code=$(curl -s -o /tmp/h -w "%{http_code}" https://autotube-hfeu.onrender.com/api/health || true)
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          exit 1
+      - name: Generate real H3 clip
+        run: |
+          node <<'NODE'
+          const {chromium}=require('playwright'),fs=require('fs');
+          (async()=>{const b=await chromium.launch({headless:true});const p=await b.newPage();
+          await p.goto('https://autotube-hfeu.onrender.com/video-ai-test-h3',{waitUntil:'domcontentloaded',timeout:120000});
+          await p.waitForFunction(()=>window.__out||window.__err,null,{timeout:600000});
+          const e=await p.evaluate(()=>window.__err||'');if(e)throw Error(e);
+          const u=await p.evaluate(()=>window.__out);const r=await p.request.get(u);if(!r.ok())throw Error('download '+r.status());
+          const body=await r.body();if(body.length<10000)throw Error('video too small');fs.writeFileSync('/tmp/h3.mp4',body);console.log('H3 BYTES',body.length);await b.close()})().catch(e=>{console.error(e.stack||e);process.exit(1)});
+          NODE
+      - name: Install FFmpeg and probe
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,r_frame_rate,sample_rate,channels -of json /tmp/h3.mp4
