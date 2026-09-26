@@ -1,0 +1,26 @@
+name: AutoTube strict E2E
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Start strict E2E
+        run: |
+          set -e
+          BASE="https://autotube-hfeu.onrender.com"
+          R=$(curl -fsS --max-time 30 "$BASE/api/full-pipeline-test")
+          echo "$R"
+          ID=$(echo "$R" | python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])')
+          for i in $(seq 1 180); do
+            sleep 10
+            S=$(curl -fsS --max-time 30 "$BASE/api/full-pipeline-test/$ID" || true)
+            echo "$S"
+            echo "$S" | grep -q '"status":"done"' && exit 0
+            echo "$S" | grep -q '"status":"failed"' && exit 1
+          done
+          echo "E2E timeout" >&2
+          exit 1
