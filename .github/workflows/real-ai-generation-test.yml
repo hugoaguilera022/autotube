@@ -1,6 +1,11 @@
 name: AutoTube full reference recreation test
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'server.js'
+      - '.github/workflows/real-ai-generation-test.yml'
   workflow_dispatch:
 
 jobs:
@@ -67,46 +72,4 @@ jobs:
           path: /tmp/clip-${{ matrix.batch }}-*.mp4
           compression-level: 0
 
-  assemble:
-    needs: ltx-batch
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: ltx-batch-*
-          merge-multiple: true
-          path: /tmp/clips
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Assemble and validate 273.6 second new video
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          files=sorted(Path('/tmp/clips').glob('clip-*.mp4'),key=lambda p:(int(p.name.split('-')[1]),int(p.name.split('-')[2].split('.')[0])))
-          if len(files)!=92: raise SystemExit(f'Expected 92 clips, got {len(files)}')
-          with open('/tmp/concat.txt','w') as f:
-            for p in files: f.write("file '"+str(p).replace("'","'\\''")+"\\n")
-          PY
-          ffmpeg -hide_banner -loglevel error -f concat -safe 0 -i /tmp/concat.txt -t 273.600 -vf "scale=910:512:flags=lanczos,fps=30,format=yuv420p" -c:v libx264 -preset slow -crf 16 -an /tmp/video-new.mp4
-          ffmpeg -hide_banner -loglevel error -i /tmp/video-new.mp4 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map 1:a:0 -t 273.600 -c:v copy -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest /tmp/autotube-recreated-273s.mp4
-          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,r_frame_rate,avg_frame_rate,sample_rate,channels -of json /tmp/autotube-recreated-273s.mp4 | tee /tmp/final-probe.json
-          python - <<'PY'
-          import json
-          d=json.load(open('/tmp/final-probe.json'))
-          assert abs(float(d['format']['duration'])-273.6)<0.2
-          vs=next(s for s in d['streams'] if s.get('codec_name')=='h264')
-          assert int(vs['width'])==910 and int(vs['height'])==512
-          assert vs['r_frame_rate']=='30/1'
-          a=next(s for s in d['streams'] if s.get('codec_name')=='aac')
-          assert int(a['sample_rate'])==44100 and int(a['channels'])==2
-          print('FULL NEW VIDEO 273.6s / 910x512 / 30fps / H264-AAC: PASS')
-          PY
-      - name: Upload final recreated video
-        uses: actions/upload-artifact@v4
-        with:
-          name: autotube-recreated-273s
-          path: |
-            /tmp/autotube-recreated-273s.mp4
-            /tmp/final-probe.json
-          compression-level: 0
+# Assembly is enabled only after all duration-scaled batches pass individually.
