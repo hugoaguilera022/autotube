@@ -70,7 +70,7 @@ async function downloadViaPiped(url,dir){
       return{source:out,bytes:st.size,strategy:'piped:'+base,external:{title:String(data.title||''),description:String(data.description||''),duration:Number(data.duration||0),thumbnail:String(data.thumbnailUrl||'')}};
     }catch(e){last=base+': '+String(e?.message||e);for(const f of await fs.readdir(dir).catch(()=>[]))if(/^source\\.mp4$|^piped-(?:video|audio)\\./i.test(f))await fs.rm(path.join(dir,f),{force:true}).catch(()=>{})}
   }
-  throw new Error('Piped no pudo obtener el vídeo. Último error: '+last);
+  throw new Error('Piped no pudo obtener el vídeo. '+last);
 }
 
 async function downloadViaInvidious(url,dir){
