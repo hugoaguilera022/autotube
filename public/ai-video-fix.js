@@ -1,4 +1,4 @@
-(() => {
+(() => { document.head.appendChild(Object.assign(document.createElement('script'),{src:'/brief-ui.js?v=20260926'}));
   const wait = ms => new Promise(r => setTimeout(r, ms));
   const setState = (text, button) => {
     const state = document.querySelector('#mediaState');
