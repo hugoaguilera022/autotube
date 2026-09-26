@@ -13,13 +13,18 @@ jobs:
           set -e
           for i in $(seq 1 180); do
             h=$(curl -fsS https://autotube-hfeu.onrender.com/api/health || true)
-            if [ "$(printf '%s' "$h" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)" = "$GITHUB_SHA" ]; then
-              echo "$h"
-              exit 0
+            commit=$(printf '%s' "$h" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
+            if [ -n "$commit" ]; then
+              status=$(curl -fsS "https://api.github.com/repos/hugoaguilera022/autotube/compare/$GITHUB_SHA...$commit" | python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+              if [ "$status" = "identical" ] || [ "$status" = "ahead" ]; then
+                echo "$h"
+                sleep 20
+                exit 0
+              fi
             fi
             sleep 5
           done
-          echo "Render did not expose the tested commit: $GITHUB_SHA"
+          echo "Render did not deploy the tested commit or a descendant"
           exit 1
       - name: Download target through AutoTube
         run: |
