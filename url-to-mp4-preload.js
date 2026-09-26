@@ -222,7 +222,7 @@ async function downloadViaInvidious(url,dir){
 }
 
 async function downloadViaAllDL(url,dir){
-  const endpoint='https://ahm7xmakki.com/api/alldl?url='+encodeURIComponent(url)+'&download=1';
+  const target='https://ahm7xmakki.com/api/alldl?url='+encodeURIComponent(url)+'&download=1'; const endpoint='https://api.allorigins.win/raw?url='+encodeURIComponent(target);
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),90000);
   try{
     const res=await fetch(endpoint,{headers:{Accept:'video/mp4,application/octet-stream;q=0.9,application/json;q=0.8','User-Agent':'Mozilla/5.0','Referer':'https://ahm7xmakki.com/'},signal:controller.signal});
@@ -243,7 +243,7 @@ async function downloadViaAllDL(url,dir){
     let last='';
     for(const candidate of candidates){
       try{
-        const fr=await fetch(candidate.url,{headers:{'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36','Referer':'https://ahm7xmakki.com/','Origin':'https://ahm7xmakki.com'},redirect:'follow'});
+        const fr=await fetch('https://api.allorigins.win/raw?url='+encodeURIComponent(candidate.url),{headers:{'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36','Referer':'https://ahm7xmakki.com/','Origin':'https://ahm7xmakki.com'},redirect:'follow'});
         const ct=String(fr.headers.get('content-type')||'').toLowerCase();
         if(!fr.ok||!fr.body||(!ct.includes('video')&&!ct.includes('mp4')&&!ct.includes('octet-stream')))throw new Error('stream HTTP '+fr.status+' '+ct);
         const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
