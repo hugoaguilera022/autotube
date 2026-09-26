@@ -146,38 +146,54 @@ async function downloadViaVevioz(url,dir){
 }
 
 async function downloadViaCobalt(url,dir){
-  const base=String(process.env.AUTOTUBE_COBALT_API_URL||'https://api.cobalt.tools').trim().replace(/\/$/,'');
-  if(!base)throw new Error('Cobalt no configurado.');
-  const headers={'Accept':'application/json','Content-Type':'application/json'};
-  const key=String(process.env.AUTOTUBE_COBALT_API_KEY||'').trim();
-  if(key)headers.Authorization='Api-Key '+key;
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),180000);
-  let r,lastBody='';
-  try{
-    for(let attempt=1;attempt<=3;attempt++){
-      r=await fetch(base+'/',{method:'POST',headers,body:JSON.stringify({url,videoQuality:'1080',downloadMode:'auto',youtubeVideoCodec:'h264',youtubeVideoContainer:'mp4',youtubeBetterAudio:true,disableMetadata:false}),signal:controller.signal});
-      if(r.ok)break;
-      lastBody=await r.text().catch(()=> '');
-      if(![502,503,504,429].includes(r.status)||attempt===3)break;
-      await new Promise(resolve=>setTimeout(resolve,attempt*5000));
+  const instances=String(process.env.AUTOTUBE_COBALT_API_URLS||[
+    'https://bergung-api.hoffnungfuerdiezukunft.net',
+    'https://cobalt-alpha.wolfy.love',
+    'https://nuko-c.meowing.de',
+    'https://api.cobalt.rpkiinval.id',
+    'https://melon.clxxped.lol',
+    'https://cobalt-omega.wolfy.love',
+    'https://apicobalt.mgytr.top',
+    'https://api.qwkuns.me',
+    'https://lime.clxxped.lol',
+    'https://cobalt-api.lamps-dev.dev'
+  ].join(',')).split(',').map(x=>x.trim().replace(/\\/$/,'')).filter(Boolean);
+  let last='';
+  for(const base of instances){
+    try{
+      const headers={'Accept':'application/json','Content-Type':'application/json'};
+      const key=String(process.env.AUTOTUBE_COBALT_API_KEY||'').trim();
+      if(key)headers.Authorization='Api-Key '+key;
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),180000);
+      let r;
+      try{
+        r=await fetch(base+'/',{method:'POST',headers,body:JSON.stringify({
+          url,videoQuality:'max',downloadMode:'auto',youtubeVideoCodec:'h264',
+          youtubeVideoContainer:'mp4',youtubeBetterAudio:true,disableMetadata:false
+        }),signal:controller.signal});
+      }finally{clearTimeout(timer)}
+      const raw=await r.text();
+      if(!r.ok)throw new Error(base+' HTTP '+r.status+' '+raw.slice(0,700));
+      let data;try{data=JSON.parse(raw)}catch{throw new Error(base+' devolvió JSON inválido.')};
+      if(data.status==='error')throw new Error(base+' '+String(data.code||'error')+' '+JSON.stringify(data.context||{}));
+      const fileUrl=data.url;
+      if(!fileUrl)throw new Error(base+' no devolvió URL de archivo: '+raw.slice(0,700));
+      const fr=await fetch(fileUrl,{headers:key?{Authorization:'Api-Key '+key}:{}});
+      if(!fr.ok||!fr.body)throw new Error(base+' file HTTP '+fr.status);
+      const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
+      try{const reader=fr.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
+      const st=await fs.stat(out);
+      if(!st.size)throw new Error(base+' devolvió MP4 vacío.');
+      const p=await probe(out);
+      if(!p.duration||!p.width||!p.height)throw new Error(base+' devolvió un archivo que no es vídeo válido.');
+      return{source:out,bytes:st.size,strategy:'cobalt:'+base,external:{title:String(data.filename||''),cobaltStatus:data.status}};
+    }catch(e){
+      last=String(e?.message||e);console.error('AUTOTUBE COBALT FAILED',last);
+      await fs.rm(path.join(dir,'source.mp4'),{force:true}).catch(()=>{});
     }
-  }finally{clearTimeout(timer)}
-  if(!r.ok)throw new Error('Cobalt HTTP '+r.status+' '+lastBody);
-  const data=await r.json();
-  if(data.status==='error')throw new Error('Cobalt '+String(data.code||'error')+' '+JSON.stringify(data.context||{}));
-  let fileUrl=data.url;
-  if(data.status==='redirect'&&fileUrl){}
-  else if(data.status==='tunnel'&&fileUrl){}
-  else if(data.status==='local-processing'&&data.url)fileUrl=data.url;
-  else throw new Error('Cobalt devolvió estado no descargable: '+JSON.stringify(data).slice(0,2000));
-  const fr=await fetch(fileUrl,{headers:key?{Authorization:'Api-Key '+key}:{}});
-  if(!fr.ok||!fr.body)throw new Error('Cobalt file HTTP '+fr.status);
-  const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
-  try{const reader=fr.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
-  const st=await fs.stat(out);if(!st.size)throw new Error('Cobalt devolvió un MP4 vacío.');
-  return{source:out,bytes:st.size,strategy:'cobalt',external:{title:String(data.filename||''),cobaltStatus:data.status}};
+  }
+  throw new Error('Ninguna instancia Cobalt pudo descargar el vídeo. Último error: '+last);
 }
-
 async function downloadViaInvidious(url,dir){
   const u=new URL(url);
   let id='';
