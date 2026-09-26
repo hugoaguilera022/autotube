@@ -90,3 +90,5 @@ PY
           name: autotube-reference-e2e
           path: out/
           retention-days: 3
+
+# trigger isolated verification
