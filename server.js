@@ -1903,6 +1903,46 @@ async function executeUrlToVideo(reference,jobId){
       const scene=finalScenes[i];
       const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
       let media=null;
+
+      // En URL-reference mode, the analyzed audiovisual blueprint is the primary
+      // visual source. Generate an original AI clip from the exact section
+      // direction before considering stock footage, so the result follows the
+      // reference's subject, shot language, composition and camera movement.
+      if(referenceBlueprint?.sections?.length){
+        try{
+          const rb=scene.referenceStructure||referenceBlueprint.sections[Math.min(i,referenceBlueprint.sections.length-1)]||{};
+          const aiPrompt=[
+            'Original AI video recreation of this reference section.',
+            'Do NOT copy footage, faces, logos, text, audio or identifiable copyrighted elements.',
+            'Keep the same semantic subject and visual function.',
+            'section purpose: '+String(rb.purpose||''),
+            'visual subject: '+String(rb.visualSubject||''),
+            'shot type: '+String(rb.shotType||''),
+            'composition: '+String(rb.composition||''),
+            'camera motion: '+String(rb.cameraMotion||''),
+            'motion intensity: '+String(rb.motionIntensity||''),
+            'transition: '+String(rb.transition||''),
+            'global visual style: '+String(referenceBlueprint.global?.visualStyle||''),
+            'editing style: '+String(referenceBlueprint.global?.editingStyle||''),
+            'color mood: '+String(referenceBlueprint.global?.colorMood||''),
+            '16:9 cinematic original footage, no text, no logos'
+          ].join('; ');
+          const generated=await generateFreeLtxVideoClip(aiPrompt,dir,{
+            durationSeconds:Math.max(3,Math.min(6,Number(scene.duration)||4)),
+            width:512,
+            height:288,
+            improveTexture:false
+          });
+          aiClips[i]={path:generated.outputPath,mediaType:'video',source:'reference-blueprint-ai'};
+          resultsByScene.push({number:scene.number,media:[],mediaType:'video',source:'reference-blueprint-ai'});
+        }catch(err){
+          console.warn('Reference-blueprint AI visual failed; using visual search fallback:',i,err?.message||String(err));
+        }
+      }
+      if(aiClips[i]){
+        if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
+        continue;
+      }
       try{
         const videos=await searchPixabay(query);
         media=videos.find(x=>x?.downloadUrl)||null;
