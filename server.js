@@ -1985,4 +1985,3 @@ httpServer.requestTimeout=0;
 // No ejecutamos un render E2E automáticamente al arrancar Render: podría bloquear
 // el benchmark o un render iniciado por el usuario. Las pruebas E2E se lanzan
 // explícitamente desde los workflows/endpoints de test.
-}
