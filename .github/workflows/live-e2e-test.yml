@@ -6,6 +6,18 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      - name: Wait for Render service
+        run: |
+          set -e
+          for i in $(seq 1 120); do
+            if curl --fail --silent --show-error https://autotube-hfeu.onrender.com/api/health -o health.json; then
+              cat health.json
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Render service did not become healthy"
+          exit 1
       - name: Trigger regeneration
         id: start
         run: |
