@@ -318,23 +318,101 @@ async function analyzeYoutubeReferenceMedia(url,video){
   if(!referenceUrl)throw new Error('Falta la URL de YouTube.');
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-download-'));
   try{
-    const downloaded=await downloadYoutubeReference(referenceUrl,dir);
-    const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
-    const analyzed=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
-    analyzed.referenceFileBytes=downloaded.bytes;
-    analyzed.downloadStrategy=downloaded.strategy;
-    analyzed.measuredVisualContinuity={
-      ...analyzed.measuredVisualContinuity,
-      ...measured,
-      source:'FFmpeg + Gemini sampled frames'
-    };
-    if(measured.constantImage){
-      analyzed.constantImage=true;
-      analyzed.visualAnalysis.videoProfile.constantImage=true;
-      analyzed.visualAnalysis.generationDirectives.useSingleContinuousVisual=true;
-      analyzed.visualAnalysis.generationDirectives.preferredSceneCount=1;
+    try{
+      const downloaded=await downloadYoutubeReference(referenceUrl,dir);
+      const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
+      const analyzed=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
+      analyzed.referenceFileBytes=downloaded.bytes;
+      analyzed.downloadStrategy=downloaded.strategy;
+      analyzed.measuredVisualContinuity={
+        ...analyzed.measuredVisualContinuity,
+        ...measured,
+        source:'FFmpeg + Gemini sampled frames'
+      };
+      if(measured.constantImage){
+        analyzed.constantImage=true;
+        analyzed.visualAnalysis.videoProfile.constantImage=true;
+        analyzed.visualAnalysis.generationDirectives.useSingleContinuousVisual=true;
+        analyzed.visualAnalysis.generationDirectives.preferredSceneCount=1;
+      }
+      return analyzed;
+    }catch(downloadErr){
+      // YouTube can reject server-side media extraction with an anti-bot page even
+      // when the public URL and YouTube metadata are valid. Do not make the whole
+      // AutoTube pipeline depend on obtaining the original media bytes: fall back
+      // to the public thumbnails + metadata and keep the generation original.
+      console.warn('YouTube media download unavailable; using thumbnail/metadata fallback:',downloadErr?.message||String(downloadErr));
+      const thumbs=Array.isArray(video?.thumbnails)?video.thumbnails:[video?.thumbnail].filter(Boolean);
+      const images=[];
+      for(const thumb of thumbs.slice(0,4)){
+        const image=await fetchImageForGemini(thumb);
+        if(image)images.push(image);
+      }
+      if(!images.length)throw downloadErr;
+      const durationSeconds=Math.max(4,parseIsoDurationSeconds(video?.duration)||60);
+      const text=await callGemini({
+        system:'Eres un analista audiovisual. La descarga del vídeo de referencia no está disponible, así que usa SOLO las miniaturas públicas y los metadatos suministrados. Extrae tema, sujeto, composición, paleta, iluminación, estilo y ritmo visual general. No inventes escenas concretas que no sean visibles.',
+        user:'Analiza estas miniaturas de una referencia de YouTube y sus metadatos. Devuelve SOLO JSON válido con videoProfile, animationProfile, audioProfile, structureProfile y generationDirectives. videoProfile: durationSeconds,constantImage,estimatedSceneCount,sceneChangeRate,cameraMovement,composition,palette,lighting,visualStyle,continuity. animationProfile: cameraMotion,zoomStyle,panStyle,overlays,textAnimation,effects,transitionStyle,motionIntensity,visualRhythm. audioProfile: hasSpeech,language,speechRate,pauses,emotion,hasMusic,hasAmbience,hasSoundEffects,musicMood,energy,dynamics,instrumentation,voiceStyle,bpmEstimate,voiceMusicBalance,audioContinuity. Si el audio no puede observarse, marca hasSpeech y hasMusic como null y no afirmes que has escuchado el original. structureProfile: opening,pacing,transitions,segmentCount,segmentDurations,visualContinuity,timestamps,sceneSegments. generationDirectives: useSingleContinuousVisual,preferredSceneCount,preserveVisualContinuity,preserveAudioContinuity,visualSearchStrategy,musicStrategy,narrationStrategy,animationStrategy. Metadatos: '+JSON.stringify({title:video?.title||'',description:String(video?.description||'').slice(0,6000),channelTitle:video?.channelTitle||'',tags:Array.isArray(video?.tags)?video.tags.slice(0,30):[],duration:video?.duration||''}),
+        images,
+        temperature:0.2,
+        maxOutputTokens:2600,
+        json:true
+      });
+      const analysis=parseJsonResponse(text);
+      const vp=analysis?.videoProfile||{};
+      const ap={...(analysis?.audioProfile||{})};
+      const an=analysis?.animationProfile||{};
+      const sp=analysis?.structureProfile||{};
+      const gd=analysis?.generationDirectives||{};
+      vp.durationSeconds=Number(vp.durationSeconds||durationSeconds)||durationSeconds;
+      vp.constantImage=Boolean(vp.constantImage);
+      const titleText=(String(video?.title||'')+' '+String(video?.description||'')+' '+(Array.isArray(video?.tags)?video.tags.join(' '):'')).toLowerCase();
+      const speechLikely=/documentary|documental|story|historia|explained|explain|tutorial|review|news|noticias|podcast|interview|entrevista|guide|guía|top \d|10 lugares|lugares|how to|como hacer/.test(titleText);
+      const musicLikely=/music|música|song|canción|mix|remix|dj|beats|lofi|ambient|soundtrack|instrumental/.test(titleText);
+      if(ap.hasSpeech===null||ap.hasSpeech===undefined)ap.hasSpeech=speechLikely;
+      if(ap.hasMusic===null||ap.hasMusic===undefined)ap.hasMusic=!speechLikely||musicLikely;
+      if(ap.hasAmbience===null||ap.hasAmbience===undefined)ap.hasAmbience=true;
+      if(ap.hasSoundEffects===null||ap.hasSoundEffects===undefined)ap.hasSoundEffects=false;
+      if(!ap.language)ap.language='es';
+      if(!ap.voiceStyle)ap.voiceStyle='Natural y cercana';
+      if(!ap.musicMood)ap.musicMood='Original cinematográfico coherente con el tema';
+      if(!ap.energy)ap.energy='media';
+      if(!sp.segmentCount)sp.segmentCount=Math.max(1,Math.min(8,Math.ceil(durationSeconds/20)));
+      if(!Array.isArray(sp.sceneSegments)||!sp.sceneSegments.length){
+        sp.sceneSegments=Array.from({length:sp.segmentCount},(_,i)=>{
+          const start=(durationSeconds/sp.segmentCount)*i;
+          const end=(durationSeconds/sp.segmentCount)*(i+1);
+          return{startSeconds:Math.round(start*10)/10,endSeconds:Math.round(end*10)/10,summary:String(video?.title||'Tema de referencia'),subject:String(video?.title||'Tema de referencia'),shotScale:'cinematic',composition:vp.composition||'horizontal 16:9',cameraMovement:vp.cameraMovement||'subtle',motionIntensity:an.motionIntensity||'medium',lighting:vp.lighting||'coherente',palette:vp.palette||'coherente',transitionIn:i?'smooth':'opening',transitionOut:i<sp.segmentCount-1?'smooth':'ending',audioRole:'continuous',narrationRole:ap.hasSpeech?'narration':'none',continuityAnchor:String(video?.title||'tema principal'),generationPrompt:String(video?.title||'')+'; original audiovisual treatment'
+          };
+        });
+      }
+      gd.useSingleContinuousVisual=Boolean(gd.useSingleContinuousVisual||vp.constantImage);
+      gd.preferredSceneCount=gd.useSingleContinuousVisual?1:Math.max(1,Math.min(8,Number(gd.preferredSceneCount||sp.segmentCount||4)));
+      gd.preserveVisualContinuity=true;
+      gd.preserveAudioContinuity=true;
+      analysis.videoProfile=vp;
+      analysis.audioProfile=ap;
+      analysis.animationProfile=an;
+      analysis.structureProfile=sp;
+      analysis.generationDirectives=gd;
+      return{
+        visualAnalysis:analysis,
+        visualSource:'youtube-metadata+public-thumbnails',
+        analysisSource:'Thumbnail/metadata fallback (YouTube media download unavailable)',
+        thumbnailCount:images.length,
+        referenceFileBytes:0,
+        hasFullVideoAnalysis:false,
+        hasAudioAnalysis:false,
+        audioAnalysisSource:'metadata inference only; original audio not downloaded',
+        hasAnimationAnalysis:true,
+        hasStructureAnalysis:true,
+        measuredVisualContinuity:{source:'public thumbnails',constantImage:Boolean(vp.constantImage)},
+        constantImage:Boolean(vp.constantImage),
+        estimatedSceneCount:Number(vp.estimatedSceneCount||sp.segmentCount||1),
+        preferredSceneCount:Number(gd.preferredSceneCount||1),
+        fallbackReason:String(downloadErr?.message||downloadErr||'YouTube media download unavailable').slice(0,1000)
+      };
     }
-    return analyzed;
   }finally{
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
