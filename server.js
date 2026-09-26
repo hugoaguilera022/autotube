@@ -33,6 +33,7 @@ function parseJsonResponse(text){
   throw new Error('Respuesta JSON inválida de Gemini: '+(lastError?.message||'formato no recuperable'));
 }
 const app=express();
+// Brief creation mode: inputs may include topic, visual references, custom script and optional sample media.
 let youtubeTokens=null,youtubeProfileCache=null,youtubeLoaded=false;
 function cleanEnvValue(value){return String(value||'').replace(/\s+/g,'').replace(/^(['"])(.*)\\1$/,'$2').trim();}
 function supabaseEnv(){return{url:cleanEnvValue(process.env.SUPABASE_URL).replace(/\/+$/,''),key:cleanEnvValue(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY)}}
