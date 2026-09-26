@@ -66,7 +66,7 @@ function install(app) {
         const clips = [];
         for (let i=0; i<usable.length; i++) {
           const {scene, asset} = usable[i], input=path.join(dir,'source-'+i+'.mp4'), clip=path.join(dir,'clip-'+i+'.mp4');
-          const duration=Math.max(2,Math.min(180,Number(scene.duration)||8));
+          const duration=Math.max(0.1,Number(scene.duration)||8);
           await download(asset,input);
           await ffmpeg(['-y','-hide_banner','-loglevel','error','-stream_loop','-1','-i',input,'-t',String(duration),'-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=24,format=yuv420p','-an','-c:v','libx264','-preset','veryfast','-crf','27','-pix_fmt','yuv420p','-threads','1','-movflags','+faststart',clip]);
           clips.push(clip); job.progress=Math.round(((i+1)/usable.length)*85); await fs.rm(input,{force:true}).catch(()=>{});
