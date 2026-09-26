@@ -1,10 +1,5 @@
 name: AutoTube LTX 8.5s base test
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'server.js'
-      - '.github/workflows/ltx-8s-test.yml'
   workflow_dispatch:
 jobs:
   test:
