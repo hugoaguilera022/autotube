@@ -41,7 +41,7 @@ async function downloadViaPiped(url,dir){
     if((parts[0]==='shorts'||parts[0]==='embed')&&parts[1]) id=parts[1];
   }
   if(!id)throw new Error('No se pudo extraer el ID de YouTube.');
-  const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz,https://pipedapi.nosebs.ru,https://pipedapi.adminforge.de,https://api.piped.yt,https://pipedapi.drgns.space').split(',').map(x=>x.trim().replace(/\\/$/,'')).filter(Boolean);
+  const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz,https://pipedapi.nosebs.ru,https://pipedapi.adminforge.de,https://api.piped.yt,https://pipedapi.drgns.space').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
   let last='';
   for(const base of instances){
     try{
