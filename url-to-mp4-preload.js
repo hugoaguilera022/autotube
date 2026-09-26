@@ -84,7 +84,7 @@ async function downloadViaPiped(url,dir){
 }
 
 async function downloadViaCobalt(url,dir){
-  const base=String(process.env.AUTOTUBE_COBALT_API_URL||'').trim().replace(/\/$/,'');
+  const base=String(process.env.AUTOTUBE_COBALT_API_URL||'https://api.cobalt.tools').trim().replace(/\/$/,'');
   if(!base)throw new Error('Cobalt no configurado.');
   const headers={'Accept':'application/json','Content-Type':'application/json'};
   const key=String(process.env.AUTOTUBE_COBALT_API_KEY||'').trim();
