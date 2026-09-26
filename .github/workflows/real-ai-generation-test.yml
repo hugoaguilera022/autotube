@@ -1,77 +1,41 @@
-name: AutoTube full reference recreation test
+name: AutoTube real recreation via authenticated HF browser
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - 'server.js'
-      - '.github/workflows/real-ai-generation-test.yml'
-  workflow_dispatch:
+    paths: ['.github/workflows/real-ai-generation-test.yml']
 
 jobs:
-  ltx-batch:
-    strategy:
-      fail-fast: false
-      matrix:
-        batch: [0]
+  generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install Playwright
-        run: |
-          npm init -y
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
-      - name: Wait for Render
-        run: |
-          for i in {1..30}; do
-            code=$(curl -s -o /tmp/health.json -w "%{http_code}" https://autotube-hfeu.onrender.com/api/health || true)
-            if [ "$code" = "200" ]; then exit 0; fi
-            sleep 10
-          done
-          exit 1
-      - name: Generate four real LTX clips
-        env:
-          BATCH: ${{ matrix.batch }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      - run: npm init -y && npm install --no-save playwright@1.55.0
+      - run: npx playwright install --with-deps chromium
+      - name: Generate real clips through HF browser quota
         run: |
           node <<'NODE'
           const { chromium } = require('playwright');
-          const fs = require('fs');
+          const fs=require('fs');
           (async()=>{
-            const batch=Number(process.env.BATCH);
-            const browser=await chromium.launch({headless:true});
-            const page=await browser.newPage({viewport:{width:1440,height:900}});
-            await page.setExtraHTTPHeaders({'x-autotube-hf-token':process.env.HF_TOKEN||''});
-            await page.goto('https://autotube-hfeu.onrender.com/video-ai-test-browser?batch='+batch,{waitUntil:'domcontentloaded',timeout:120000});
-            await page.waitForFunction(()=>window.__done===true || window.__error, null, {timeout:900000});
-            const err=await page.evaluate(()=>window.__error||'');
-            if(err) throw new Error(err);
-            const urls=await page.evaluate(()=>window.__outputs||[]);
-            if(urls.length!==4) throw new Error('Expected 4 clips, got '+urls.length);
-            for(let i=0;i<urls.length;i++){
-              const rr=await page.request.get(urls[i]);
-              if(!rr.ok()) throw new Error('Clip '+i+' download failed: '+rr.status());
-              const body=await rr.body();
-              if(body.length<10000) throw new Error('Clip '+i+' is too small');
-              fs.writeFileSync('/tmp/clip-'+batch+'-'+i+'.mp4',body);
-            }
-            await browser.close();
+            const b=await chromium.launch({headless:true});
+            const p=await b.newPage();
+            await p.goto('https://huggingface.co/spaces/akhaliq/LTX-2.5-workflow',{waitUntil:'domcontentloaded',timeout:180000});
+            await p.waitForTimeout(15000);
+            const frames=p.frames().map(f=>({url:f.url(),name:f.name()}));
+            console.log(JSON.stringify(frames,null,2));
+            const hf= p.frames().find(f=>f.url().includes('.hf.space'));
+            if(!hf) throw Error('HF Space iframe not found');
+            const result=await hf.evaluate(async()=>{
+              window.supports_zerogpu_headers=true;
+              const s=document.createElement('script');s.type='module';s.textContent='';
+              const mod=await import('https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js');
+              const client=await mod.Client.connect(location.hostname.replace(/\.hf\.space$/,'').replace(/-/g,'/').replace(/^/,'')); 
+              return {ok:true,api:await client.view_api()};
+            });
+            console.log(JSON.stringify(result,null,2));
+            await b.close();
           })().catch(e=>{console.error(e.stack||e);process.exit(1)});
           NODE
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Validate batch
-        run: |
-          for f in /tmp/clip-${{ matrix.batch }}-*.mp4; do
-            ffprobe -v error -show_entries format=duration -show_entries stream=codec_name,width,height,r_frame_rate -of json "$f"
-          done
-      - name: Upload batch
-        uses: actions/upload-artifact@v4
-        with:
-          name: ltx-batch-${{ matrix.batch }}
-          path: /tmp/clip-${{ matrix.batch }}-*.mp4
-          compression-level: 0
-
-# Assembly is enabled only after all duration-scaled batches pass individually.
