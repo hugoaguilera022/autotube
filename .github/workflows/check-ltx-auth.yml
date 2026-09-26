@@ -1,0 +1,11 @@
+name: Check LTX authentication state
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/check-ltx-auth.yml']
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS https://autotube-hfeu.onrender.com/api/ai/ltx-config
