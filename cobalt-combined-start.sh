@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
-PORT=3000 PORT=3000 bun /opt/yt-session/src/index.ts > /tmp/yt-session.log 2>&1 &
+PORT=3000 export PORT=3000
+bun /opt/yt-session/src/index.ts > /tmp/yt-session.log 2>&1 &
 SESSION_PID=$!
 echo "yt-session-generator started pid=$SESSION_PID"
 for i in $(seq 1 90); do
@@ -13,4 +14,5 @@ done
 if ! test -s /tmp/yt-token.json || ! grep -q 'poToken' /tmp/yt-token.json; then cat /tmp/yt-session.log >&2 || true; echo "yt-session-generator did not produce a token" >&2; exit 1; fi
 echo "yt-session token generated"; cat /tmp/yt-session.log | tail -20 || true
 cd /opt/cobalt
+export PORT=10000
 exec pnpm --filter @imput/cobalt-api start
