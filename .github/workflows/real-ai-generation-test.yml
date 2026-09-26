@@ -1,12 +1,6 @@
 name: AutoTube full reference recreation test
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'server.js'
-      - 'public/app.js'
-      - '.github/workflows/real-ai-generation-test.yml'
   workflow_dispatch:
 
 jobs:
