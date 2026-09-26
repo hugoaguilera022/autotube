@@ -1,0 +1,51 @@
+name: External real E2E
+on:
+  push:
+    branches: [main]
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Wait for Render
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://autotube-hfeu.onrender.com/ || true)
+            echo "Render HTTP $code"
+            if [ "$code" != "000" ]; then break; fi
+            sleep 10
+          done
+      - name: Start full E2E
+        id: start
+        run: |
+          REF='https://youtu.be/mh48xOkLhgU?si=FxdwPeg3v2TMmo_H'
+          curl -fsS --max-time 30 --get 'https://autotube-hfeu.onrender.com/api/full-pipeline-test' --data-urlencode "reference=$REF" | tee start.json
+          echo "job_id=$(python -c "import json; print(json.load(open('start.json'))['jobId'])")" >> "$GITHUB_OUTPUT"
+      - name: Poll E2E
+        env:
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+        run: |
+          for i in $(seq 1 540); do
+            code=$(curl -sS --max-time 30 -o status.json -w '%{http_code}' "https://autotube-hfeu.onrender.com/api/full-pipeline-test/$JOB_ID" || true)
+            cat status.json 2>/dev/null || true
+            echo
+            if grep -q '"status":"done"' status.json 2>/dev/null; then exit 0; fi
+            if grep -q '"status":"failed"' status.json 2>/dev/null; then cat status.json; exit 1; fi
+            sleep 5
+          done
+          echo "E2E timeout"; exit 1
+      - name: Download final MP4
+        if: success()
+        env:
+          JOB_ID: ${{ steps.start.outputs.job_id }}
+        run: curl -fL --max-time 1800 "https://autotube-hfeu.onrender.com/api/full-pipeline-test/$JOB_ID/download" -o autotube-e2e.mp4 || true
+      - name: Upload E2E artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-e2e-result
+          path: |
+            start.json
+            status.json
+            autotube-e2e.mp4
+          if-no-files-found: warn
