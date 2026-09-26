@@ -1,0 +1,52 @@
+name: AutoTube LTX 8.5s base test
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server.js'
+      - '.github/workflows/ltx-8s-test.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Wait for Render
+        run: |
+          for i in {1..30}; do
+            code=$(curl -s -o /tmp/h -w "%{http_code}" https://autotube-hfeu.onrender.com/api/health || true)
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          exit 1
+      - name: Generate real 8.5 second LTX clip
+        run: |
+          node <<'NODE'
+          const {chromium}=require('playwright');const fs=require('fs');
+          (async()=>{const b=await chromium.launch({headless:true});const p=await b.newPage();
+          await p.goto('https://autotube-hfeu.onrender.com/video-ai-test-browser?batch=0&count=1',{waitUntil:'domcontentloaded',timeout:120000});
+          await p.waitForFunction(()=>window.__done===true||window.__error,null,{timeout:900000});
+          const e=await p.evaluate(()=>window.__error||'');if(e)throw Error(e);
+          const u=await p.evaluate(()=>window.__outputs?.[0]);if(!u)throw Error('No output URL');
+          const r=await p.request.get(u);if(!r.ok())throw Error('Download '+r.status());fs.writeFileSync('/tmp/ltx-8.5.mp4',await r.body());await b.close()})().catch(e=>{console.error(e.stack||e);process.exit(1)});
+          NODE
+      - name: Install FFmpeg and validate
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,r_frame_rate -of json /tmp/ltx-8.5.mp4
+          python - <<'PY'
+          import json,subprocess
+          d=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','json','/tmp/ltx-8.5.mp4']))
+          assert float(d['format']['duration'])>=8
+          print('REAL 8.5s LTX BASE TEST: PASS')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ltx-8.5-base-test
+          path: /tmp/ltx-8.5.mp4
