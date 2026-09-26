@@ -1,50 +1,66 @@
 name: Real YouTube E2E
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      YOUTUBE_URL: https://youtu.be/mh48xOkLhgU?si=FxdwPeg3v2TMmo_H
+      AUTOTUBE_URL: https://autotube-hfeu.onrender.com
     steps:
       - name: Wait for Render
         run: |
           for i in $(seq 1 60); do
-            if curl -fsS --max-time 10 https://autotube-hfeu.onrender.com/ >/dev/null; then
+            if curl -fsS --max-time 10 "$AUTOTUBE_URL/" >/dev/null; then
               echo "Render is live"
               break
             fi
             sleep 10
           done
-      - name: Start full pipeline
-        id: start
+      - name: Install yt-dlp
+        uses: AnimMouse/setup-yt-dlp@v3
+        with:
+          ejs-node: true
+          with-ffmpeg: true
+      - name: Download REAL YouTube MP4
         run: |
-          URL="https://autotube-hfeu.onrender.com/api/full-pipeline-test?reference=https%3A%2F%2Fyoutu.be%2Fmh48xOkLhgU%3Fsi%3DFxdwPeg3v2TMmo_H"
-          curl -fsS --max-time 30 "$URL" | tee start.json
-          cat start.json
-      - name: Poll full pipeline
+          set -euxo pipefail
+          mkdir -p out
+          yt-dlp --no-playlist --retries 5 --fragment-retries 5 --concurrent-fragments 1             --extractor-args "youtube:player_client=web_safari,android_vr,tv,web_embedded"             --merge-output-format mp4             -f "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]/best[ext=mp4]"             -o "out/reference.mp4" "$YOUTUBE_URL"
+          test -s out/reference.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate -of json out/reference.mp4 | tee out/probe.json
+          test "$(stat -c%s out/reference.mp4)" -gt 100000
+      - name: Publish REAL reference temporarily
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: autotube-real-reference-${{ github.run_id }}
+          name: AutoTube real reference ${{ github.run_id }}
+          body: "Temporary real MP4 downloaded from the configured YouTube reference by the GitHub runner."
+          files: out/reference.mp4
+          make_latest: false
+      - name: Start strict E2E from REAL MP4
         run: |
-          JOB=$(python - <<'PY'
-          import json
-          d=json.load(open("start.json"))
-          print(d.get("jobId",""))
-          PY
-          )
-          test -n "$JOB"
-          for i in $(seq 1 55); do
-            sleep 60
-            curl -fsS --max-time 30 "https://autotube-hfeu.onrender.com/api/full-pipeline-test/$JOB" | tee status.json
-            python - <<'PY'
-          import json,sys
-          d=json.load(open("status.json"))
-          print("status=",d.get("status"),"progress=",d.get("progress"))
-          if d.get("status")=="done":
-              sys.exit(0)
-          if d.get("status")=="failed":
-              print(d)
-              sys.exit(2)
-          PY
+          set -euxo pipefail
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/autotube-real-reference-${GITHUB_RUN_ID}/reference.mp4"
+          ENCODED=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1],safe=""))' "$URL")
+          curl --fail --retry 10 --retry-delay 5 --max-time 30 "$AUTOTUBE_URL/api/full-pipeline-test?reference=$ENCODED" | tee start.json
+      - name: Poll strict E2E
+        run: |
+          set -euxo pipefail
+          JOB=$(python3 -c 'import json; print(json.load(open("start.json"))["jobId"])')
+          for i in $(seq 1 120); do
+            sleep 5
+            STATUS=$(curl -fsS --max-time 30 "$AUTOTUBE_URL/api/full-pipeline-test/$JOB") || true
+            echo "$STATUS"
+            if echo "$STATUS" | grep -q '"status":"done"'; then exit 0; fi
+            if echo "$STATUS" | grep -q '"status":"failed"'; then exit 1; fi
           done
-          echo "E2E timed out"
-          exit 3
+          echo "Strict E2E timeout" >&2
+          exit 1
