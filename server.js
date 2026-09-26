@@ -571,6 +571,28 @@ app.get('/api/youtube/reference/:jobId',async(req,res)=>{
 
 app.post('/api/ai/outline',async(req,res)=>{const{topic,language='es',duration='8',reference='',referenceData=null,visualReferenceAnalysis=null,referenceStyle=null,referenceTopic='',transcript=''}=req.body||{};const effectiveTopic=String(topic||brief||referenceTopic||referenceData?.title||'').trim();if(!effectiveTopic)return res.status(400).json({error:'Indica un tema o proporciona una referencia de YouTube.'});if(!process.env['GEM'+'INI_'+'API_'+'KEY'])return res.json({demo:true,title:`Ideas para un vídeo sobre ${effectiveTopic}`,outline:['Gancho inicial','Contexto y promesa','Desarrollo en 3 bloques','Cierre y llamada a la acción'],note:'Conecta GEMINI_API_KEY para generar con IA.'});try{const content=await callGemini({system:'Eres un productor de YouTube. Devuelve JSON con title, hook, outline, visualIdeas, description y tags. No copies textos de otros vídeos.',user:JSON.stringify({task:'Crea una estructura audiovisual original sobre el tema indicado. Si referenceTopic contiene el título/tema de la referencia y el usuario no ha proporcionado otro tema, usa ese tema como asunto principal del nuevo vídeo. No sustituyas el tema de la referencia por otro asunto no relacionado.',topic:effectiveTopic,language,duration,reference:referenceData||(reference?{url:reference}:null),transcript:String(transcript||referenceData?.transcript||'').slice(0,100000),visualReferenceAnalysis,referenceStyle}),temperature:0.8,maxOutputTokens:1400,json:true});return res.json(parseJsonResponse(content))}catch(err){console.error('Outline Gemini error:',err);return res.json({demo:true,fallback:true,title:`${effectiveTopic} — The AI Movie`,hook:`Una historia audiovisual original sobre ${effectiveTopic}.`,outline:['Gancho inicial','Contexto y promesa','Desarrollo en 3 bloques','Momento principal','Cierre'],visualIdeas:[`Cinematic realistic footage about ${effectiveTopic}, opening scene, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, development, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, main moment, 16:9`,`Cinematic realistic footage about ${effectiveTopic}, ending, 16:9`],description:`Vídeo original sobre ${effectiveTopic}.`,tags:[effectiveTopic,'AI','YouTube'],warning:'Gemini no respondió correctamente en este intento; se ha creado una estructura local para continuar.'})}});
 
+app.get('/api/ai/ltx-config',async(_req,res)=>{res.json({ok:true,space:String(process.env.LTX_SPACE||'Lightricks/ltx-video-distilled'),authenticated:Boolean(String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim())});});
+app.post('/api/ai/ltx-clip',async(req,res)=>{
+  const prompt=String(req.body?.prompt||'').trim();
+  if(!prompt)return res.status(400).json({error:'Falta el prompt del clip.'});
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ltx-api-'));
+  try{
+    const result=await generateFreeLtxVideoClip(prompt,dir,{
+      durationSeconds:Math.min(8.5,Math.max(0.3,Number(req.body?.durationSeconds)||8.5)),
+      width:Number(req.body?.width)||1216,
+      height:Number(req.body?.height)||704,
+      improveTexture:Boolean(req.body?.improveTexture),
+      guidanceScale:Number(req.body?.guidanceScale)||3,
+      negativePrompt:String(req.body?.negativePrompt||'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos, watermark')
+    });
+    const data=await fs.readFile(result.outputPath);
+    res.setHeader('Content-Type','video/mp4');res.setHeader('Content-Length',String(data.length));res.setHeader('X-LTX-Provider',result.provider);res.end(data);
+  }catch(err){
+    const msg=String(err?.message||err||'Error LTX');
+    const status=/quota|token|authenticate|unauthorized|401|403/i.test(msg)?429:502;
+    res.status(status).json({error:msg,authenticated:Boolean(String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim())});
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+});
 app.post('/api/ai/production-plan',async(req,res)=>{try{
   const {
     topic,brief='',visualReferences='',customScript='',language='es',duration='8',title='',outline=[],visualIdeas=[],
@@ -1285,7 +1307,8 @@ async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   const width=Math.max(256,Math.min(1280,Math.round((Number(options.width)||704)/32)*32));
   const height=Math.max(256,Math.min(1280,Math.round((Number(options.height)||512)/32)*32));
   const negativePrompt=String(options.negativePrompt||'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos').trim();
-  const app=await Client.connect(space);
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const app=await Client.connect(space,token?{token}:undefined);
   const seed=Math.floor(Math.random()*4294967295);
   // Current LTX Space exposes text_to_video as positional Gradio inputs.
   // Keep this isolated to the optional AI-visual path.
