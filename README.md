@@ -28,3 +28,5 @@ El proyecto incluye `render.yaml`. Conecta el repositorio en Render como Web Ser
 - `YOUTUBE_CLIENT_ID` + `YOUTUBE_CLIENT_SECRET`: OAuth de YouTube.
 - `YOUTUBE_REDIRECT_URI`: callback OAuth.
 - `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `ELEVENLABS_API_KEY`: módulos opcionales.
+
+<!-- memory-safe reference patch trigger -->
