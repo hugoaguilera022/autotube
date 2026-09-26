@@ -1,0 +1,153 @@
+name: AutoTube AI Benchmark
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: autotube-ai-benchmark
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Wait for Render deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..90}; do
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 15 https://autotube-hfeu.onrender.com/api/health || true)
+            if [ "$code" = "200" ]; then cat /tmp/health.json; break; fi
+            sleep 5
+          done
+          test -s /tmp/health.json
+          sleep 60
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Run sequential AI URL benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          urls=(
+            "https://www.youtube.com/watch?v=VvxMSGtq6mc"
+            "https://www.youtube.com/watch?v=ZvQSYQv_XXE"
+            "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+          )
+
+          mkdir -p benchmark-results
+          index=0
+
+          for reference in "${urls[@]}"; do
+            index=$((index+1))
+            echo "============================================================"
+            echo "AUTOTUBE_BENCHMARK_CASE=$index"
+            echo "REFERENCE=$reference"
+            echo "============================================================"
+
+            response=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video'               -H 'Content-Type: application/json'               --data "{"reference":"$reference","url":"$reference"}")
+            echo "$response"
+
+            job_id=$(printf '%s' "$response" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("jobId") or d.get("id") or "")')
+            test -n "$job_id"
+
+            final=''
+            restarted=0
+
+            for poll in {1..540}; do
+              set +e
+              status_response=$(curl -sS --max-time 60 "https://autotube-hfeu.onrender.com/api/url-to-video/$job_id")
+              curl_code=$?
+              set -e
+              echo "--- case=$index poll=$poll job=$job_id curl=$curl_code ---"
+              echo "$status_response"
+
+              if [ "$curl_code" -ne 0 ] || printf '%s' "$status_response" | grep -q 'Trabajo no encontrado\|servidor se reinició\|restart'; then
+                if [ "$restarted" -eq 0 ]; then
+                  echo "RESTARTING_LOST_JOB case=$index"
+                  status_response=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video'                     -H 'Content-Type: application/json'                     --data "{"reference":"$reference","url":"$reference"}")
+                  echo "$status_response"
+                  job_id=$(printf '%s' "$status_response" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("jobId") or d.get("id") or "")')
+                  test -n "$job_id"
+                  restarted=1
+                  sleep 5
+                  continue
+                fi
+                echo "AUTOTUBE_BENCHMARK_FAIL_LOST_TWICE case=$index"
+                exit 1
+              fi
+
+              status=$(printf '%s' "$status_response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("status","")).lower())')
+
+              if [ "$status" = "done" ] || [ "$status" = "completed" ] || [ "$status" = "success" ]; then
+                final="$status_response"
+                break
+              fi
+
+              if [ "$status" = "error" ] || [ "$status" = "failed" ]; then
+                echo "AUTOTUBE_BENCHMARK_RENDER_FAIL case=$index"
+                exit 1
+              fi
+
+              sleep 5
+            done
+
+            test -n "$final"
+            printf '%s' "$final" > "benchmark-results/case-$index-result.json"
+
+            python - "$final" "$index" <<'PY'
+          import json,sys
+          d=json.loads(sys.argv[1])
+          i=sys.argv[2]
+          urls=[]
+          for k in ('downloadUrl','videoUrl','url','outputUrl','fileUrl'):
+              if d.get(k): urls.append(str(d[k]))
+          if not urls and d.get('jobId'):
+              urls=[f'https://autotube-hfeu.onrender.com/api/url-to-video/{d["jobId"]}/download']
+          assert urls, f'case {i}: no MP4 URL'
+          open(f'benchmark-results/case-{i}-download-url.txt','w').write(urls[0])
+          print('CASE_DONE', i, 'jobId=', d.get('jobId'), 'referenceTitle=', d.get('referenceTitle'), 'duration=', d.get('durationSeconds'), 'size=', d.get('size'), 'validation=', d.get('validation'))
+          PY
+
+            download_url="$(cat "benchmark-results/case-$index-download-url.txt")"
+            case "$download_url" in
+              http://*|https://*) ;;
+              /*) download_url="https://autotube-hfeu.onrender.com$download_url" ;;
+              *) download_url="https://autotube-hfeu.onrender.com/$download_url" ;;
+            esac
+
+            curl -fL --retry 3 --max-time 1800 "$download_url" -o "benchmark-results/case-$index.mp4"
+            test -s "benchmark-results/case-$index.mp4"
+
+            ffprobe -v error               -show_entries format=duration,size               -show_entries stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels               -of json "benchmark-results/case-$index.mp4" | tee "benchmark-results/case-$index-ffprobe.json"
+
+            python - "$index" <<'PY'
+          import json,sys
+          i=sys.argv[1]
+          d=json.load(open(f'benchmark-results/case-{i}-ffprobe.json'))
+          duration=float(d['format']['duration'])
+          size=int(d['format']['size'])
+          video=[s for s in d['streams'] if s.get('codec_type')=='video']
+          audio=[s for s in d['streams'] if s.get('codec_type')=='audio']
+          assert duration > 0, f'case {i}: duration'
+          assert size > 100000, f'case {i}: size'
+          assert video and video[0].get('width',0) >= 1280 and video[0].get('height',0) >= 720, f'case {i}: resolution'
+          assert audio, f'case {i}: missing audio'
+          print('AUTOTUBE_BENCHMARK_MP4_VALIDATION_PASS', i, duration, size, video[0], audio[0])
+          PY
+          done
+
+      - name: Upload benchmark MP4s and reports
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-ai-benchmark-mp4s
+          path: benchmark-results/
+          retention-days: 7
