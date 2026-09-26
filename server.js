@@ -2100,6 +2100,14 @@ app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
 
 
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
+if(process.env.AUTOTUBE_SELFTEST_REFERENCE){
+  const selfTestReference=String(process.env.AUTOTUBE_SELFTEST_REFERENCE).trim();
+  setTimeout(()=>{
+    fetch('http://127.0.0.1:'+PORT+'/api/full-pipeline-test?reference='+encodeURIComponent(selfTestReference))
+      .then(r=>r.text()).then(body=>console.log('AUTOTUBE_SELFTEST_STARTED',body.slice(0,1200)))
+      .catch(err=>console.error('AUTOTUBE_SELFTEST_START_FAILED',err.message||String(err)));
+  },12000);
+}
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
