@@ -4,6 +4,7 @@ PORT=3000 PORT=3000 bun /opt/yt-session/src/index.ts > /tmp/yt-session.log 2>&1 
 SESSION_PID=$!
 echo "yt-session-generator started pid=$SESSION_PID"
 for i in $(seq 1 90); do
+  if [ "$i" -eq 45 ]; then echo "--- yt-session log at 45 ---"; tail -80 /tmp/yt-session.log >&2 || true; fi
   if curl -fsS --max-time 3 http://127.0.0.1:3000/token >/tmp/yt-token.json 2>/dev/null; then echo "yt-session-generator token ready"; break; fi
   if ! kill -0 "$SESSION_PID" 2>/dev/null; then cat /tmp/yt-session.log >&2 || true; exit 1; fi
   if [ $((i % 10)) -eq 0 ]; then echo "yt-session-generator still waiting ($i/90)"; tail -n 40 /tmp/yt-session.log || true; fi
