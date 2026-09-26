@@ -222,7 +222,7 @@ async function downloadViaInvidious(url,dir){
 }
 
 async function downloadViaAllDL(url,dir){
-  const endpoint='https://ahm7xmakki.com/api/alldl?url='+encodeURIComponent(url);
+  const endpoint='https://ahm7xmakki.com/api/alldl?url='+encodeURIComponent(url)+'&download=1';
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),90000);
   try{
     const res=await fetch(endpoint,{headers:{Accept:'video/mp4,application/octet-stream;q=0.9,application/json;q=0.8','User-Agent':'Mozilla/5.0','Referer':'https://ahm7xmakki.com/'},signal:controller.signal});
