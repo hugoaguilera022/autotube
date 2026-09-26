@@ -212,6 +212,77 @@ async function measureReferenceVisualContinuity(file){
   return{durationSeconds,frozenSeconds,freezeRatio:durationSeconds?frozenSeconds/durationSeconds:0,constantImage};
 }
 
+async function getYoutubeTranscript(input,preferredLanguage='es'){
+  const url=String(input||'').trim();
+  if(!url)return{available:false,transcript:'',language:null,source:null};
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-youtube-transcript-'));
+  try{
+    const output=path.join(dir,'captions.%(ext)s');
+    const languages=[String(preferredLanguage||'es'),preferredLanguage==='es'?'en':'es','en'].filter(Boolean);
+    const attempts=[
+      {name:'manual-or-auto',writeAutoSub:true},
+      {name:'manual',writeSub:true}
+    ];
+    let files=[];
+    for(const attempt of attempts){
+      try{
+        await youtubedl(url,{
+          skipDownload:true,
+          noPlaylist:true,
+          noWarnings:true,
+          noCheckCertificates:true,
+          output,
+          subLang:languages.join(','),
+          subFormat:'vtt',
+          ...attempt
+        },{timeout:90000,killSignal:'SIGKILL'});
+        files=(await fs.readdir(dir)).filter(name=>/^captions\..+\.(vtt|srt)$/i.test(name));
+        if(files.length)break;
+      }catch(err){
+        console.warn('YouTube transcript attempt failed:',attempt.name,err?.message||String(err));
+      }
+    }
+    if(!files.length)return{available:false,transcript:'',language:null,source:null};
+    files.sort((a,b)=>{
+      const score=n=>{const l=n.toLowerCase();return l.includes('.'+preferredLanguage+'.')?0:(l.includes('.en.')?1:2)};
+      return score(a)-score(b);
+    });
+    const chosen=files[0];
+    const raw=await fs.readFile(path.join(dir,chosen),'utf8');
+    const transcript=parseSubtitleText(raw);
+    if(!transcript)return{available:false,transcript:'',language:null,source:null};
+    const match=chosen.match(/\.([a-zA-Z-]+)\.(?:vtt|srt)$/);
+    return{
+      available:true,
+      transcript:transcript.slice(0,100000),
+      language:match?.[1]||preferredLanguage,
+      source:chosen.includes('.auto.')?'YouTube auto-captions':'YouTube captions'
+    };
+  }finally{
+    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
+}
+function parseSubtitleText(raw){
+  const text=String(raw||'').replace(/^\uFEFF/,'').replace(/\r/g,'');
+  const blocks=text.split(/\n\n+/);
+  const lines=[];
+  let previous='';
+  for(const block of blocks){
+    const cleaned=block.split('\n')
+      .map(x=>x.trim())
+      .filter(Boolean)
+      .filter(x=>!/^WEBVTT|^NOTE|^STYLE|^REGION/i.test(x))
+      .filter(x=>!/^(?:\d+\s*)?$/.test(x))
+      .filter(x=>!/^(?:\d{2}:)?\d{2}:\d{2}[.,]\d{3}\s+-->/.test(x));
+    if(!cleaned.length)continue;
+    const sentence=cleaned.join(' ').replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g,'').replace(/<[^>]+>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/\s+/g,' ').trim();
+    if(!sentence||sentence===previous)continue;
+    previous=sentence;
+    lines.push(sentence);
+  }
+  return lines.join('\n').trim();
+}
+
 async function analyzeDownloadedReferenceMedia(file,video){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-frames-'));
   try{
@@ -445,11 +516,15 @@ async function analyzeYoutubeReferenceMedia(url,video){
 const youtubeReferenceJobs=new Map();
 async function executeYoutubeReferenceAnalysis(reference){
   const video=await getReferenceVideo(reference);
-  const referenceStyle=await analyzeYoutubeReferenceMedia(reference,video);
+  const [referenceStyle,transcript]=await Promise.all([
+    analyzeYoutubeReferenceMedia(reference,video),
+    getYoutubeTranscript(reference,video?.defaultLanguage||'es').catch(err=>{console.warn('YouTube transcript unavailable:',err?.message||String(err));return{available:false,transcript:'',language:null,source:null};})
+  ]);
   return {
     ok:true,
     reference,
     video,
+    transcript,
     referenceStyle,
     analysis:{
       basis:'URL pública de YouTube validada mediante descarga temporal y análisis de fotogramas con IA.',
@@ -473,6 +548,18 @@ app.post('/api/youtube/reference',async(req,res)=>{
     const job=youtubeReferenceJobs.get(id);
     if(job){job.status='error';job.result={ok:false,error:err.message||'No se pudo analizar el vídeo completo de YouTube.'};job.finishedAt=Date.now();}
   });
+});
+app.get('/api/youtube/transcript',async(req,res)=>{
+  const reference=String(req.query?.reference||'').trim();
+  if(!reference)return res.status(400).json({ok:false,error:'Indica una URL de YouTube.'});
+  try{
+    const transcript=await getYoutubeTranscript(reference,String(req.query?.language||'es'));
+    if(!transcript.available)return res.status(404).json({ok:false,available:false,error:'Este vídeo no tiene subtítulos/transcripción accesibles para AutoTube.'});
+    return res.json({ok:true,...transcript});
+  }catch(err){
+    console.error('YouTube transcript error:',err);
+    return res.status(502).json({ok:false,available:false,error:err?.message||'No se pudo obtener la transcripción.'});
+  }
 });
 app.get('/api/youtube/reference/:jobId',async(req,res)=>{
   const job=youtubeReferenceJobs.get(String(req.params.jobId||''));
@@ -1615,6 +1702,7 @@ async function executeUrlToVideo(reference,jobId){
       .sort((a,b)=>Number(b.finishedAt||0)-Number(a.finishedAt||0))[0];
     const useCached=Boolean(cachedReference&&Date.now()-Number(cachedReference.finishedAt||0)<15*60*1000);
     const video=useCached?cachedReference.result.video:await getReferenceVideo(reference);
+    const transcript=useCached?(cachedReference.result.transcript||{available:false,transcript:''}):await getYoutubeTranscript(reference,video?.defaultLanguage||'es').catch(err=>{console.warn('URL-to-video transcript unavailable:',err?.message||String(err));return{available:false,transcript:''};});
     const style=useCached?cachedReference.result.referenceStyle:await analyzeYoutubeReferenceMedia(reference,video);
     if(!style?.visualAnalysis||!style?.visualAnalysis?.structureProfile){
       throw new Error('No se pudo obtener un análisis audiovisual suficiente de la referencia. El render se detuvo antes de generar visuales.');
@@ -1629,7 +1717,8 @@ async function executeUrlToVideo(reference,jobId){
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         topic:referenceTitle,reference,referenceTopic:referenceTitle,
-        referenceData:video||{title:referenceTitle},
+        referenceData:{...(video||{title:referenceTitle}),transcript:transcript?.transcript||''},
+        transcript:transcript?.transcript||'',
         visualReferenceAnalysis,referenceStyle:style,
         language:'es',duration:String(Math.max(1,Math.ceil(targetDurationSeconds/60)))
       })
@@ -1641,7 +1730,8 @@ async function executeUrlToVideo(reference,jobId){
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         topic:referenceTitle,reference,referenceTopic:referenceTitle,
-        referenceData:video||{title:referenceTitle},
+        referenceData:{...(video||{title:referenceTitle}),transcript:transcript?.transcript||''},
+        transcript:transcript?.transcript||'',
         visualReferenceAnalysis,referenceStyle:style,
         language:'es',duration:String(Math.max(1,Math.ceil(targetDurationSeconds/60))),title:outline?.title||referenceTitle,
         outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
