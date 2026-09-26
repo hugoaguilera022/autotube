@@ -106,8 +106,7 @@ jobs:
               raise SystemExit(f'Expected 36 clips, got {len(files)}')
           with open('/tmp/concat.txt','w') as f:
               for p in files:
-                  f.write("file '"+str(p).replace("'","'\\''")+"'
-")
+                  f.write("file '"+str(p).replace("'","'\\''")+"\\n")
           PY
           ffmpeg -hide_banner -loglevel error -f concat -safe 0 -i /tmp/concat.txt -c copy /tmp/full-original.mp4
           ffmpeg -hide_banner -loglevel error -i /tmp/full-original.mp4 -t 273.600 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest /tmp/autotube-reference-profile-test.mp4
