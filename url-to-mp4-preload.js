@@ -33,43 +33,13 @@ async function downloadViaExternalProvider(url,dir){
 }
 async function downloadViaPiped(url,dir){
   const u=new URL(url);
-  const id=u.hostname.toLowerCase()==='youtu.be'?u.pathname.slice(1):u.searchParams.get('v')||((u.pathname.match(/\/(?:shorts|embed)\/([A-Za-z0-9_-]{6,20})/)||[])[1]||'');
-  if(!id) throw new Error('No se pudo extraer el ID de YouTube.');
-  const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz,https://pipedapi.nosebs.ru').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
-  let last='';
-  for(const base of instances){
-    try{
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
-      let r;try{r=await fetch(base+'/streams/'+encodeURIComponent(id),{headers:{Accept:'application/json'},signal:controller.signal});}finally{clearTimeout(timer)}
-      if(!r.ok)throw new Error('HTTP '+r.status);
-      const data=await r.json();
-      const vs=Array.isArray(data.videoStreams)?data.videoStreams:[];
-      const as=Array.isArray(data.audioStreams)?data.audioStreams:[];
-      const progressive=vs.filter(x=>x?.url&&/^video\/mp4$/i.test(String(x.mimeType||''))&&!x.videoOnly).sort((a,b)=>(Number(b.width||0)*Number(b.height||0))-(Number(a.width||0)*Number(a.height||0)))[0];
-      const video=vs.filter(x=>x?.url&&/^video\/mp4$/i.test(String(x.mimeType||''))).sort((a,b)=>(Number(b.width||0)*Number(b.height||0))-(Number(a.width||0)*Number(a.height||0)))[0];
-      const audio=as.filter(x=>x?.url&&/^audio\/mp4$/i.test(String(x.mimeType||''))).sort((a,b)=>Number(b.bitrate||0)-Number(a.bitrate||0))[0];
-      const out=path.join(dir,'source.mp4');
-      if(progressive){
-        const fr=await fetch(progressive.url);if(!fr.ok||!fr.body)throw new Error('stream HTTP '+fr.status);
-        const fh=await fs.open(out,'w');try{const reader=fr.body.getReader();while(true){const {done,value}=await reader.read();if(done)break;await fh.write(value)}}finally{await fh.close()}
-      }else if(video?.url&&audio?.url){
-        const vpath=path.join(dir,'piped-video.mp4'),apath=path.join(dir,'piped-audio.m4a');
-        for(const [src,target] of [[video.url,vpath],[audio.url,apath]]){
-          const fr=await fetch(src);if(!fr.ok||!fr.body)throw new Error('stream HTTP '+fr.status);
-          const fh=await fs.open(target,'w');try{const reader=fr.body.getReader();while(true){const {done,value}=await reader.read();if(done)break;await fh.write(value)}}finally{await fh.close()}
-        }
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',vpath,'-i',apath,'-map','0:v:0','-map','1:a:0','-c','copy','-movflags','+faststart',out]);
-      }else throw new Error('Piped no devolvió streams MP4 reproducibles.');
-      const st=await fs.stat(out);if(!st.size)throw new Error('MP4 vacío.');
-      return{source:out,bytes:st.size,strategy:'piped:'+base,external:{title:String(data.title||''),description:String(data.description||''),duration:Number(data.duration||0),channelTitle:String(data.uploader||''),captions:Array.isArray(data.subtitles)?data.subtitles:[]}};
-    }catch(e){last=base+': '+String(e?.message||e);for(const f of await fs.readdir(dir).catch(()=>[]))if(/^source\.mp4$|^piped-(?:video|audio)\./i.test(f))await fs.rm(path.join(dir,f),{force:true}).catch(()=>{})}
+  let id='';
+  if(u.hostname.toLowerCase()==='youtu.be') id=u.pathname.replace(/^\\/+|\\/+$/g,'').split('/')[0];
+  else if(u.searchParams.get('v')) id=u.searchParams.get('v');
+  else {
+    const parts=u.pathname.split('/').filter(Boolean);
+    if((parts[0]==='shorts'||parts[0]==='embed')&&parts[1]) id=parts[1];
   }
-  throw new Error('Piped no pudo obtener el vídeo. Último error: '+last);
-}
-
-async function downloadViaPiped(url,dir){
-  const u=new URL(url);
-  const id=u.hostname.toLowerCase()==='youtu.be'?u.pathname.slice(1):u.searchParams.get('v')||((u.pathname.match(/\\/(?:shorts|embed)\\/([A-Za-z0-9_-]{6,20})/)||[])[1]||'');
   if(!id)throw new Error('No se pudo extraer el ID de YouTube.');
   const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz,https://pipedapi.nosebs.ru,https://pipedapi.adminforge.de,https://api.piped.yt,https://pipedapi.drgns.space').split(',').map(x=>x.trim().replace(/\\/$/,'')).filter(Boolean);
   let last='';
