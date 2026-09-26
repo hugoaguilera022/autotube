@@ -20,7 +20,8 @@ if(process.env.AUTOTUBE_E2E_ON_START==='1'){
     const base='http://127.0.0.1:'+String(process.env.PORT||10000);
     for(let i=0;i<30;i++){
       try{
-        const res=await fetch(base+'/api/full-pipeline-test');
+        const reference='https://youtu.be/mh48xOkLhgU?si=FxdwPeg3v2TMmo_H';
+        const res=await fetch(base+'/api/full-pipeline-test?reference='+encodeURIComponent(reference));
         const body=await res.text();
         console.log('AUTOTUBE E2E ON START',res.status,body.slice(0,1200));
         if(res.status!==503)return;
