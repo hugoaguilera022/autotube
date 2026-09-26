@@ -31,6 +31,42 @@ async function downloadViaExternalProvider(url,dir){
   const st=await fs.stat(out);if(!st.size)throw new Error('El proveedor externo devolvió un MP4 vacío.');
   return{source:out,bytes:st.size,strategy:'external-provider',external:{title:String(data.title||''),description:String(data.description||''),duration:Number(data.duration||0)}};
 }
+async function downloadViaPiped(url,dir){
+  const u=new URL(url);
+  const id=u.hostname.toLowerCase()==='youtu.be'?u.pathname.slice(1):u.searchParams.get('v')||((u.pathname.match(/\/(?:shorts|embed)\/([A-Za-z0-9_-]{6,20})/)||[])[1]||'');
+  if(!id) throw new Error('No se pudo extraer el ID de YouTube.');
+  const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz,https://pipedapi.nosebs.ru').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
+  let last='';
+  for(const base of instances){
+    try{
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
+      let r;try{r=await fetch(base+'/streams/'+encodeURIComponent(id),{headers:{Accept:'application/json'},signal:controller.signal});}finally{clearTimeout(timer)}
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      const data=await r.json();
+      const vs=Array.isArray(data.videoStreams)?data.videoStreams:[];
+      const as=Array.isArray(data.audioStreams)?data.audioStreams:[];
+      const progressive=vs.filter(x=>x?.url&&/^video\/mp4$/i.test(String(x.mimeType||''))&&!x.videoOnly).sort((a,b)=>(Number(b.width||0)*Number(b.height||0))-(Number(a.width||0)*Number(a.height||0)))[0];
+      const video=vs.filter(x=>x?.url&&/^video\/mp4$/i.test(String(x.mimeType||''))).sort((a,b)=>(Number(b.width||0)*Number(b.height||0))-(Number(a.width||0)*Number(a.height||0)))[0];
+      const audio=as.filter(x=>x?.url&&/^audio\/mp4$/i.test(String(x.mimeType||''))).sort((a,b)=>Number(b.bitrate||0)-Number(a.bitrate||0))[0];
+      const out=path.join(dir,'source.mp4');
+      if(progressive){
+        const fr=await fetch(progressive.url);if(!fr.ok||!fr.body)throw new Error('stream HTTP '+fr.status);
+        const fh=await fs.open(out,'w');try{const reader=fr.body.getReader();while(true){const {done,value}=await reader.read();if(done)break;await fh.write(value)}}finally{await fh.close()}
+      }else if(video?.url&&audio?.url){
+        const vpath=path.join(dir,'piped-video.mp4'),apath=path.join(dir,'piped-audio.m4a');
+        for(const [src,target] of [[video.url,vpath],[audio.url,apath]]){
+          const fr=await fetch(src);if(!fr.ok||!fr.body)throw new Error('stream HTTP '+fr.status);
+          const fh=await fs.open(target,'w');try{const reader=fr.body.getReader();while(true){const {done,value}=await reader.read();if(done)break;await fh.write(value)}}finally{await fh.close()}
+        }
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',vpath,'-i',apath,'-map','0:v:0','-map','1:a:0','-c','copy','-movflags','+faststart',out]);
+      }else throw new Error('Piped no devolvió streams MP4 reproducibles.');
+      const st=await fs.stat(out);if(!st.size)throw new Error('MP4 vacío.');
+      return{source:out,bytes:st.size,strategy:'piped:'+base,external:{title:String(data.title||''),description:String(data.description||''),duration:Number(data.duration||0),channelTitle:String(data.uploader||''),captions:Array.isArray(data.subtitles)?data.subtitles:[]}};
+    }catch(e){last=base+': '+String(e?.message||e);for(const f of await fs.readdir(dir).catch(()=>[]))if(/^source\.mp4$|^piped-(?:video|audio)\./i.test(f))await fs.rm(path.join(dir,f),{force:true}).catch(()=>{})}
+  }
+  throw new Error('Piped no pudo obtener el vídeo. Último error: '+last);
+}
+
 async function downloadViaInvidious(url,dir){
   const u=new URL(url);
   const id=u.hostname.toLowerCase()==='youtu.be'?u.pathname.slice(1):u.searchParams.get('v')||((u.pathname.match(/\/(?:shorts|embed)\/([A-Za-z0-9_-]{6,20})/)||[])[1]||'');
@@ -70,7 +106,7 @@ async function downloadViaInvidious(url,dir){
   throw new Error('Invidious no pudo obtener el vídeo. Último error: '+last);
 }
 
-async function downloadExactYoutube(url,dir){await fs.mkdir(dir,{recursive:true});const parsed=new URL(url);if(!/youtube\.com$|youtu\.be$/i.test(parsed.hostname)){const ext=(path.extname(parsed.pathname).toLowerCase()||'.mp4');const out=path.join(dir,'source'+ext);const r=await fetch(url);if(!r.ok)throw new Error('La URL directa devolvió HTTP '+r.status+'.');const file=await fs.open(out,'w');try{if(!r.body)throw new Error('La URL directa no devolvió contenido.');const reader=r.body.getReader();while(true){const {done,value}=await reader.read();if(done)break;await file.write(value)}}finally{await file.close()}const st=await fs.stat(out);if(!st.size)throw new Error('La URL directa devolvió un archivo vacío.');return{source:out,bytes:st.size,strategy:'direct-media-url'}}const out=path.join(dir,'source.%(ext)s'),strategies=[{name:'web-default',format:'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]/best[ext=mp4]',extractorArgs:'youtube:player_client=web,web_safari,android_vr,tv'},{name:'safari-hls-fallback',format:'bestvideo*+bestaudio/best',extractorArgs:'youtube:player_client=web_safari,android_vr,tv'},{name:'android-vr-fallback',format:'bestvideo*+bestaudio/best',extractorArgs:'youtube:player_client=android_vr,tv,web_embedded'},{name:'tv-fallback',format:'bestvideo*+bestaudio/best',extractorArgs:'youtube:player_client=tv,web_embedded,android_vr'},{name:'best-single',format:'best',extractorArgs:'youtube:player_client=web_safari,android_vr,tv'}];let last='';for(const s of strategies){try{const result=await youtubedl(url,{format:s.format,output:out,mergeOutputFormat:'mp4',noPlaylist:true,noWarnings:true,noCheckCertificates:true,restrictFilenames:true,preferFreeFormats:false,ffmpegLocation:path.dirname(ffmpegPath),retries:5,fragmentRetries:5,concurrentFragments:1,extractorArgs:s.extractorArgs},{timeout:90000,killSignal:'SIGKILL'});const files=await fs.readdir(dir),c=files.filter(x=>/^source\.(mp4|mkv|webm|mov|m4v)$/i.test(x));if(!c.length)throw new Error('yt-dlp no produjo un archivo de vídeo.');const source=path.join(dir,c[0]),st=await fs.stat(source);if(!st.size)throw new Error('El archivo descargado está vacío.');return{source,bytes:st.size,strategy:s.name,ytDlpOutput:String(result||'').slice(-1500)}}catch(e){last=String(e?.stderr||e?.message||e||'').slice(-2500);for(const f of await fs.readdir(dir).catch(()=>[]))if(/^source\./i.test(f))await fs.rm(path.join(dir,f),{force:true}).catch(()=>{})}}try{return await downloadViaInvidious(url,dir)}catch(e){last='invidious: '+String(e?.message||e)}if(process.env.AUTOTUBE_EXTERNAL_DOWNLOADER_URL){try{return await downloadViaExternalProvider(url,dir)}catch(e){last='external-provider: '+String(e?.message||e)}}throw new Error('No se pudo obtener el vídeo de referencia por ninguna fuente configurada. Último error: '+last)}
+async function downloadExactYoutube(url,dir){await fs.mkdir(dir,{recursive:true});const parsed=new URL(url);if(!/youtube\.com$|youtu\.be$/i.test(parsed.hostname)){const ext=(path.extname(parsed.pathname).toLowerCase()||'.mp4');const out=path.join(dir,'source'+ext);const r=await fetch(url);if(!r.ok)throw new Error('La URL directa devolvió HTTP '+r.status+'.');const file=await fs.open(out,'w');try{if(!r.body)throw new Error('La URL directa no devolvió contenido.');const reader=r.body.getReader();while(true){const {done,value}=await reader.read();if(done)break;await file.write(value)}}finally{await file.close()}const st=await fs.stat(out);if(!st.size)throw new Error('La URL directa devolvió un archivo vacío.');return{source:out,bytes:st.size,strategy:'direct-media-url'}}const out=path.join(dir,'source.%(ext)s'),strategies=[{name:'web-default',format:'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]/best[ext=mp4]',extractorArgs:'youtube:player_client=web,web_safari,android_vr,tv'},{name:'safari-hls-fallback',format:'bestvideo*+bestaudio/best',extractorArgs:'youtube:player_client=web_safari,android_vr,tv'},{name:'android-vr-fallback',format:'bestvideo*+bestaudio/best',extractorArgs:'youtube:player_client=android_vr,tv,web_embedded'},{name:'tv-fallback',format:'bestvideo*+bestaudio/best',extractorArgs:'youtube:player_client=tv,web_embedded,android_vr'},{name:'best-single',format:'best',extractorArgs:'youtube:player_client=web_safari,android_vr,tv'}];let last='';for(const s of strategies){try{const result=await youtubedl(url,{format:s.format,output:out,mergeOutputFormat:'mp4',noPlaylist:true,noWarnings:true,noCheckCertificates:true,restrictFilenames:true,preferFreeFormats:false,ffmpegLocation:path.dirname(ffmpegPath),retries:5,fragmentRetries:5,concurrentFragments:1,extractorArgs:s.extractorArgs},{timeout:90000,killSignal:'SIGKILL'});const files=await fs.readdir(dir),c=files.filter(x=>/^source\.(mp4|mkv|webm|mov|m4v)$/i.test(x));if(!c.length)throw new Error('yt-dlp no produjo un archivo de vídeo.');const source=path.join(dir,c[0]),st=await fs.stat(source);if(!st.size)throw new Error('El archivo descargado está vacío.');return{source,bytes:st.size,strategy:s.name,ytDlpOutput:String(result||'').slice(-1500)}}catch(e){last=String(e?.stderr||e?.message||e||'').slice(-2500);for(const f of await fs.readdir(dir).catch(()=>[]))if(/^source\./i.test(f))await fs.rm(path.join(dir,f),{force:true}).catch(()=>{})}}try{return await downloadViaPiped(url,dir)}catch(e){last='piped: '+String(e?.message||e)}try{return await downloadViaInvidious(url,dir)}catch(e){last='invidious: '+String(e?.message||e)}if(process.env.AUTOTUBE_EXTERNAL_DOWNLOADER_URL){try{return await downloadViaExternalProvider(url,dir)}catch(e){last='external-provider: '+String(e?.message||e)}}throw new Error('No se pudo obtener el vídeo de referencia por ninguna fuente configurada. Último error: '+last)}
 async function toMp4(source,output){
   // STRICT QUALITY MODE: never re-encode the original media. Re-encoding changes
   // the audiovisual stream and therefore cannot satisfy an exact-match request.
