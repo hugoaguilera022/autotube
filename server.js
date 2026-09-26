@@ -299,12 +299,12 @@ async function analyzeDownloadedReferenceMedia(file,video){
     const durationSeconds=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
     if(!durationSeconds)throw new Error('No se pudo determinar la duración del vídeo de referencia.');
 
-    const frameCount=Math.min(24,Math.max(8,Math.ceil(durationSeconds/12)));
+    const frameCount=Math.min(12,Math.max(6,Math.ceil(durationSeconds/60)));
     const fps=Math.max(1/60,Math.min(1/3,frameCount/durationSeconds));
     const pattern=path.join(dir,'frame-%02d.jpg');
     await runFfmpeg([
       '-y','-hide_banner','-loglevel','error','-i',file,
-      '-vf',`fps=${fps.toFixed(6)},scale=640:-2:force_original_aspect_ratio=decrease`,
+      '-vf',`fps=${fps.toFixed(6)},scale=320:-2:force_original_aspect_ratio=decrease`,
       '-frames:v',String(frameCount),'-q:v','3',pattern
     ]);
     const files=(await fs.readdir(dir)).filter(x=>/^frame-\d+\.jpg$/i.test(x)).sort();
@@ -321,11 +321,11 @@ async function analyzeDownloadedReferenceMedia(file,video){
     const audioPath=path.join(dir,'reference-audio.wav');
     const hasAudioStream=/Stream #[^\n]*Audio:/i.test(probeText);
     if(hasAudioStream){
-      const starts=[0,Math.max(0,durationSeconds/2-30),Math.max(0,durationSeconds-60)].filter((v,i,a)=>a.indexOf(v)===i);
+      const starts=[0,Math.max(0,durationSeconds/2-15),Math.max(0,durationSeconds-30)].filter((v,i,a)=>a.indexOf(v)===i);
       const audioFiles=[];
       for(let i=0;i<starts.length;i++){
         const segmentPath=path.join(dir,'reference-audio-'+i+'.wav');
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss',String(starts[i]),'-i',file,'-vn','-sn','-dn','-t','60','-ac','1','-ar','16000','-c:a','pcm_s16le',segmentPath]);
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss',String(starts[i]),'-i',file,'-vn','-sn','-dn','-t','30','-ac','1','-ar','16000','-c:a','pcm_s16le',segmentPath]);
         const stat=await fs.stat(segmentPath);
         if(stat.size>20000&&stat.size<10*1024*1024)audioFiles.push(await uploadGeminiFile(segmentPath,'audio/wav'));
       }
