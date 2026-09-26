@@ -319,7 +319,9 @@ async function analyzeYoutubeReferenceMedia(url,video){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-download-'));
   try{
     try{
-      const downloaded=await downloadYoutubeReference(referenceUrl,dir);
+      const downloaded=process.env.AUTOTUBE_REFERENCE_FULL_DOWNLOAD==='1'
+        ? await downloadYoutubeReference(referenceUrl,dir)
+        : (()=>{throw new Error('Full YouTube reference download disabled on constrained Render; using public thumbnail/metadata fallback.')})();
       const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
       const analyzed=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
       analyzed.referenceFileBytes=downloaded.bytes;
@@ -344,7 +346,7 @@ async function analyzeYoutubeReferenceMedia(url,video){
       console.warn('YouTube media download unavailable; using thumbnail/metadata fallback:',downloadErr?.message||String(downloadErr));
       const thumbs=Array.isArray(video?.thumbnails)?video.thumbnails:[video?.thumbnail].filter(Boolean);
       const images=[];
-      for(const thumb of thumbs.slice(0,4)){
+      for(const thumb of thumbs.slice(0,2)){
         const image=await fetchImageForGemini(thumb);
         if(image)images.push(image);
       }
