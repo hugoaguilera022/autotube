@@ -225,8 +225,16 @@ async function downloadViaAllDL(url,dir){
   const endpoint='https://ahm7xmakki.com/api/alldl?url='+encodeURIComponent(url);
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),90000);
   try{
-    const res=await fetch(endpoint,{headers:{Accept:'application/json','User-Agent':'AutoTube/1.0'},signal:controller.signal});
+    const res=await fetch(endpoint,{headers:{Accept:'video/mp4,application/octet-stream;q=0.9,application/json;q=0.8','User-Agent':'Mozilla/5.0','Referer':'https://ahm7xmakki.com/'},signal:controller.signal});
     if(!res.ok)throw new Error('AllDL HTTP '+res.status);
+    const initialType=String(res.headers.get('content-type')||'').toLowerCase();
+    if(initialType.includes('video/mp4')||initialType.includes('application/octet-stream')){
+      const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
+      try{if(!res.body)throw new Error('AllDL binary sin body');const reader=res.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
+      const st=await fs.stat(out);if(!st.size)throw new Error('AllDL binary vacío');
+      const p=await probe(out);if(!p.duration||!p.width||!p.height)throw new Error('AllDL binary no es vídeo válido');
+      return{source:out,bytes:st.size,strategy:'alldl-binary'};
+    }
     const data=await res.json();
     if(!data?.success)throw new Error('AllDL no disponible: '+JSON.stringify(data).slice(0,800));
     const qualities=Array.isArray(data.mediaInfo?.qualities)?data.mediaInfo.qualities:[];
