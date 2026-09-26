@@ -101,7 +101,14 @@ jobs:
           assert urls
           open('ai-download-url.txt','w').write(urls[0])
           PY
-          curl -fL --retry 3 --max-time 1800 "$(cat ai-download-url.txt)" -o autotube-ai-final.mp4
+          download_url="$(cat ai-download-url.txt)"
+          case "$download_url" in
+            http://*|https://*) ;;
+            /*) download_url="https://autotube-hfeu.onrender.com$download_url" ;;
+            *) download_url="https://autotube-hfeu.onrender.com/$download_url" ;;
+          esac
+          echo "Downloading verified MP4 from $download_url"
+          curl -fL --retry 3 --max-time 1800 "$download_url" -o autotube-ai-final.mp4
           test -s autotube-ai-final.mp4
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
