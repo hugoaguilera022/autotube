@@ -235,7 +235,7 @@ async function downloadViaAllDL(url,dir){
     let last='';
     for(const candidate of candidates){
       try{
-        const fr=await fetch(candidate.url,{headers:{'User-Agent':'AutoTube/1.0'},redirect:'follow'});
+        const fr=await fetch(candidate.url,{headers:{'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36','Referer':'https://ahm7xmakki.com/','Origin':'https://ahm7xmakki.com'},redirect:'follow'});
         const ct=String(fr.headers.get('content-type')||'').toLowerCase();
         if(!fr.ok||!fr.body||(!ct.includes('video')&&!ct.includes('mp4')&&!ct.includes('octet-stream')))throw new Error('stream HTTP '+fr.status+' '+ct);
         const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
