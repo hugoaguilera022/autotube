@@ -2156,3 +2156,11 @@ if(String(process.env.AUTOTUBE_E2E_REFERENCE||'').trim() && String(process.env.A
 }
 // E2E completo se ejecuta exclusivamente mediante /api/full-pipeline-test para evitar
 // lanzar trabajos duplicados cuando Render recicla la instancia.
+if(String(process.env.AUTOTUBE_VERIFY_FORCE_E2E||'')==='1'){
+  const verifyReference='https://youtu.be/mh48xOkLhgU?si=FxdwPeg3v2TMmo_H';
+  setTimeout(async()=>{
+    console.log('AUTOTUBE VERIFY FORCE E2E START',verifyReference);
+    try{const result=await executeFullPipelineTest(verifyReference);console.log('AUTOTUBE VERIFY FORCE E2E RESULT',JSON.stringify(result));}
+    catch(err){console.error('AUTOTUBE VERIFY FORCE E2E FAILED',err?.stack||err?.message||String(err));}
+  },20000);
+}
