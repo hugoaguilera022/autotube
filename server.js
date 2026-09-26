@@ -1982,18 +1982,7 @@ const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening o
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
-const startupSelfTestReference='https://www.youtube.com/watch?v=dQw4w9WgXcQ';
-if(startupSelfTestReference){
-  setTimeout(async()=>{
-    const selfTestId='selftest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
-    const job={id:selfTestId,reference:startupSelfTestReference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
-    urlVideoJobs.set(selfTestId,job);
-    console.log('AutoTube E2E self-test started:',selfTestId,startupSelfTestReference);
-    try{
-      const result=await executeUrlToVideo(startupSelfTestReference,selfTestId);
-      console.log('AutoTube E2E self-test SUCCESS:',JSON.stringify({jobId:selfTestId,durationSeconds:result.durationSeconds,size:result.size,validation:result.validation,scenes:result.scenes}));
-    }catch(err){
-      console.error('AutoTube E2E self-test FAILED:',selfTestId,err?.message||String(err));
-    }
-  },15000);
+// No ejecutamos un render E2E automáticamente al arrancar Render: podría bloquear
+// el benchmark o un render iniciado por el usuario. Las pruebas E2E se lanzan
+// explícitamente desde los workflows/endpoints de test.
 }
