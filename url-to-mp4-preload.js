@@ -155,7 +155,6 @@ async function downloadViaCobalt(url,dir){
     'https://cobalt-omega.wolfy.love',
     'https://apicobalt.mgytr.top',
     'https://api.qwkuns.me',
-    'https://lime.clxxped.lol',
     'https://cobalt-api.lamps-dev.dev'
   ].join(',')).split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
   let last='';
@@ -164,7 +163,7 @@ async function downloadViaCobalt(url,dir){
       const headers={'Accept':'application/json','Content-Type':'application/json'};
       const key=String(process.env.AUTOTUBE_COBALT_API_KEY||'').trim();
       if(key)headers.Authorization='Api-Key '+key;
-      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),180000);
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
       let r;
       try{
         r=await fetch(base+'/',{method:'POST',headers,body:JSON.stringify({
