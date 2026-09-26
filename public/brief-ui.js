@@ -22,10 +22,10 @@
       '<div class="grid2">'+
       '<div><label>¿De qué quieres que vaya el vídeo?<textarea id="briefTopic" rows="4" placeholder="Describe el tema, formato, tono y objetivo del vídeo."></textarea></label>'+
       '<label>Referencias visuales <span class="optional">opcional</span><textarea id="visualReferences" rows="3" placeholder="Colores, iluminación, animación, cámara, ritmo, composición o enlaces de referencia."></textarea></label></div>'+
-      '<div><label>Guion <span class="optional">opcional</span><textarea id="scriptInput" rows="7" placeholder="Pega tu guion. Si lo escribes, será la fuente principal de la narración."></textarea></label>'+
-      '<label>Muestra MP4 <span class="optional">opcional</span><input id="sampleMp4" type="file" accept="video/mp4,video/webm,video/quicktime"><small class="muted">Se analizan fotogramas y lenguaje visual general; no se reutiliza la grabación.</small></label></div></div>'+
+      '<div><label>Guion propio <span class="optional">opcional</span><textarea id="scriptInput" rows="7" placeholder="Déjalo vacío para que AutoTube escriba SIEMPRE un guion nuevo con IA. Si aportas uno, se utilizará este guion."></textarea></label>'+
+      '<label>Muestra MP4 <span class="optional">opcional</span><input id="sampleMp4" type="file" accept="video/mp4,video/webm,video/quicktime"><small class="muted">Se analiza como referencia audiovisual; el guion y la narración se crean de nuevo salvo que aportes tu propio guion.</small></label></div></div>'+
       '<button class="primary wide" id="briefGenerateBtn" type="button">✦ Crear vídeo desde mi idea</button>'+
-      '<small class="muted">Esta opción funciona sin depender de la descarga de YouTube.</small>';
+      '<small class="muted">Sin guion propio → guion nuevo generado por IA. Con guion propio → se utiliza tu texto.</small>';
     anchor?.after(box);
     document.querySelector('#briefGenerateBtn').onclick=createBrief;
   }
