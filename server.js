@@ -1157,7 +1157,16 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
     const missing=sceneInputs.filter(x=>!x.aiClip?.path&&!x.aiClip?.buffer&&!x.media?.downloadUrl);
     if(missing.length)throw new Error('Faltan visuales para las escenas: '+missing.map(x=>String(x.scene.number)).join(', ')+'. Genera los vídeos IA de esas escenas o busca visuales de respaldo.');
     const total=sceneInputs.length;
-    const preparedInputs=await Promise.all(sceneInputs.map(async(x,i)=>{if(x.aiClip?.path||x.aiClip?.buffer)return null;if(!x.media?.downloadUrl)return null;const p=path.join(dir,'pre-'+i+'.mp4');await downloadToFile(x.media.downloadUrl,p);return p;}));
+    const preparedInputs=new Array(sceneInputs.length).fill(null);
+    // Download one source at a time. This keeps memory and sockets bounded even
+    // when the reference contains hundreds of scenes.
+    for(let i=0;i<sceneInputs.length;i++){
+      const x=sceneInputs[i];
+      if(x.aiClip?.path||x.aiClip?.buffer||!x.media?.downloadUrl)continue;
+      const p=path.join(dir,'pre-'+i+'.mp4');
+      await downloadToFile(x.media.downloadUrl,p);
+      preparedInputs[i]=p;
+    }
     for(let i=0;i<total;i++){
       const{scene,found,aiClip,media,audio}=sceneInputs[i];
       const input=path.join(dir,'in-'+i+'.mp4');
