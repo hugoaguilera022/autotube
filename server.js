@@ -1101,6 +1101,47 @@ async function downloadToFile(source,file){
   }finally{clearTimeout(timer)}
 }
 function runFfmpeg(args){return new Promise((resolve,reject)=>{const safeArgs=[...args];const p=spawn(ffmpegPath,safeArgs,{stdio:['ignore','ignore','pipe']});let err='';p.stderr.on('data',d=>{err+=d.toString();if(err.length>12000)err=err.slice(-12000)});p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))))})}
+async function probeReferenceTechnical(file){
+  const stderr=await new Promise((resolve,reject)=>{
+    const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-map','0:a:0?','-c','copy','-f','null','-'],{stdio:['ignore','pipe','pipe']});
+    let e='';p.stderr.on('data',d=>{e+=d.toString();if(e.length>30000)e=e.slice(-30000)});
+    p.on('error',reject);p.on('close',code=>code===0?resolve(e):reject(new Error('FFmpeg no pudo inspeccionar el MP4: '+e.slice(-1800))));
+  });
+  const t=String(stderr);
+  const dm=t.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
+  const duration=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
+  const videoLine=t.split(/\r?\n/).find(x=>/Video:/i.test(x))||'';
+  const audioLine=t.split(/\r?\n/).find(x=>/Audio:/i.test(x))||'';
+  const size=videoLine.match(/(\d{2,5})x(\d{2,5})/);
+  const fps=videoLine.match(/(\d+(?:\.\d+)?)\s*fps/i);
+  const videoCodec=(videoLine.match(/Video:\s*([^,\s]+)/i)||[])[1]||'';
+  const audioCodec=(audioLine.match(/Audio:\s*([^,\s]+)/i)||[])[1]||'';
+  return{durationSeconds:duration,width:size?Number(size[1]):0,height:size?Number(size[2]):0,fps:fps?Number(fps[1]):0,videoCodec,audioCodec,videoLine,audioLine,hasAudio:Boolean(audioLine)};
+}
+async function detectReferenceScenes(file,durationSeconds){
+  const stderr=await new Promise((resolve,reject)=>{
+    const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-vf',"select='gt(scene,0.28)',showinfo",'-an','-f','null','-'],{stdio:['ignore','ignore','pipe']});
+    let e='';p.stderr.on('data',d=>{e+=d.toString();if(e.length>120000)e=e.slice(-120000)});
+    p.on('error',reject);p.on('close',code=>code===0?resolve(e):reject(new Error('FFmpeg no pudo detectar cambios de escena: '+e.slice(-1800))));
+  });
+  const times=[0];
+  for(const m of String(stderr).matchAll(/pts_time:\s*([0-9.]+)/g)){
+    const v=Number(m[1]);
+    if(Number.isFinite(v)&&v>0.05&&v<durationSeconds-0.05)times.push(v);
+  }
+  times.sort((a,b)=>a-b);
+  const unique=[];
+  for(const v of times)if(!unique.length||Math.abs(v-unique[unique.length-1])>0.25)unique.push(v);
+  const boundaries=[...unique,durationSeconds];
+  const scenes=[];
+  for(let i=0;i<boundaries.length-1;i++){
+    const start=boundaries[i],end=boundaries[i+1];
+    if(end-start<0.1)continue;
+    scenes.push({number:scenes.length+1,startSeconds:start,endSeconds:end,durationSeconds:end-start});
+  }
+  return scenes.length?scenes:[{number:1,startSeconds:0,endSeconds:durationSeconds,durationSeconds}];
+}
+
 app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=>{
   try{
     const file=req.file;
@@ -1115,6 +1156,9 @@ app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=
       await fs.copyFile(file.path,input);
       const stat=await fs.stat(input);
       if(!stat.size)throw new Error('El vídeo de referencia está vacío.');
+      const technical=await probeReferenceTechnical(input);
+      if(!technical.durationSeconds)throw new Error('No se pudo determinar la duración del vídeo de referencia.');
+      const sceneProfile=await detectReferenceScenes(input,technical.durationSeconds);
       try{await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',input,'-map','0:v:0','-an','-sn','-dn','-vf','fps=1/2,scale=768:-2','-frames:v','6','-q:v','3',path.join(framesDir,'frame-%02d.jpg')]);}catch(firstErr){console.warn('Reference frame extraction retry:',firstErr.message);await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',input,'-map','0:v:0','-an','-sn','-dn','-vf','scale=768:-2','-frames:v','1','-q:v','3',path.join(framesDir,'frame-%02d.jpg')]);}      const files=(await fs.readdir(framesDir)).filter(x=>/^frame-\d+\.jpg$/i.test(x)).sort();
       if(!files.length)throw new Error('No se pudieron extraer fotogramas del vídeo de referencia.');
       const images=[];
@@ -1130,7 +1174,7 @@ app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=
         maxOutputTokens:1800,
         json:true
       });
-      return res.json({ok:true,analysis:parseJsonResponse(content),framesAnalyzed:images.length});
+      return res.json({ok:true,analysis:parseJsonResponse(content),framesAnalyzed:images.length,technical,sceneCount:sceneProfile.length,scenes:sceneProfile});
     }finally{
       await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
       await fs.rm(file.path,{force:true}).catch(()=>{});
