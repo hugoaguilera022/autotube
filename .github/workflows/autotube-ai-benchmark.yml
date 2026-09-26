@@ -52,7 +52,8 @@ jobs:
             echo "REFERENCE=$reference"
             echo "============================================================"
 
-            response=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video'               -H 'Content-Type: application/json'               --data "{"reference":"$reference","url":"$reference"}")
+            payload=$(python -c 'import json,sys; print(json.dumps({"reference":sys.argv[1],"url":sys.argv[1]}))' "$reference")
+            response=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "$payload")
             echo "$response"
 
             job_id=$(printf '%s' "$response" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("jobId") or d.get("id") or "")')
@@ -72,7 +73,8 @@ jobs:
               if [ "$curl_code" -ne 0 ] || printf '%s' "$status_response" | grep -q 'Trabajo no encontrado\|servidor se reinició\|restart'; then
                 if [ "$restarted" -eq 0 ]; then
                   echo "RESTARTING_LOST_JOB case=$index"
-                  status_response=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video'                     -H 'Content-Type: application/json'                     --data "{"reference":"$reference","url":"$reference"}")
+            payload=$(python -c 'import json,sys; print(json.dumps({"reference":sys.argv[1],"url":sys.argv[1]}))' "$reference")
+            response=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "$payload")
                   echo "$status_response"
                   job_id=$(printf '%s' "$status_response" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("jobId") or d.get("id") or "")')
                   test -n "$job_id"
