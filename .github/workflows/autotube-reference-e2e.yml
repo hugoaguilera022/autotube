@@ -1,0 +1,60 @@
+name: AutoTube Reference E2E
+
+on:
+  push:
+    paths:
+      - .github/workflows/autotube-reference-e2e.yml
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run URL-to-video E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL='https://www.youtube.com/watch?v=jNQXAC9IVRw'
+          BASE='https://autotube-hfeu.onrender.com'
+          mkdir -p out ref
+          RESP=$(curl -fsS -X POST "$BASE/api/url-to-video" -H 'content-type: application/json' --data "{\"reference\":\"$URL\"}")
+          echo "$RESP"
+          JOB=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<< "$RESP")
+          for i in $(seq 1 180); do
+            sleep 5
+            S=$(curl -fsS "$BASE/api/url-to-video/$JOB") || true
+            echo "$S"
+            STATUS=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<< "$S" 2>/dev/null || true)
+            if [ "$STATUS" = done ]; then
+              DL=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["downloadUrl"])' <<< "$S")
+              curl -fsS "$BASE$DL" -o out/autotube-reference-e2e.mp4
+              break
+            fi
+            if [ "$STATUS" = error ]; then exit 1; fi
+          done
+          test -s out/autotube-reference-e2e.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,r_frame_rate -of json out/autotube-reference-e2e.mp4 | tee out/generated-ffprobe.json
+          python3 -m pip install -q yt-dlp
+          yt-dlp --no-playlist -f 'best[ext=mp4]/best' -o 'ref/reference.%(ext)s' "$URL" || true
+          if [ -s ref/reference.mp4 ]; then
+            ffmpeg -y -loglevel error -i ref/reference.mp4 -vf 'fps=1,scale=320:-1' ref/frame-%03d.jpg
+            ffmpeg -y -loglevel error -i out/autotube-reference-e2e.mp4 -vf 'fps=1,scale=320:-1' out/frame-%03d.jpg
+            python3 - <<'PY'
+            from PIL import Image
+            import glob,math,json
+            a=sorted(glob.glob('ref/frame-*.jpg')); b=sorted(glob.glob('out/frame-*.jpg')); n=min(len(a),len(b)); scores=[]
+            for x,y in zip(a[:n],b[:n]):
+              ix=Image.open(x).convert('RGB').resize((64,64)); iy=Image.open(y).convert('RGB').resize((64,64))
+              mse=sum((p-q)**2 for P,Q in zip(ix.getdata(),iy.getdata()) for p,q in zip(P,Q))/(64*64*3)
+              scores.append(1/(1+math.sqrt(mse)))
+            out={'reference_frames':len(a),'generated_frames':len(b),'paired_frames':n,'raw_pixel_similarity_mean':round(sum(scores)/n,4) if n else None,'note':'Raw pixel similarity is not semantic equivalence.'}
+            print(json.dumps(out,indent=2)); open('out/comparison.json','w').write(json.dumps(out,indent=2))
+            PY
+          else
+            echo '{"reference_download":"FAILED","semantic_comparison":"NO_VERIFIABLE"}' | tee out/comparison.json
+          fi
+      - name: Upload E2E artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-reference-e2e
+          path: out/
+          retention-days: 3
