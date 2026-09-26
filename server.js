@@ -1999,7 +1999,7 @@ async function executeDirectPipelineSmokeTest(){
     await run('visual-local-fallback',async()=>{
       const image=path.join(dir,'visual.png');
       const source=path.join(dir,'visual.mp4');
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','gradients=s=1280x720:c0=0x0b1020:c1=0x294b70','-frames:v','1',image]);
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=0x18324a:s=1280x720','-frames:v','1',image]);
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',image,'-t','6','-vf','scale=1280:720,fps=30,format=yuv420p','-an','-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-threads','1',source]);
       const check=await validateGeneratedVideoClip(source);
       return{provider:'local-ffmpeg-fallback',durationSeconds:check.durationSeconds,width:check.width,height:check.height};
@@ -2039,6 +2039,7 @@ async function executeDirectPipelineSmokeTest(){
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
 httpServer.keepAliveTimeout=120000;
 setTimeout(async()=>{
+  console.log('AUTOTUBE DIRECT PIPELINE SMOKE START');
   try{
     const result=await executeDirectPipelineSmokeTest();
     console.log('AUTOTUBE DIRECT PIPELINE SMOKE PASS:',JSON.stringify(result));
