@@ -1240,6 +1240,44 @@ async function validateRenderedMp4(file,expectedDuration=0){
 }
 
 
+async function generateGeminiOriginalImage(prompt,dir,options={}) {
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('Falta GEMINI_API_KEY.');
+  const model=String(options.model||'gemini-2.5-flash-image').trim();
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),45000);
+  try{
+    const body={
+      contents:[{parts:[{text:String(prompt||'').trim()}]}],
+      generationConfig:{
+        responseModalities:['IMAGE'],
+        responseFormat:{image:{aspectRatio:'16:9'}}
+      }
+    };
+    const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-goog-api-key':key},
+      body:JSON.stringify(body),
+      signal:controller.signal
+    });
+    const raw=await response.text();
+    let data=null;try{data=raw?JSON.parse(raw):null}catch{}
+    if(!response.ok)throw new Error('Gemini image generation '+response.status+': '+(data?.error?.message||raw.slice(0,500)));
+    const parts=data?.candidates?.[0]?.content?.parts||[];
+    const imagePart=parts.find(p=>p?.inlineData?.data||p?.inline_data?.data);
+    const b64=String(imagePart?.inlineData?.data||imagePart?.inline_data?.data||'').trim();
+    if(!b64)throw new Error('Gemini image generation no devolvió datos de imagen.');
+    const mime=String(imagePart?.inlineData?.mimeType||imagePart?.inline_data?.mime_type||'image/png').trim();
+    const ext=/jpe?g/i.test(mime)?'jpg':'png';
+    const outputPath=path.join(dir,'gemini-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.'+ext);
+    await fs.writeFile(outputPath,Buffer.from(b64,'base64'));
+    const stat=await fs.stat(outputPath);
+    if(!stat.size)throw new Error('Gemini devolvió una imagen vacía.');
+    if(typeof global.gc==='function')global.gc();
+    return{outputPath,bytes:stat.size,provider:'Google Gemini image generation',model,status:'complete'};
+  }finally{clearTimeout(timer)}
+}
+
 async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   const {Client}=require('@gradio/client');
   const space=String(process.env.LTX_SPACE||'Lightricks/ltx-video-distilled').trim();
