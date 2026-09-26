@@ -1,0 +1,11 @@
+name: Probe persistent LTX 2.5 API
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/probe-goalsave.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS https://autotube-hfeu.onrender.com/api/ai/goalsave-api
