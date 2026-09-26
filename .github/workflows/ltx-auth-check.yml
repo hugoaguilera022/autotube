@@ -10,6 +10,13 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - name: Check existing GitHub HF secret without exposing it
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        run: |
+          test -n "$HF_TOKEN" && echo "HF_TOKEN_SECRET_PRESENT=true" || echo "HF_TOKEN_SECRET_PRESENT=false"
+          test -n "$HUGGINGFACE_TOKEN" && echo "HUGGINGFACE_TOKEN_SECRET_PRESENT=true" || echo "HUGGINGFACE_TOKEN_SECRET_PRESENT=false"
       - name: Check LTX server configuration
         run: |
           for i in {1..30}; do
