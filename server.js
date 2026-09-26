@@ -2124,7 +2124,7 @@ setTimeout(()=>{
   urlVideoJobs.set(jobId,job);
   console.log('AUTOTUBE_REFERENCE_ONESHOT_START',jobId,reference);
   executeUrlToVideo(reference,jobId).then(()=>console.log('AUTOTUBE_REFERENCE_ONESHOT_DONE',jobId,job.status,job.outputPath)).catch(err=>console.error('AUTOTUBE_REFERENCE_ONESHOT_ERROR',jobId,err?.message||String(err)));
-},15000);
+},5000);
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
