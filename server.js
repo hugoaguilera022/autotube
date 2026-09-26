@@ -2142,5 +2142,17 @@ const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening o
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
+if(String(process.env.AUTOTUBE_E2E_REFERENCE||'').trim() && String(process.env.AUTOTUBE_E2E_ONCE||'')==='1'){
+  const e2eReference=String(process.env.AUTOTUBE_E2E_REFERENCE).trim();
+  setTimeout(async()=>{
+    console.log('AUTOTUBE E2E START',e2eReference);
+    try{
+      const result=await executeFullPipelineTest(e2eReference);
+      console.log('AUTOTUBE E2E RESULT',JSON.stringify(result));
+    }catch(err){
+      console.error('AUTOTUBE E2E FAILED',err?.stack||err?.message||String(err));
+    }
+  },15000);
+}
 // E2E completo se ejecuta exclusivamente mediante /api/full-pipeline-test para evitar
 // lanzar trabajos duplicados cuando Render recicla la instancia.
