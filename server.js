@@ -1631,30 +1631,25 @@ app.get('/api/video-ai-test',async(_req,res)=>{
   runVideoAiSmokeTest().then(result=>{const j=videoAiTestJobs.get(id);if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}}).catch(err=>{const j=videoAiTestJobs.get(id);if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}});
 });
 app.get('/video-ai-test-h3',async(req,res)=>{res.type('html').send(`<!doctype html><html><body><p id="s">starting</p><script type="module">import{Client}from"https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js";(async()=>{try{const c=await Client.connect("multimodalart/minimax-h3");document.getElementById("s").textContent="connected";const r=await c.predict("generate",["Original cinematic football movie scene inspired by a reference with surreal international football imagery, photorealistic athletes, dramatic stadium and fantasy landscapes, dynamic camera movement, cinematic lighting, realistic motion. Create a completely new unbranded fictional football scene, no real players, teams, logos, text or copied shot.",null,null,"1344x768 · 16:9 full",5,20,42,false]);const o=r?.data?.[0],u=typeof o==="string"?o:(o?.url||o?.path||o?.video?.url||"");if(!u)throw Error("H3 returned no video");window.__out=u;document.getElementById("s").textContent="done"}catch(e){window.__err=String(e);document.getElementById("s").textContent="error "+String(e)}})();</script></body></html>`)});
-app.get('/video-ai-test-browser',async(req,res)=>{res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>AutoTube LTX batch</title></head><body><p id="status">Preparando generación real…</p><pre id="log"></pre><script type="module">
-import{Client}from"https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js";
+app.get('/video-ai-test-browser',async(req,res)=>{res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>AutoTube LTX batch</title></head><body><p id="status">Generación real en servidor…</p><pre id="log"></pre><script>
 const batch=Math.max(0,Math.min(22,Number(new URLSearchParams(location.search).get('batch')||0)));
-const ideas=[
-"an original footballer in a fictional unbranded kit running across a vast cinematic stadium landscape at sunrise",
-"an original football floating above a surreal ocean cliff with dramatic clouds and atmospheric haze",
-"two fictional unbranded footballers crossing a futuristic stadium tunnel with cinematic practical lighting",
-"an original player controlling a glowing ball on rain-soaked pavement in a modern city",
-"a fictional footballer sprinting through a desert landscape with monumental mountains and golden light",
-"an original goalkeeper reaching toward a luminous ball in a surreal stadium surrounded by mist",
-"a fictional footballer standing in shallow reflective water beneath floating islands and waterfalls",
-"an original football team in fictional kits walking toward a distant stadium horizon under dramatic clouds",
-"a crystalline fictional football spinning above warm sand with realistic reflections and shallow depth of field",
-"an original player dribbling through a night stadium with powerful beams of light and atmospheric smoke",
-"a fictional footballer moving through a volcanic landscape with glowing lava and dramatic backlight",
-"an original footballer performing a powerful kick on a cinematic coastal pitch at sunset"
-];
-const variations=["wide establishing shot","low-angle tracking shot","slow cinematic push-in","dynamic aerial camera","close-up with shallow depth of field","side tracking camera","dramatic orbit camera","long-lens sports documentary framing"];
-const base="Photorealistic high-end original AI football movie, cinematic 16:9 language, realistic human anatomy and motion, detailed textures, atmospheric haze, premium sports cinematography. ORIGINAL CONTENT ONLY: no real players, no real teams, no logos, no numbers, no text, no watermark, no copied frame or shot.";
-const prompts=Array.from({length:4},(_,i)=>ideas[(batch*4+i)%ideas.length]+", "+variations[(batch*4+i)%variations.length]+". "+base+" This is a completely new scene in a longer original football film; preserve coherent visual language but make the scene distinct.");
-const negative="worst quality, blurry, jittery, distorted anatomy, duplicate limbs, text, logos, watermark, real person likeness";
-const s=document.getElementById("status"),l=document.getElementById("log");window.__outputs=[];
-(async()=>{try{const client=await Client.connect("Lightricks/LTX-2-3");for(let i=0;i<prompts.length;i++){s.textContent="Generando clip "+(i+1)+"/4 · lote "+(batch+1)+"/23";const r=await client.predict("/generate_video",[null,prompts[i],3.0,true,Math.floor(Math.random()*4294967295),true,704,1216]);const o=r?.data?.[0],u=typeof o==="string"?o:(o?.url||o?.path||o?.video?.url||"");if(!u)throw Error("LTX no devolvió el clip "+(i+1));window.__outputs.push(u);l.textContent=JSON.stringify({batch,completed:window.__outputs.length,total:4});}window.__done=true;s.textContent="DONE"}catch(e){window.__error=String(e?.stack||e);s.textContent="ERROR";l.textContent=window.__error}})();
+(async()=>{try{const r=await fetch('/api/test/ltx-batch?batch='+batch);const d=await r.json();if(!r.ok)throw Error(d.error||'LTX failed');window.__outputs=d.outputs||[];window.__done=true;document.getElementById('status').textContent='DONE';document.getElementById('log').textContent=JSON.stringify({batch,count:window.__outputs.length})}catch(e){window.__error=String(e.stack||e);document.getElementById('status').textContent='ERROR';document.getElementById('log').textContent=window.__error}})();
 </script></body></html>`)});
+
+app.get('/api/test/ltx-batch',async(req,res)=>{try{
+  const batch=Math.max(0,Math.min(22,Number(req.query.batch||0)));
+  const hfToken=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  if(!hfToken)return res.status(503).json({error:'HF_TOKEN/HUGGINGFACE_TOKEN no está configurado en Render.'});
+  const {Client}=require('@gradio/client');
+  const ideas=["an original footballer in a fictional unbranded kit running across a vast cinematic stadium landscape at sunrise","an original football floating above a surreal ocean cliff with dramatic clouds and atmospheric haze","two fictional unbranded footballers crossing a futuristic stadium tunnel with cinematic practical lighting","an original player controlling a glowing ball on rain-soaked pavement in a modern city","a fictional footballer sprinting through a desert landscape with monumental mountains and golden light","an original goalkeeper reaching toward a luminous ball in a surreal stadium surrounded by mist","a fictional footballer standing in shallow reflective water beneath floating islands and waterfalls","an original football team in fictional kits walking toward a distant stadium horizon under dramatic clouds","a crystalline fictional football spinning above warm sand with realistic reflections and shallow depth of field","an original player dribbling through a night stadium with powerful beams of light and atmospheric smoke","a fictional footballer moving through a volcanic landscape with glowing lava and dramatic backlight","an original footballer performing a powerful kick on a cinematic coastal pitch at sunset"];
+  const variations=["wide establishing shot","low-angle tracking shot","slow cinematic push-in","dynamic aerial camera","close-up with shallow depth of field","side tracking camera","dramatic orbit camera","long-lens sports documentary framing"];
+  const base="Photorealistic high-end original AI football movie, cinematic 16:9 language, realistic human anatomy and motion, detailed textures, atmospheric haze, premium sports cinematography. ORIGINAL CONTENT ONLY: no real players, no real teams, no logos, no numbers, no text, no watermark, no copied frame or shot.";
+  const negative="worst quality, blurry, jittery, distorted anatomy, duplicate limbs, text, logos, watermark, real person likeness";
+  const client=await Client.connect("Lightricks/ltx-video-distilled",{hf_token:hfToken});
+  const outputs=[];
+  for(let i=0;i<4;i++){const n=batch*4+i;const prompt=ideas[n%ideas.length]+", "+variations[n%variations.length]+". "+base+" This is scene "+(n+1)+" of a longer original football film; preserve coherent visual language but make the scene distinct.";const result=await client.predict("/text_to_video",[prompt,negative,null,null,288,512,"text-to-video",3.0,9,Math.floor(Math.random()*4294967295),true,3,false]);const o=result?.data?.[0];const url=typeof o==="string"?o:(o?.url||o?.path||o?.video?.url||"");if(!url)throw new Error("LTX no devolvió el clip "+(i+1));outputs.push(url)}
+  res.json({ok:true,batch,outputs});
+}catch(err){console.error("LTX server batch error:",err);res.status(500).json({error:String(err?.message||err)})}});
 app.get('/api/video-ai-test/:jobId',async(req,res)=>{
   const j=videoAiTestJobs.get(String(req.params.jobId||''));
   if(!j)return res.status(410).json({ok:false,status:'restart',error:'La instancia se reinició durante la prueba de vídeo IA.'});
