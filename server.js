@@ -2033,6 +2033,9 @@ async function executeDirectPipelineSmokeTest(){
       return{bytes:r.size,validation};
     });
     return{ok:true,mode:'direct-brief',elapsedMs:Date.now()-started,checks,mp4Bytes:rendered.bytes,validation:rendered.validation};
+  }catch(err){
+    console.error('AUTOTUBE DIRECT PIPELINE SMOKE CHECKS:',JSON.stringify(checks));
+    throw err;
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
 }
 
