@@ -220,8 +220,8 @@ async function getYoutubeTranscript(input,preferredLanguage='es'){
     const output=path.join(dir,'captions.%(ext)s');
     const languages=[String(preferredLanguage||'es'),preferredLanguage==='es'?'en':'es','en'].filter(Boolean);
     const attempts=[
-      {name:'manual-or-auto',writeAutoSub:true},
-      {name:'manual',writeSub:true}
+      {writeAutoSub:true},
+      {writeSub:true}
     ];
     let files=[];
     for(const attempt of attempts){
@@ -239,7 +239,7 @@ async function getYoutubeTranscript(input,preferredLanguage='es'){
         files=(await fs.readdir(dir)).filter(name=>/^captions\..+\.(vtt|srt)$/i.test(name));
         if(files.length)break;
       }catch(err){
-        console.warn('YouTube transcript attempt failed:',attempt.name,err?.message||String(err));
+        console.warn('YouTube transcript attempt failed:',err?.message||String(err));
       }
     }
     if(!files.length)return{available:false,transcript:'',language:null,source:null};
@@ -1892,6 +1892,7 @@ async function executeUrlToVideo(reference,jobId){
 
     const resultsByScene=[];
     const aiClips=new Array(finalScenes.length).fill(null);
+    let ltxQuotaUnavailable=false;
     for(let i=0;i<finalScenes.length;i++){
       const scene=finalScenes[i];
       const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
@@ -1901,7 +1902,7 @@ async function executeUrlToVideo(reference,jobId){
       // visual source. Generate an original AI clip from the exact section
       // direction before considering stock footage, so the result follows the
       // reference's subject, shot language, composition and camera movement.
-      if(referenceBlueprint?.sections?.length){
+      if(referenceBlueprint?.sections?.length&&!ltxQuotaUnavailable){
         try{
           const rb=scene.referenceStructure||referenceBlueprint.sections[Math.min(i,referenceBlueprint.sections.length-1)]||{};
           const aiPrompt=[
@@ -1929,7 +1930,9 @@ async function executeUrlToVideo(reference,jobId){
           aiClips[i]={path:generated.outputPath,mediaType:'video',source:'reference-blueprint-ai'};
           resultsByScene.push({number:scene.number,media:[],mediaType:'video',source:'reference-blueprint-ai'});
         }catch(err){
-          console.warn('Reference-blueprint AI visual failed; using visual search fallback:',i,err?.message||String(err));
+          const msg=String(err?.message||err||'');
+          if(/ZeroGPU quota|exceeded your ZeroGPU quota|Authenticate with a Hugging Face token/i.test(msg))ltxQuotaUnavailable=true;
+          console.warn('Reference-blueprint AI visual failed; using visual search fallback:',i,msg);
         }
       }
       if(aiClips[i]){
@@ -1945,6 +1948,21 @@ async function executeUrlToVideo(reference,jobId){
           const images=await searchPexelsPhotos(query);
           media=images.find(x=>x?.downloadUrl)||null;
         }catch(err){console.warn('Pexels search fallback:',err.message||err)}
+      }
+      if(!media&&referenceData?.thumbnail){
+        try{
+          const thumbPath=path.join(dir,'reference-thumb-'+i+'.jpg');
+          await downloadToFile(String(referenceData.thumbnail),thumbPath);
+          const stat=await fs.stat(thumbPath);
+          if(stat.size>0){
+            aiClips[i]={path:thumbPath,mediaType:'image',source:'youtube-reference-thumbnail'};
+            resultsByScene.push({number:scene.number,media:[],mediaType:'image',source:'youtube-reference-thumbnail'});
+          }
+        }catch(err){console.warn('Reference thumbnail fallback failed:',i,err?.message||String(err));}
+      }
+      if(aiClips[i]){
+        if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
+        continue;
       }
       if(!media){
         try{
