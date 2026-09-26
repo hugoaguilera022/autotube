@@ -1798,7 +1798,7 @@ async function executeUrlToVideo(reference,jobId){
       .sort((a,b)=>Number(b.finishedAt||0)-Number(a.finishedAt||0))[0];
     const useCached=Boolean(cachedReference&&Date.now()-Number(cachedReference.finishedAt||0)<15*60*1000);
     const video=useCached?cachedReference.result.video:await getReferenceVideo(reference);
-    const transcript=useCached?(cachedReference.result.transcript||{available:false,transcript:''}):await getYoutubeTranscript(reference,video?.defaultLanguage||'es').catch(err=>{console.warn('URL-to-video transcript unavailable:',err?.message||String(err));return{available:false,transcript:''};});
+    const transcript=useCached?(cachedReference.result.transcript||{available:false,transcript:''}):(process.env.AUTOTUBE_SKIP_REFERENCE_TRANSCRIPT_ON_RENDER==='1'?{available:false,transcript:'',language:null,source:'render-memory-safe-skip'}:await getYoutubeTranscript(reference,video?.defaultLanguage||'es').catch(err=>{console.warn('URL-to-video transcript unavailable:',err?.message||String(err));return{available:false,transcript:''};}));
     const style=useCached?cachedReference.result.referenceStyle:await analyzeYoutubeReferenceMedia(reference,video);
     if(!style?.visualAnalysis||!style?.visualAnalysis?.structureProfile){
       throw new Error('No se pudo obtener un análisis audiovisual suficiente de la referencia. El render se detuvo antes de generar visuales.');
