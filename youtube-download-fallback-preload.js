@@ -10,7 +10,7 @@ function wrapped(url,opts={},config={}) {
   return original(url,opts,config).catch(err => {
     const msg=String(err?.stderr||err?.message||err||'');
     if(/not a bot|sign in to confirm|cookies-from-browser|cookies to authenticate|confirm you're not a bot/i.test(msg)) {
-      throw new Error('YouTube bloqueó la obtención del vídeo original. AutoTube no generará una miniatura ni un vídeo falso: se requiere acceso al stream original.');
+      err.message='YouTube bloqueó la obtención del vídeo original. '+msg.slice(-6000); throw err;
     }
     throw err;
   });
