@@ -649,6 +649,15 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
       mediaType:String(s.mediaType||'video').toLowerCase()==='image'?'image':'video',
       constantImage:Boolean(s.constantImage)
     }));
+    // En creación directa, el guion escrito por el usuario es la fuente exacta
+    // de la narración. Repartimos sus frases entre las escenas sin reescribirlas.
+    if(String(customScript||'').trim()){
+      const source=String(customScript).replace(/\r\n?/g,'\n').trim();
+      const sentences=(source.match(/[^.!?]+[.!?]+|[^.!?]+$/g)||[source]).map(x=>x.trim()).filter(Boolean);
+      const chunks=Array.from({length:scenes.length},()=>[]);
+      sentences.forEach((sentence,i)=>chunks[Math.min(scenes.length-1,Math.floor(i*scenes.length/sentences.length))].push(sentence));
+      scenes=scenes.map((scene,i)=>({...scene,narration:chunks[i].join(' ').trim()||scene.narration||''}));
+    }
   }
 
   // Conservamos siempre la referencia y el perfil en la respuesta para que el frontend no los pierda al pasar a media/render.
@@ -1963,95 +1972,8 @@ app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
 });
 
 
-async function executeDirectPipelineSmokeTest(){
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-direct-smoke-'));
-  const checks={};
-  const started=Date.now();
-  const run=async(name,fn)=>{
-    const t=Date.now();
-    try{const value=await fn();checks[name]={ok:true,ms:Date.now()-t,...(value&&typeof value==='object'?value:{})};return value;}
-    catch(err){checks[name]={ok:false,ms:Date.now()-t,error:err?.message||String(err)};throw err;}
-  };
-  try{
-    const brief='Vídeo educativo original sobre cómo se forman las tormentas y por qué producen rayos.';
-    const script='Las tormentas nacen cuando el aire cálido y húmedo asciende y se encuentra con capas más frías de la atmósfera. Dentro de la nube, las corrientes de aire separan cargas eléctricas hasta crear una diferencia de potencial que puede terminar en un rayo.';
-    let plan=null;
-    await run('production-plan-direct',async()=>{
-      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          topic:brief,brief,customScript:script,outline:[script],
-          visualReferences:'Animación cinematográfica educativa, atmósfera realista, cámara suave.',
-          visualIdeas:['Animación cinematográfica de una tormenta, nubes volumétricas y rayos.'],
-          language:'es',duration:'1',title:'Cómo se forman las tormentas',
-          reference:'',referenceData:null,referenceTopic:brief,
-          visualReferenceAnalysis:null,referenceStyle:null,creationMode:'brief'
-        })
-      });
-      const d=await r.json().catch(()=>null);
-      if(!r.ok||!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error(d?.error||'El plan directo no devolvió escenas.');
-      plan=d;
-      if(String(d.reference||'')!=='')throw new Error('El plan directo conservó una referencia de YouTube.');
-      return{scenes:d.scenes.length,hasYouTubeReference:Boolean(d.reference),firstNarration:String(d.scenes[0]?.narration||'').slice(0,180)};
-    });
-
-    const scene={...(plan.scenes[0]||{}),number:1,duration:6,mediaType:'image',constantImage:true};
-    await run('visual-local-fallback',async()=>{
-      const image=path.join(dir,'visual.png');
-      const source=path.join(dir,'visual.mp4');
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=0x18324a:s=1280x720','-frames:v','1',image]);
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',image,'-t','6','-vf','scale=1280:720,fps=30,format=yuv420p','-an','-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-threads','1',source]);
-      const check=await validateGeneratedVideoClip(source);
-      return{provider:'local-ffmpeg-fallback',durationSeconds:check.durationSeconds,width:check.width,height:check.height};
-    });
-
-    const visualSource=path.join(dir,'visual.mp4');
-    let narration=null;
-    await run('tts-direct',async()=>{
-      narration=await generateNarrationTts(String(scene.narration||script),'es','Natural y cercana',{});
-      if(!Buffer.isBuffer(narration)||!narration.length)throw new Error('TTS vacío.');
-      return{bytes:narration.length};
-    });
-
-    let music=null;
-    await run('music-direct',async()=>{
-      music=await generateFallbackMusic('Original instrumental educational background.',6,dir,{musicMood:'cinematic',energy:'medium'});
-      if(!music?.buffer?.length)throw new Error('Música vacía.');
-      return{provider:music.provider,bytes:music.buffer.length};
-    });
-
-    const finalPath=path.join(dir,'direct-smoke-final.mp4');
-    const rendered=await run('render-direct',async()=>{
-      const r=await renderAutotubeVideo({
-        scenes:[scene],
-        mediaResults:[{number:1,media:[{downloadUrl:visualSource,mediaType:'video'}]}],
-        aiClips:[],
-        narrationAudio:[narration],
-        musicBuffer:music.buffer,
-        finalOutputPath:finalPath,
-        onProgress:()=>{}
-      });
-      const validation=await validateRenderedMp4(finalPath,6);
-      return{bytes:r.size,validation};
-    });
-    return{ok:true,mode:'direct-brief',elapsedMs:Date.now()-started,checks,mp4Bytes:rendered.bytes,validation:rendered.validation};
-  }catch(err){
-    console.error('AUTOTUBE DIRECT PIPELINE SMOKE CHECKS:',JSON.stringify(checks));
-    throw err;
-  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
-}
-
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
 httpServer.keepAliveTimeout=120000;
-setTimeout(async()=>{
-  console.log('AUTOTUBE DIRECT PIPELINE SMOKE START');
-  try{
-    const result=await executeDirectPipelineSmokeTest();
-    console.log('AUTOTUBE DIRECT PIPELINE SMOKE PASS:',JSON.stringify(result));
-  }catch(err){
-    console.error('AUTOTUBE DIRECT PIPELINE SMOKE FAIL:',err?.message||String(err));
-  }
-},8000);
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
 const startupSelfTestReference='https://www.youtube.com/watch?v=dQw4w9WgXcQ';
