@@ -1,0 +1,61 @@
+name: AutoTube exact audiovisual regression
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  exact-url-to-mp4:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Render deployment
+        run: sleep 90
+
+      - name: Install test tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg jq
+
+      - name: Run exact URL to MP4 test
+        env:
+          APP_URL: https://autotube-hfeu.onrender.com
+          SOURCE_URL: https://samplefile.com/samples/download/video/mp4/mp4_h264_aac_360p_sample.mp4/
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS "$APP_URL/api/health" >/tmp/health.json; then cat /tmp/health.json; break; fi
+            sleep 10
+          done
+          test -s /tmp/health.json
+          curl -fL --retry 5 --retry-delay 2 "$SOURCE_URL" -o /tmp/source.mp4
+          test -s /tmp/source.mp4
+          RESPONSE=$(curl -fsS -X POST "$APP_URL/api/url-to-mp4" -H 'Content-Type: application/json' --data-raw "{\"reference\":\"$SOURCE_URL\"}")
+          echo "$RESPONSE"
+          JOB_ID=$(echo "$RESPONSE" | jq -r '.jobId')
+          test "$JOB_ID" != "null"
+          for i in $(seq 1 90); do
+            STATUS=$(curl -fsS "$APP_URL/api/url-to-mp4/$JOB_ID")
+            echo "$STATUS"
+            STATE=$(echo "$STATUS" | jq -r '.status')
+            if [ "$STATE" = "done" ]; then DOWNLOAD=$(echo "$STATUS" | jq -r '.downloadUrl'); break; fi
+            if [ "$STATE" = "error" ]; then exit 1; fi
+            sleep 5
+          done
+          test -n "${DOWNLOAD:-}"
+          curl -fL "$APP_URL$DOWNLOAD" -o /tmp/output.mp4
+          test -s /tmp/output.mp4
+          SOURCE_SHA=$(sha256sum /tmp/source.mp4 | awk '{print $1}')
+          OUTPUT_SHA=$(sha256sum /tmp/output.mp4 | awk '{print $1}')
+          SOURCE_VIDEO_SHA=$(ffmpeg -hide_banner -loglevel error -i /tmp/source.mp4 -map 0:v:0 -c copy -f hash - | sed -n 's/^SHA256=//p')
+          OUTPUT_VIDEO_SHA=$(ffmpeg -hide_banner -loglevel error -i /tmp/output.mp4 -map 0:v:0 -c copy -f hash - | sed -n 's/^SHA256=//p')
+          SOURCE_AUDIO_SHA=$(ffmpeg -hide_banner -loglevel error -i /tmp/source.mp4 -map 0:a:0 -c copy -f hash - | sed -n 's/^SHA256=//p')
+          OUTPUT_AUDIO_SHA=$(ffmpeg -hide_banner -loglevel error -i /tmp/output.mp4 -map 0:a:0 -c copy -f hash - | sed -n 's/^SHA256=//p')
+          echo "SOURCE_SHA=$SOURCE_SHA"
+          echo "OUTPUT_SHA=$OUTPUT_SHA"
+          echo "SOURCE_VIDEO_SHA=$SOURCE_VIDEO_SHA"
+          echo "OUTPUT_VIDEO_SHA=$OUTPUT_VIDEO_SHA"
+          echo "SOURCE_AUDIO_SHA=$SOURCE_AUDIO_SHA"
+          echo "OUTPUT_AUDIO_SHA=$OUTPUT_AUDIO_SHA"
+          test "$SOURCE_SHA" = "$OUTPUT_SHA"
+          test "$SOURCE_VIDEO_SHA" = "$OUTPUT_VIDEO_SHA"
+          test "$SOURCE_AUDIO_SHA" = "$OUTPUT_AUDIO_SHA"
+          echo "EXACT AUDIOVISUAL MATCH: PASS"
