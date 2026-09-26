@@ -84,10 +84,13 @@ async function downloadViaPiped(url,dir){
 }
 
 async function downloadViaVevioz(url,dir){
+  const vid=extractYoutubeVideoId(url);
   const targets=[
+    vid&&'https://api.vevioz.com/api/button/videos/'+encodeURIComponent(vid),
+    vid&&'https://api.vevioz.com/api/widgetv2?url='+encodeURIComponent(url),
     'https://api.vevioz.com/api/single/mp4?url='+encodeURIComponent(url),
     'https://api.vevioz.com/api/button/mp4?url='+encodeURIComponent(url)
-  ];
+  ].filter(Boolean);
   let last='';
   for(const target of targets){
     const endpoints=[target,'https://api.allorigins.win/raw?url='+encodeURIComponent(target)];
