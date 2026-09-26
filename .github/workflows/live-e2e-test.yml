@@ -30,13 +30,21 @@ jobs:
       - name: Poll result
         run: |
           set -e
-          for i in $(seq 1 600); do
-            curl --silent --show-error "https://autotube-hfeu.onrender.com/api/full-pipeline-test/$JOB" -o result.json || true
-            cat result.json
+          URL='https://autotube-hfeu.onrender.com/api/full-pipeline-test?reference=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dmh48xOkLhgU'
+          for i in $(seq 1 180); do
+            curl --silent --show-error --max-time 30 "https://autotube-hfeu.onrender.com/api/full-pipeline-test/$JOB" -o result.json || true
+            cat result.json || true
             STATUS=$(python -c "import json; print(json.load(open('result.json')).get('status',''))" 2>/dev/null || true)
             if [ "$STATUS" = "done" ]; then exit 0; fi
             if [ "$STATUS" = "failed" ]; then exit 1; fi
-            if [ "$STATUS" = "" ] || [ "$STATUS" = "not_found" ]; then sleep 2; fi
+            if [ -z "$STATUS" ] || grep -qi 'Trabajo no encontrado\|servidor se reinició' result.json 2>/dev/null; then
+              for h in $(seq 1 30); do curl --fail --silent --show-error https://autotube-hfeu.onrender.com/api/health -o health.json && break || true; sleep 5; done
+              curl --fail --silent --show-error "$URL" -o start.json
+              JOB=$(python -c "import json; print(json.load(open('start.json'))['jobId'])")
+              echo "RESTARTED_JOB=$JOB"
+              sleep 5
+              continue
+            fi
             sleep 5
           done
           echo "Timed out"
