@@ -1145,10 +1145,16 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       const args=['-y','-hide_banner','-loglevel','error'];
       if(isImage)args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
+      const motionFilter=isImage
+        ? (Number(scene.number||i)%2
+          ? 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z=\'min(zoom+0.0008,1.10)\':x=\'iw/2-(iw/zoom/2)\':y=\'ih/2-(ih/zoom/2)\':d=1:s=1280x720:fps=30,eq=contrast=1.03:saturation=1.06,format=yuv420p'
+          : 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,zoompan=z=\'min(zoom+0.0008,1.10)\':x=\'iw/2-(iw/zoom/2)-min(on*0.35,80)\':y=\'ih/2-(ih/zoom/2)\':d=1:s=1280x720:fps=30,eq=contrast=1.03:saturation=1.06,format=yuv420p')
+        : 'scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p,fps=30';
       args.push('-t',String(duration),
-        // Render at 720p on Render Free to stay safely below the 512 MB
-        // instance memory ceiling. The source is still cropped to 16:9.
-        '-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,format=yuv420p,fps=30',
+        // Animated treatment for still visuals: subtle Ken-Burns camera motion,
+        // alternating push-in/pan, so image scenes never remain completely static.
+        // Video sources keep the lightweight 720p path for Render Free memory limits.
+        '-vf',motionFilter,
         '-map','0:v:0','-map','1:a:0',
         '-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-threads','1','-filter_threads','1','-filter_complex_threads','1',
         '-c:a','aac','-b:a','192k','-ar','44100','-ac','2','-af','apad',
