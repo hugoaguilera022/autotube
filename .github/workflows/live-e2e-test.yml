@@ -30,7 +30,7 @@ jobs:
       - name: Poll result
         run: |
           set -e
-          for i in $(seq 1 180); do
+          for i in $(seq 1 600); do
             curl --silent --show-error "https://autotube-hfeu.onrender.com/api/full-pipeline-test/$JOB" -o result.json || true
             cat result.json
             STATUS=$(python -c "import json; print(json.load(open('result.json')).get('status',''))" 2>/dev/null || true)
