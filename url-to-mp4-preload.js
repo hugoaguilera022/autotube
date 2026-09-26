@@ -84,23 +84,26 @@ async function downloadViaPiped(url,dir){
 }
 
 async function downloadViaVevioz(url,dir){
-  const endpoints=[
+  const targets=[
     'https://api.vevioz.com/api/single/mp4?url='+encodeURIComponent(url),
     'https://api.vevioz.com/api/button/mp4?url='+encodeURIComponent(url)
   ];
   let last='';
-  for(const endpoint of endpoints){
-    try{
-      const res=await fetch(endpoint,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0','Accept':'video/mp4,application/octet-stream,text/html;q=0.9,*/*;q=0.8'}});
-      if(!res.ok)throw new Error('Vevioz HTTP '+res.status);
-      const ct=String(res.headers.get('content-type')||'').toLowerCase();
-      if(!res.body)throw new Error('Vevioz sin body');
-      const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
-      try{const reader=res.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
-      const st=await fs.stat(out);
-      if(!st.size||ct.includes('text/html')){await fs.rm(out,{force:true});throw new Error('Vevioz no devolvió MP4 ('+ct+').')}
-      return{source:out,bytes:st.size,strategy:'vevioz',external:{contentType:ct}};
-    }catch(e){last=String(e?.message||e)}
+  for(const target of targets){
+    const endpoints=[target,'https://api.allorigins.win/raw?url='+encodeURIComponent(target)];
+    for(const endpoint of endpoints){
+      try{
+        const res=await fetch(endpoint,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0','Accept':'video/mp4,application/octet-stream,*/*;q=0.8'}});
+        if(!res.ok)throw new Error('Vevioz HTTP '+res.status);
+        const ct=String(res.headers.get('content-type')||'').toLowerCase();
+        if(!res.body)throw new Error('Vevioz sin body');
+        const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
+        try{const reader=res.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
+        const st=await fs.stat(out);
+        if(!st.size||ct.includes('text/html')||ct.includes('application/json')){await fs.rm(out,{force:true});throw new Error('Vevioz no devolvió MP4 ('+ct+', '+st.size+' bytes).')}
+        return{source:out,bytes:st.size,strategy:'vevioz',external:{contentType:ct}};
+      }catch(e){last=String(e?.message||e)}
+    }
   }
   throw new Error(last||'Vevioz failed');
 }
@@ -126,23 +129,6 @@ async function downloadViaYt5sProxy(url,dir){
     }catch(e){last=String(e?.message||e);await fs.rm(path.join(dir,'source.mp4'),{force:true}).catch(()=>{})}
   }
   throw new Error(last||'YT5S failed');
-}
-
-async function downloadViaVevioz(url,dir){
-  const base=String(process.env.AUTOTUBE_YT5S_PROXY_URL||'https://autotube-yt5s-proxy.onrender.com').replace(/\/$/,'');
-  const endpoint=base+'/download?url='+encodeURIComponent(url)+'&v=720p&f=mp4';
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),240000);
-  try{
-    const res=await fetch(endpoint,{redirect:'follow',signal:controller.signal,headers:{'User-Agent':'Mozilla/5.0'}});
-    if(!res.ok)throw new Error('YT5S proxy HTTP '+res.status);
-    const ct=String(res.headers.get('content-type')||'').toLowerCase();
-    if(!res.body)throw new Error('YT5S proxy no devolvió body.');
-    const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
-    try{const reader=res.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
-    const st=await fs.stat(out);
-    if(!st.size||(!ct.includes('video')&&!ct.includes('octet-stream')&&!ct.includes('mp4')))throw new Error('YT5S proxy no devolvió un MP4 válido. content-type='+ct+' bytes='+st.size);
-    return{source:out,bytes:st.size,strategy:'yt5s-proxy',external:{contentType:ct}};
-  }finally{clearTimeout(timer)}
 }
 
 async function downloadViaCobalt(url,dir){
