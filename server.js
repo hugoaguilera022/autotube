@@ -2000,20 +2000,30 @@ async function executeUrlToVideo(reference,jobId){
       // external stock CDNs. Use the public reference thumbnail immediately;
       // the renderer applies the existing cinematic motion to it.
       if(ltxQuotaUnavailable){
-        const thumb=String(video?.thumbnail||video?.thumbnails?.[0]||'').trim();
-        if(thumb){
-          try{
-            const thumbPath=path.join(dir,'reference-thumb-'+i+'.jpg');
-            await downloadToFile(thumb,thumbPath);
-            const stat=await fs.stat(thumbPath);
-            if(stat.size>0){
-              aiClips[i]={path:thumbPath,mediaType:'image',source:'youtube-reference-thumbnail-quota-fallback'};
-              resultsByScene.push({number:scene.number,media:[],mediaType:'image',source:'youtube-reference-thumbnail-quota-fallback'});
-              if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
-              continue;
-            }
-          }catch(err){console.warn('Reference thumbnail quota fallback failed:',i,err?.message||String(err));}
-        }
+        // LTX quota is exhausted: generate a fresh ORIGINAL 16:9 still from
+        // the reference blueprint instead of copying the YouTube thumbnail.
+        try{
+          const rb=scene.referenceStructure||referenceBlueprint?.sections?.[Math.min(i,Math.max(0,(referenceBlueprint.sections?.length||1)-1))]||{};
+          const imagePrompt=[
+            'Create an ORIGINAL 16:9 cinematic still for a YouTube video.',
+            'Do not reproduce or edit the reference thumbnail, footage, person, face, logo, text or exact composition.',
+            'Use only the semantic subject and audiovisual direction as inspiration.',
+            'subject: '+String(rb.visualSubject||scene.title||referenceTitle),
+            'purpose: '+String(rb.purpose||''),
+            'shot type: '+String(rb.shotType||'wide or medium wide'),
+            'composition: '+String(rb.composition||'cinematic horizontal composition'),
+            'camera language: '+String(rb.cameraMotion||'subtle cinematic movement'),
+            'motion intensity: '+String(rb.motionIntensity||'low to medium'),
+            'visual style: '+String(referenceBlueprint?.global?.visualStyle||'cinematic documentary'),
+            'color mood: '+String(referenceBlueprint?.global?.colorMood||'natural cinematic color'),
+            'No text, no logos, no identifiable real person, no copied frame.'
+          ].join('; ');
+          const generated=await generateGeminiOriginalImage(imagePrompt,dir,{model:'gemini-2.5-flash-image'});
+          aiClips[i]={path:generated.outputPath,mediaType:'image',source:'gemini-original-image'};
+          resultsByScene.push({number:scene.number,media:[],mediaType:'image',source:'gemini-original-image'});
+          if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
+          continue;
+        }catch(err){console.warn('Gemini original image fallback failed; continuing to visual-search fallback:',i,err?.message||String(err));}
       }
       try{
         const videos=await searchPixabay(query);
