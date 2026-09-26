@@ -414,10 +414,9 @@ async function analyzeYoutubeReferenceMedia(url,video){
       }
       return analyzed;
     }catch(downloadErr){
-      // YouTube can reject server-side media extraction with an anti-bot page even
-      // when the public URL and YouTube metadata are valid. Do not make the whole
-      // AutoTube pipeline depend on obtaining the original media bytes: fall back
-      // to the public thumbnails + metadata and keep the generation original.
+      if(process.env.AUTOTUBE_REFERENCE_FULL_DOWNLOAD==='1'){
+        throw new Error('REFERENCIA_REAL_OBLIGATORIA: no se obtuvieron los bytes del MP4 de YouTube. '+String(downloadErr?.message||downloadErr));
+      }
       console.warn('YouTube media download unavailable; using thumbnail/metadata fallback:',downloadErr?.message||String(downloadErr));
       const thumbs=Array.isArray(video?.thumbnails)?video.thumbnails:[video?.thumbnail].filter(Boolean);
       const images=[];
