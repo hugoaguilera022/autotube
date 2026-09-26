@@ -1,31 +1,19 @@
-name: Direct persistent LTX 2.5 generation test
+name: Probe Goalsave app domain
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths: ['.github/workflows/direct-goalsave-test.yml']
 jobs:
-  generate:
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
       - run: |
           npm init -y
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
-      - name: Inspect and generate
-        run: |
+      - run: |
           node <<'NODE'
-          const {chromium}=require('playwright'),fs=require('fs');
-          (async()=>{
-            const b=await chromium.launch({headless:true});
-            const p=await b.newPage({viewport:{width:1440,height:1000}});
-            p.on('console',m=>console.log('[console]',m.text()));
-            await p.goto('https://goalsave-ltx-2-5-studio.static.hf.space',{waitUntil:'domcontentloaded',timeout:120000});
-            console.log('TITLE',await p.title());
-            console.log('BUTTONS',await p.locator('button').allTextContents());
-            console.log('INPUTS',await p.locator('input').evaluateAll(xs=>xs.map(x=>({type:x.type,placeholder:x.placeholder,aria:x.getAttribute('aria-label')}))));
-            await p.screenshot({path:'/tmp/goalsave-before.png',fullPage:true});
-            await b.close();
-          })().catch(e=>{console.error(e.stack||e);process.exit(1)});
+          const {chromium}=require('playwright');
+          (async()=>{const b=await chromium.launch({headless:true});const p=await b.newPage({viewport:{width:1440,height:1000}});await p.goto('https://goalsave-ltx-2-5-studio.hf.space',{waitUntil:'domcontentloaded',timeout:120000});console.log('TITLE',await p.title());console.log('BUTTONS',await p.locator('button').allTextContents());console.log('TEXT', (await p.locator('body').innerText()).slice(0,8000));await b.close()})().catch(e=>{console.error(e.stack||e);process.exit(1)});
           NODE
