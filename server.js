@@ -53,87 +53,31 @@ function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!v
 async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
 async function downloadYoutubeReference(url,dir){
   await fs.mkdir(dir,{recursive:true});
-  // Reuse the already validated exact URL->MP4 downloader exposed by the preload.
-  // This avoids duplicating YouTube extraction logic and gives the reference analyzer
-  // the same proven source file used by the exact-media validation path.
+  // The E2E must acquire the reference exactly once. Calling /api/url-to-mp4
+  // from inside the E2E created a second asynchronous job and could race with
+  // another verifier run, leaving a partial source.mp4 (moov atom not found).
+  // Call the same exact downloader directly and validate before returning.
   try{
-    const base=`http://127.0.0.1:${PORT}`;
-    const start=await fetch(base+'/api/url-to-mp4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:url})});
-    const startData=await start.json().catch(()=>null);
-    if(start.ok&&startData?.jobId){
-      const jobId=String(startData.jobId);
-      const deadline=Date.now()+12*60*1000;
-      while(Date.now()<deadline){
-        await new Promise(r=>setTimeout(r,2000));
-        const status=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId));
-        const data=await status.json().catch(()=>null);
-        if(data?.status==='done'&&data?.downloadUrl){
-          const internal=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId)+'/internal-path');
-          const internalData=await internal.json().catch(()=>null);
-          if(internal.ok&&internalData?.path){
-            const sourcePath=String(internalData.path);
-            const stat=await fs.stat(sourcePath);
-            if(stat.size){
-              const file=path.join(dir,'reference.mp4');
-              await fs.copyFile(sourcePath,file);
-              const copied=await fs.stat(file);
-              if(copied.size)return{file,bytes:copied.size,ytDlpOutput:'Internal exact URL->MP4 pipeline',strategy:'exact-url-to-mp4'};
-            }
-          }
-          break;
-        }
-        if(data?.status==='error')break;
-      }
-    }
+    const downloaded=await downloadExactYoutube(url,dir);
+    const sourcePath=String(downloaded?.source||'');
+    if(!sourcePath)throw new Error('El descargador exacto no devolvió ruta de archivo.');
+    const sourceProbe=await probe(sourcePath);
+    if(!sourceProbe.duration||!sourceProbe.width||!sourceProbe.height)throw new Error('La referencia descargada no superó la validación FFmpeg.');
+    const stat=await fs.stat(sourcePath);
+    if(!stat.size)throw new Error('La referencia descargada está vacía.');
+    const file=path.join(dir,'reference.mp4');
+    if(path.extname(sourcePath).toLowerCase()==='.mp4')await fs.copyFile(sourcePath,file);
+    else await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',sourcePath,'-map','0:v:0','-map','0:a:0?','-c','copy','-movflags','+faststart',file]);
+    const copied=await fs.stat(file);
+    const finalProbe=await probe(file);
+    if(!copied.size||!finalProbe.duration||!finalProbe.width||!finalProbe.height)throw new Error('La copia de referencia no superó la validación FFmpeg.');
+    return{file,bytes:copied.size,ytDlpOutput:'Direct exact downloader used once for E2E',strategy:downloaded.strategy,sourceProbe,finalProbe};
   }catch(err){
-    console.warn('Internal exact URL->MP4 reference acquisition failed:',err?.message||String(err));
+    console.error('AUTOTUBE E2E EXACT REFERENCE DOWNLOAD FAILED',err?.stack||err?.message||String(err));
+    throw err;
   }
-  const ytOutput=path.join(dir,'reference.%(ext)s');
-  const strategies=[
-    {name:'mp4-avc-aac',format:'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]/best[ext=mp4]'},
-    {name:'best-compatible',format:'bestvideo*+bestaudio/best'},
-    {name:'best-single',format:'best'}
-  ];
-  let lastError='';
-  for(const strategy of strategies){
-    try{
-      const result=await youtubedl(url,{
-        format:strategy.format,
-        output:ytOutput,
-        mergeOutputFormat:'mp4',
-        noPlaylist:true,
-        noWarnings:true,
-        noCheckCertificates:true,
-        restrictFilenames:true,
-        preferFreeFormats:false,
-        ffmpegLocation:path.dirname(ffmpegPath),
-        retries:3,
-        fragmentRetries:3,
-        concurrentFragments:2
-      },{timeout:600000,killSignal:'SIGKILL'});
-      let files=await fs.readdir(dir);
-      let videoFile=files.find(name=>/^reference\\.(mp4|mkv|webm|mov|m4v)$/i.test(name));
-      if(!videoFile){
-        const videoPart=files.find(name=>/^reference\\..*\\.(mp4|mkv|webm|mov|m4v)$/i.test(name));
-        const audioPart=files.find(name=>/^reference\\..*\\.(m4a|mp3|aac|opus|webm|wav)$/i.test(name)&&name!==videoPart);
-        if(videoPart&&audioPart){
-          const merged=path.join(dir,'reference.mp4');
-          await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',path.join(dir,videoPart),'-i',path.join(dir,audioPart),'-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','veryfast','-crf','23','-c:a','aac','-b:a','160k','-movflags','+faststart',merged]);
-          videoFile='reference.mp4';
-        }
-      }
-      if(!videoFile)throw new Error('yt-dlp no produjo un archivo de vídeo. Archivos temporales: '+files.filter(name=>/^reference\\./i.test(name)).join(', '));
-      const file=path.join(dir,videoFile);
-      const stat=await fs.stat(file);
-      if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
-      return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1500),strategy:strategy.name};
-    }catch(err){
-      lastError=String(err?.stderr||err?.message||err||'').slice(-2500);
-      for(const name of await fs.readdir(dir).catch(()=>[]))if(/^reference\\./i.test(name))await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
-    }
-  }
-  throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. Se probaron múltiples estrategias de yt-dlp. Último error: '+lastError);
 }
+
 async function uploadGeminiFile(filePath,mimeType){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
