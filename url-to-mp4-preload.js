@@ -75,7 +75,10 @@ async function downloadViaPiped(url,dir){
 
 async function downloadViaInvidious(url,dir){
   const u=new URL(url);
-  const id=u.hostname.toLowerCase()==='youtu.be'?u.pathname.slice(1):u.searchParams.get('v')||((u.pathname.match(/\/(?:shorts|embed)\/([A-Za-z0-9_-]{6,20})/)||[])[1]||'');
+  let id='';
+  if(u.hostname.toLowerCase()==='youtu.be') id=u.pathname.replace(/^\/+|\/+$/g,'').split('/')[0];
+  else if(u.searchParams.get('v')) id=u.searchParams.get('v');
+  else { const parts=u.pathname.split('/').filter(Boolean); if((parts[0]==='shorts'||parts[0]==='embed')&&parts[1]) id=parts[1]; }
   if(!id) throw new Error('No se pudo extraer el ID de YouTube.');
   const instances=String(process.env.AUTOTUBE_INVIDIOUS_INSTANCES||'https://inv.nadeko.net,https://invidious.nerdvpn.de,https://yt.chocolatemoo53.com,https://invidious.tiekoetter.com').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
   let last='';
