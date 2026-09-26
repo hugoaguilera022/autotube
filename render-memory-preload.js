@@ -1,6 +1,6 @@
-// Render Free memory guard: keep FFmpeg scene rendering bounded without changing
-// the public pipeline. The app still outputs 1280x720 MP4; only the intermediate
-// canvas/threading is constrained to avoid the 512 MB container limit.
+// Render Free memory guard: keep FFmpeg and music generation bounded without changing
+// the public pipeline. The app still outputs 1280x720 MP4; expensive optional AI
+// providers are short-circuited when their response can exceed the 512 MB container.
 const Module = require('module');
 const nativeRequire = Module.prototype.require;
 Module.prototype.require = function autotubeRenderMemoryGuard(request) {
@@ -27,3 +27,18 @@ Module.prototype.require = function autotubeRenderMemoryGuard(request) {
   }
   return nativeRequire.apply(this, arguments);
 };
+
+// Lyria is optional. On Render Free its binary audio response can consume a large
+// transient buffer, so force the already-present deterministic local music fallback.
+if (String(process.env.AUTOTUBE_DISABLE_LYRIA || '1') === '1') {
+  const nativeFetch = global.fetch;
+  if (typeof nativeFetch === 'function') {
+    global.fetch = async function autotubeRenderFetch(input, init) {
+      const url = typeof input === 'string' ? input : String(input?.url || '');
+      if (/generativelanguage\.googleapis\.com\/v1beta\/models\/lyria/i.test(url)) {
+        throw new Error('Lyria disabled on constrained Render; using local music fallback.');
+      }
+      return nativeFetch(input, init);
+    };
+  }
+}
