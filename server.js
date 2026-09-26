@@ -586,7 +586,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
   const refAudio=refProfile?.audioProfile||{};
   const refStructure=refProfile?.structureProfile||{};
   const singleVisual=Boolean(refDirectives.useSingleContinuousVisual||refVideo.constantImage);
-  const requestedSceneCount=singleVisual?1:Math.max(4,Math.min(12,Math.round(Number(duration)/2)));
+  const requestedSceneCount=singleVisual?1:Math.max(4,Math.min(36,Math.ceil((Number(duration)*60)/8.5)));
 
   const referenceContext={
     sourceUrl:reference||'',
