@@ -486,7 +486,7 @@ app.post('/api/ai/outline',async(req,res)=>{const{topic,language='es',duration='
 
 app.post('/api/ai/production-plan',async(req,res)=>{try{
   const {
-    topic,language='es',duration='8',title='',outline=[],visualIdeas=[],
+    topic,brief='',visualReferences='',customScript='',language='es',duration='8',title='',outline=[],visualIdeas=[],
     visualReferenceAnalysis=null,referenceStyle=null,referenceTopic='',
     referenceData=null,reference=''
   }=req.body||{};
