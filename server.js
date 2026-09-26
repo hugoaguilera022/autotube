@@ -549,17 +549,6 @@ app.post('/api/youtube/reference',async(req,res)=>{
     if(job){job.status='error';job.result={ok:false,error:err.message||'No se pudo analizar el vídeo completo de YouTube.'};job.finishedAt=Date.now();}
   });
 });
-app.get('/api/reference-e2e-test',async(req,res)=>{
-  if(String(req.query?.key||'')!=='autotube-e2e-20260926')return res.status(404).end();
-  try{
-    const reference='https://www.youtube.com/watch?v=jNQXAC9IVRw';
-    const jobId='urlvideo_test_'+Date.now();
-    const job={id:jobId,status:'processing',progress:1,reference,startedAt:Date.now(),testOnly:true};
-    urlVideoJobs.set(jobId,job);
-    executeUrlToVideo(reference,jobId).catch(err=>console.error('Reference E2E test error:',jobId,err));
-    return res.json({ok:true,testOnly:true,jobId,statusUrl:'/api/url-to-video/'+jobId,reference});
-  }catch(err){return res.status(500).json({ok:false,error:err?.message||String(err)});}
-});
 app.get('/api/youtube/transcript',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'Indica una URL de YouTube.'});
@@ -2117,14 +2106,6 @@ app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
 });
 
 
-setTimeout(()=>{
-  const reference='https://www.youtube.com/watch?v=jNQXAC9IVRw';
-  const jobId='urlvideo_oneshot_'+Date.now();
-  const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null,testOnly:true};
-  urlVideoJobs.set(jobId,job);
-  console.log('AUTOTUBE_REFERENCE_ONESHOT_START',jobId,reference);
-  executeUrlToVideo(reference,jobId).then(()=>console.log('AUTOTUBE_REFERENCE_ONESHOT_DONE',jobId,job.status,job.outputPath)).catch(err=>console.error('AUTOTUBE_REFERENCE_ONESHOT_ERROR',jobId,err?.message||String(err)));
-},5000);
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
