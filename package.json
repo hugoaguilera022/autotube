@@ -5,8 +5,8 @@
   "description": "AutoTube - AI-assisted YouTube content automation dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "AUTOTUBE_DISABLE_LTX=1 node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js -r ./gemini-image-fix-preload.js -r ./disable-ltx-preload.js server.js",
-    "dev": "AUTOTUBE_DISABLE_LTX=1 node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js -r ./gemini-image-fix-preload.js -r ./disable-ltx-preload.js server.js --watch",
+    "start": "AUTOTUBE_DISABLE_LTX=1 node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js -r ./gemini-image-fix-preload.js -r ./disable-ltx-preload.js -r ./render-memory-preload.js server.js",
+    "dev": "AUTOTUBE_DISABLE_LTX=1 node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js -r ./gemini-image-fix-preload.js -r ./disable-ltx-preload.js -r ./render-memory-preload.js server.js --watch",
     "postinstall": "node setup-pot-provider.js"
   },
   "engines": { "node": "22.x" },
