@@ -1,0 +1,13 @@
+name: Check AutoTube AI provider auth
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['server.js']
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check config without exposing secret
+        run: |
+          curl -fsS https://autotube-hfeu.onrender.com/api/ai/ltx-config
