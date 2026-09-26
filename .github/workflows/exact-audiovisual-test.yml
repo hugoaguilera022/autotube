@@ -18,7 +18,7 @@ jobs:
       - name: Run exact URL to MP4 test
         env:
           APP_URL: https://autotube-hfeu.onrender.com
-          SOURCE_URL: https://samplefile.com/samples/download/video/mp4/mp4_h264_aac_360p_sample.mp4/
+          SOURCE_URL: https://samplefile.com/samples/download/video/mp4/mp4_h264_aac_360p_sample.mp4
         run: |
           set -euo pipefail
           for i in $(seq 1 30); do
