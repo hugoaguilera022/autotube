@@ -1,4 +1,4 @@
-name: AutoTube real AI full-length generation test
+name: AutoTube full reference recreation test
 
 on:
   push:
@@ -14,18 +14,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        batch: [0,1,2,3,4,5]
+        batch: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Playwright
         run: |
           npm init -y
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
-
       - name: Wait for Render
         run: |
           for i in {1..30}; do
@@ -34,8 +32,7 @@ jobs:
             sleep 10
           done
           exit 1
-
-      - name: Generate six real LTX clips
+      - name: Generate four real LTX clips
         env:
           BATCH: ${{ matrix.batch }}
         run: |
@@ -51,7 +48,7 @@ jobs:
             const err=await page.evaluate(()=>window.__error||'');
             if(err) throw new Error(err);
             const urls=await page.evaluate(()=>window.__outputs||[]);
-            if(urls.length!==6) throw new Error('Expected 6 LTX clips, got '+urls.length);
+            if(urls.length!==4) throw new Error('Expected 4 clips, got '+urls.length);
             for(let i=0;i<urls.length;i++){
               const rr=await page.request.get(urls[i]);
               if(!rr.ok()) throw new Error('Clip '+i+' download failed: '+rr.status());
@@ -62,18 +59,13 @@ jobs:
             await browser.close();
           })().catch(e=>{console.error(e.stack||e);process.exit(1)});
           NODE
-
       - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Validate batch
         run: |
           for f in /tmp/clip-${{ matrix.batch }}-*.mp4; do
             ffprobe -v error -show_entries format=duration -show_entries stream=codec_name,width,height,r_frame_rate -of json "$f"
           done
-
       - name: Upload batch
         uses: actions/upload-artifact@v4
         with:
@@ -84,48 +76,43 @@ jobs:
   assemble:
     needs: ltx-batch
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: ltx-batch-*
           merge-multiple: true
           path: /tmp/clips
-
       - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
-      - name: Assemble 273.6 second original video
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Assemble and validate 273.6 second new video
         run: |
           python - <<'PY'
           from pathlib import Path
-          files=sorted(Path('/tmp/clips').glob('clip-*.mp4'), key=lambda p:(int(p.name.split('-')[1]),int(p.name.split('-')[2].split('.')[0])))
-          if len(files)!=36:
-              raise SystemExit(f'Expected 36 clips, got {len(files)}')
+          files=sorted(Path('/tmp/clips').glob('clip-*.mp4'),key=lambda p:(int(p.name.split('-')[1]),int(p.name.split('-')[2].split('.')[0])))
+          if len(files)!=92: raise SystemExit(f'Expected 92 clips, got {len(files)}')
           with open('/tmp/concat.txt','w') as f:
-              for p in files:
-                  f.write("file '"+str(p).replace("'","'\\''")+"\\n")
+            for p in files: f.write("file '"+str(p).replace("'","'\\''")+"\\n")
           PY
-          ffmpeg -hide_banner -loglevel error -f concat -safe 0 -i /tmp/concat.txt -c copy /tmp/full-original.mp4
-          ffmpeg -hide_banner -loglevel error -i /tmp/full-original.mp4 -t 273.600 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest /tmp/autotube-reference-profile-test.mp4
-          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,r_frame_rate,avg_frame_rate,sample_rate,channels -of json /tmp/autotube-reference-profile-test.mp4 | tee /tmp/final-probe.json
+          ffmpeg -hide_banner -loglevel error -f concat -safe 0 -i /tmp/concat.txt -t 273.600 -vf "scale=910:512:flags=lanczos,fps=30,format=yuv420p" -c:v libx264 -preset slow -crf 16 -an /tmp/video-new.mp4
+          ffmpeg -hide_banner -loglevel error -i /tmp/video-new.mp4 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map 1:a:0 -t 273.600 -c:v copy -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest /tmp/autotube-recreated-273s.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,r_frame_rate,avg_frame_rate,sample_rate,channels -of json /tmp/autotube-recreated-273s.mp4 | tee /tmp/final-probe.json
           python - <<'PY'
           import json
           d=json.load(open('/tmp/final-probe.json'))
           assert abs(float(d['format']['duration'])-273.6)<0.2
-          vs=[s for s in d['streams'] if s.get('codec_name')=='h264'][0]
-          assert int(vs['width'])>0 and int(vs['height'])>0
+          vs=next(s for s in d['streams'] if s.get('codec_name')=='h264')
+          assert int(vs['width'])==910 and int(vs['height'])==512
           assert vs['r_frame_rate']=='30/1'
-          print('FULL ORIGINAL VIDEO TEST: PASS')
+          a=next(s for s in d['streams'] if s.get('codec_name')=='aac')
+          assert int(a['sample_rate'])==44100 and int(a['channels'])==2
+          print('FULL NEW VIDEO 273.6s / 910x512 / 30fps / H264-AAC: PASS')
           PY
-
-      - name: Upload final
+      - name: Upload final recreated video
         uses: actions/upload-artifact@v4
         with:
-          name: autotube-full-original-profile-test
+          name: autotube-recreated-273s
           path: |
-            /tmp/autotube-reference-profile-test.mp4
+            /tmp/autotube-recreated-273s.mp4
             /tmp/final-probe.json
           compression-level: 0
