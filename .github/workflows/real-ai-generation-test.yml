@@ -34,6 +34,7 @@ jobs:
       - name: Generate four real LTX clips
         env:
           BATCH: ${{ matrix.batch }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           node <<'NODE'
           const { chromium } = require('playwright');
@@ -42,6 +43,7 @@ jobs:
             const batch=Number(process.env.BATCH);
             const browser=await chromium.launch({headless:true});
             const page=await browser.newPage({viewport:{width:1440,height:900}});
+            await page.setExtraHTTPHeaders({'x-autotube-hf-token':process.env.HF_TOKEN||''});
             await page.goto('https://autotube-hfeu.onrender.com/video-ai-test-browser?batch='+batch,{waitUntil:'domcontentloaded',timeout:120000});
             await page.waitForFunction(()=>window.__done===true || window.__error, null, {timeout:900000});
             const err=await page.evaluate(()=>window.__error||'');
