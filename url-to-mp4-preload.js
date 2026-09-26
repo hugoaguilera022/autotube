@@ -128,7 +128,7 @@ async function downloadViaYt5sProxy(url,dir){
   throw new Error(last||'YT5S failed');
 }
 
-async function(url,dir){
+async function downloadViaVevioz(url,dir){
   const base=String(process.env.AUTOTUBE_YT5S_PROXY_URL||'https://autotube-yt5s-proxy.onrender.com').replace(/\/$/,'');
   const endpoint=base+'/download?url='+encodeURIComponent(url)+'&v=720p&f=mp4';
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),240000);
