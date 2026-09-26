@@ -2006,16 +2006,18 @@ async function executeDirectPipelineSmokeTest(){
     });
 
     const visualSource=path.join(dir,'visual.mp4');
-    const narration=await run('tts-direct',async()=>{
-      const audio=await generateNarrationTts(String(scene.narration||script),'es','Natural y cercana',{});
-      if(!audio?.length)throw new Error('TTS vacío.');
-      return{bytes:audio.length};
+    let narration=null;
+    await run('tts-direct',async()=>{
+      narration=await generateNarrationTts(String(scene.narration||script),'es','Natural y cercana',{});
+      if(!Buffer.isBuffer(narration)||!narration.length)throw new Error('TTS vacío.');
+      return{bytes:narration.length};
     });
 
-    const music=await run('music-direct',async()=>{
-      const m=await generateFallbackMusic('Original instrumental educational background.',6,dir,{musicMood:'cinematic',energy:'medium'});
-      if(!m?.buffer?.length)throw new Error('Música vacía.');
-      return{provider:m.provider,bytes:m.buffer.length};
+    let music=null;
+    await run('music-direct',async()=>{
+      music=await generateFallbackMusic('Original instrumental educational background.',6,dir,{musicMood:'cinematic',energy:'medium'});
+      if(!music?.buffer?.length)throw new Error('Música vacía.');
+      return{provider:music.provider,bytes:music.buffer.length};
     });
 
     const finalPath=path.join(dir,'direct-smoke-final.mp4');
