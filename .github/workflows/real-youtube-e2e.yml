@@ -1,0 +1,50 @@
+name: Real YouTube E2E
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Wait for Render
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 10 https://autotube-hfeu.onrender.com/ >/dev/null; then
+              echo "Render is live"
+              break
+            fi
+            sleep 10
+          done
+      - name: Start full pipeline
+        id: start
+        run: |
+          URL="https://autotube-hfeu.onrender.com/api/full-pipeline-test?reference=https%3A%2F%2Fyoutu.be%2Fmh48xOkLhgU%3Fsi%3DFxdwPeg3v2TMmo_H"
+          curl -fsS --max-time 30 "$URL" | tee start.json
+          cat start.json
+      - name: Poll full pipeline
+        run: |
+          JOB=$(python - <<'PY'
+          import json
+          d=json.load(open("start.json"))
+          print(d.get("jobId",""))
+          PY
+          )
+          test -n "$JOB"
+          for i in $(seq 1 55); do
+            sleep 60
+            curl -fsS --max-time 30 "https://autotube-hfeu.onrender.com/api/full-pipeline-test/$JOB" | tee status.json
+            python - <<'PY'
+          import json,sys
+          d=json.load(open("status.json"))
+          print("status=",d.get("status"),"progress=",d.get("progress"))
+          if d.get("status")=="done":
+              sys.exit(0)
+          if d.get("status")=="failed":
+              print(d)
+              sys.exit(2)
+          PY
+          done
+          echo "E2E timed out"
+          exit 3
