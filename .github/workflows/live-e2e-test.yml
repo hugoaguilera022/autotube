@@ -1,7 +1,5 @@
 name: AutoTube E2E live regeneration test
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 jobs:
   test:
