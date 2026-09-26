@@ -1,12 +1,22 @@
-name: Probe persistent LTX 2.5 API
+name: Probe alternate LTX provider
 on:
-  workflow_dispatch:
   push:
     branches: [main]
     paths: ['.github/workflows/probe-goalsave.yml']
+  workflow_dispatch:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+      - run: npm init -y && npm install --no-save @gradio/client@latest
       - run: |
-          curl -sS -i https://autotube-hfeu.onrender.com/api/ai/goalsave-api
+          node <<'NODE'
+          const {Client}=require('@gradio/client');
+          (async()=>{
+            const app=await Client.connect('Goalsave/ltx-2-5-studio');
+            const api=await app.view_api();
+            console.log(JSON.stringify(api,null,2));
+          })().catch(e=>{console.error(e.stack||e);process.exit(1)});
+          NODE
