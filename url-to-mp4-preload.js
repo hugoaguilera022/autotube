@@ -34,7 +34,7 @@ async function downloadViaExternalProvider(url,dir){
 async function downloadViaPiped(url,dir){
   const u=new URL(url);
   let id='';
-  if(u.hostname.toLowerCase()==='youtu.be') id=u.pathname.replace(/^\\/+|\\/+$/g,'').split('/')[0];
+  if(u.hostname.toLowerCase()==='youtu.be') id=u.pathname.split('/').filter(Boolean)[0]||'';
   else if(u.searchParams.get('v')) id=u.searchParams.get('v');
   else {
     const parts=u.pathname.split('/').filter(Boolean);
