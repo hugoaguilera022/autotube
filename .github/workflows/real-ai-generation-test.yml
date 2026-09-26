@@ -32,7 +32,7 @@ jobs:
               window.supports_zerogpu_headers=true;
               const s=document.createElement('script');s.type='module';s.textContent='';
               const mod=await import('https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js');
-              const client=await mod.Client.connect(location.hostname.replace(/\.hf\.space$/,'').replace(/-/g,'/').replace(/^/,'')); 
+              const client=await mod.Client.connect(location.origin).replace(/-/g,'/').replace(/^/,'')); 
               return {ok:true,api:await client.view_api()};
             });
             console.log(JSON.stringify(result,null,2));
