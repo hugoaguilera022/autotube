@@ -16,7 +16,7 @@ async function downloadViaGithubReferenceRelease(url,dir){
   if(!/youtube\\.com$|youtu\\.be$/i.test(new URL(url).hostname))throw new Error('GitHub reference only for YouTube.');
   const releaseUrl='https://github.com/hugoaguilera022/autotube/releases/download/autotube-reference-test/reference.mp4';
   let last='';
-  for(let attempt=1;attempt<=18;attempt++){
+  for(let attempt=1;attempt<=3;attempt++){
     try{
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),45000);
       let res;
@@ -32,7 +32,7 @@ async function downloadViaGithubReferenceRelease(url,dir){
       }
       last='HTTP '+res.status;
     }catch(e){last=String(e?.message||e)}
-    await new Promise(r=>setTimeout(r,20000));
+    await new Promise(r=>setTimeout(r,10000));
   }
   throw new Error('GitHub Actions reference todavía no disponible: '+last);
 }
