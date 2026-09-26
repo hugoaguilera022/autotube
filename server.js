@@ -19,16 +19,18 @@ fs.mkdir(renderJobDir, { recursive: true }).catch(() => {});
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 async function callGemini({system,user,images=[],files=[],temperature=0.7,maxOutputTokens=1200,json=false}){const k=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();if(!k)throw new Error('Falta la clave de Gemini.');const parts=[{text:String(user||'')}];for(const im of images)parts.push({inline_data:{mime_type:im.mimeType||'image/jpeg',data:im.data}});for(const file of files){if(file?.uri)parts.push({file_data:{mime_type:file.mimeType||'application/octet-stream',file_uri:file.uri}});}const headers={'Content-Type':'application/json'};headers['x-goog-'+'api-key']=k;const models=[...new Set([String(GEMINI_MODEL||'').trim(),'gemini-3.5-flash-lite','gemini-3.1-flash-lite'].filter(Boolean))];let lastError='';for(const model of models){for(const structured of (json?[true,false]:[false])){const body={system_instruction:{parts:[{text:String(system||'')}]},contents:[{role:'user',parts}],generationConfig:{maxOutputTokens,...(structured?{responseMimeType:'application/json'}:{})}};const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),20000);let response;try{response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers,body:JSON.stringify(body),signal:controller.signal});}catch(err){lastError=err?.name==='AbortError'?'Gemini request timeout (20s).':String(err?.message||err);continue}finally{clearTimeout(timer)}const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}if(response.ok){const text=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';if(text)return text;lastError='Gemini no devolvió contenido.';continue}const message=data?.error?.message||raw.slice(0,500)||'Error desconocido';lastError='Gemini '+response.status+': '+message;if(response.status===429||response.status>=500)break;if(response.status===400&&structured)continue;if(response.status===404||/model|not found|unsupported/i.test(message))break;break}}throw new Error(lastError||'Gemini no pudo procesar la solicitud.');}
 function parseJsonResponse(text){
-  const raw=String(text||'').replace(/^\\s*\`\`\`(?:json)?\\s*/i,'').replace(/\\s*\`\`\`\\s*$/i,'').trim();
+  const raw=String(text||'').replace(/^\\s*\\x60\\x60\\x60(?:json)?\\s*/i,'').replace(/\\s*\\x60\\x60\\x60\\s*$/i,'').trim();
   let candidate=raw;
   const first=Math.min(...['{','['].map(ch=>{const i=raw.indexOf(ch);return i<0?Infinity:i}));
   const last=Math.max(raw.lastIndexOf('}'),raw.lastIndexOf(']'));
   if(Number.isFinite(first)&&last>=first)candidate=raw.slice(first,last+1);
-  try{return JSON.parse(candidate)}catch(err){
-    try{return JSON.parse(jsonrepair(candidate))}catch(repairErr){
-      const repaired=candidate.replace(/,\\s*([}\\]])/g,'$1');
-      try{return JSON.parse(repaired)}catch(_){throw new Error('Respuesta JSON inválida de Gemini: '+(err.message||String(err)))}}
-  }
+  const attempts=[candidate];
+  try{attempts.push(jsonrepair(candidate))}catch{}
+  attempts.push(candidate.replace(/,\\s*([}\\]])/g,'$1'));
+  attempts.push(candidate.replace(/([{,]\\s*)([A-Za-z_$][A-Za-z0-9_$-]*)\\s*:/g,'$1"$2":').replace(/,\\s*([}\\]])/g,'$1'));
+  let lastError=null;
+  for(const attempt of attempts){try{return JSON.parse(attempt)}catch(err){lastError=err}}
+  throw new Error('Respuesta JSON inválida de Gemini: '+(lastError?.message||'formato no recuperable'));
 }
 const app=express();
 let youtubeTokens=null,youtubeProfileCache=null,youtubeLoaded=false;
