@@ -1,0 +1,33 @@
+name: AutoTube target YouTube acquisition
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  target:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait for Render
+        run: |
+          set -e
+          for i in $(seq 1 90); do
+            if curl -fsS https://autotube-hfeu.onrender.com/api/health >/dev/null; then exit 0; fi
+            sleep 5
+          done
+          exit 1
+      - name: Download target through AutoTube
+        run: |
+          set -e
+          u='https://www.youtube.com/watch?v=mh48xOkLhgU'
+          r=$(curl -fsS --max-time 60 -X POST https://autotube-hfeu.onrender.com/api/url-to-mp4 -H 'Content-Type: application/json' --data "{\"reference\":\"$u\"}")
+          echo "$r"
+          j=$(printf '%s' "$r" | python -c 'import json,sys; print(json.load(sys.stdin)[\"jobId\"])')
+          for i in $(seq 1 120); do
+            s=$(curl -sS https://autotube-hfeu.onrender.com/api/url-to-mp4/$j); echo "$s"
+            st=$(printf '%s' "$s" | python -c 'import json,sys; print(json.load(sys.stdin).get(\"status\",\"\"))' 2>/dev/null || true)
+            if [ "$st" = done ]; then exit 0; fi
+            if [ "$st" = error ]; then exit 1; fi
+            sleep 5
+          done
+          exit 1
