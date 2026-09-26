@@ -5,13 +5,11 @@
   "description": "AutoTube - AI-assisted YouTube content automation dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js server.js",
-    "dev": "node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js --watch server.js",
+    "start": "node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js -r ./gemini-image-fix-preload.js server.js",
+    "dev": "node --expose-gc -r ./disable-startup-selftest-preload.js -r ./youtube-download-fallback-preload.js -r ./youtube-routes-preload.js -r ./render-stability-preload.js -r ./url-to-mp4-preload.js -r ./gemini-image-fix-preload.js server.js --watch",
     "postinstall": "node setup-pot-provider.js"
   },
-  "engines": {
-    "node": "22.x"
-  },
+  "engines": { "node": "22.x" },
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
