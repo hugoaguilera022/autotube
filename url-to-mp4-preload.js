@@ -157,7 +157,7 @@ async function downloadViaCobalt(url,dir){
     'https://api.qwkuns.me',
     'https://lime.clxxped.lol',
     'https://cobalt-api.lamps-dev.dev'
-  ].join(',')).split(',').map(x=>x.trim().replace(/\\/$/,'')).filter(Boolean);
+  ].join(',')).split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
   let last='';
   for(const base of instances){
     try{
