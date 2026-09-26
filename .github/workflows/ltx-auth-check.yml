@@ -1,0 +1,17 @@
+name: AutoTube LTX auth check
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check LTX server configuration
+        run: |
+          for i in {1..30}; do
+            code=$(curl -s -o /tmp/r -w "%{http_code}" https://autotube-hfeu.onrender.com/api/ai/ltx-config || true)
+            echo "HTTP $code"
+            cat /tmp/r || true
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          exit 1
