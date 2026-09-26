@@ -1828,310 +1828,140 @@ function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
 }
 
 async function executeUrlToVideo(reference,jobId){
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-'));
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-exact-'));
   const job=urlVideoJobs.get(jobId);
   try{
-    const cachedReference=[...youtubeReferenceJobs.values()]
-      .filter(j=>j.status==='done'&&j.reference===reference&&j.result?.video&&j.result?.referenceStyle)
-      .sort((a,b)=>Number(b.finishedAt||0)-Number(a.finishedAt||0))[0];
-    const useCached=Boolean(cachedReference&&Date.now()-Number(cachedReference.finishedAt||0)<15*60*1000);
-    const video=useCached?cachedReference.result.video:await getReferenceVideo(reference);
-    const transcript=useCached?(cachedReference.result.transcript||{available:false,transcript:''}):(process.env.AUTOTUBE_SKIP_REFERENCE_TRANSCRIPT_ON_RENDER==='1'?{available:false,transcript:'',language:null,source:'render-memory-safe-skip'}:await getYoutubeTranscript(reference,video?.defaultLanguage||'es').catch(err=>{console.warn('URL-to-video transcript unavailable:',err?.message||String(err));return{available:false,transcript:''};}));
-    const style=useCached?cachedReference.result.referenceStyle:await analyzeYoutubeReferenceMedia(reference,video);
-    if(!style?.visualAnalysis||!style?.visualAnalysis?.structureProfile){
-      throw new Error('No se pudo obtener un análisis audiovisual suficiente de la referencia. El render se detuvo antes de generar visuales.');
-    }
+    // STRICT URL REPLICATION:
+    // 1) obtain the original YouTube media through the exact URL->MP4 pipeline;
+    // 2) never generate AI visuals, narration or music;
+    // 3) never use thumbnails/stock media as a substitute;
+    // 4) never re-encode the audiovisual streams;
+    // 5) validate that the final MP4 has the same technical audiovisual streams.
+    if(job)job.progress=2;
 
-    const referenceTitle=String(video?.title||'Contenido original').slice(0,300);
-    const targetDurationSeconds=Math.max(4,parseIsoDurationSeconds(video?.duration)||Number(style?.visualAnalysis?.videoProfile?.durationSeconds)||60);
-    const visualReferenceAnalysis=style?.visualAnalysis||{};
-    const referenceBlueprint=await buildReferenceBlueprint({referenceTitle,transcript:transcript?.transcript||'',visualReferenceAnalysis,referenceStyle:style});
-    if(job)job.progress=15;
-
-    const outlineRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        topic:referenceTitle,reference,referenceTopic:referenceTitle,
-        referenceData:{...(video||{title:referenceTitle}),transcript:transcript?.transcript||''},
-        transcript:transcript?.transcript||'',
-        visualReferenceAnalysis,referenceStyle:style,referenceBlueprint,
-        language:'es',duration:String(Math.max(1,Math.ceil(targetDurationSeconds/60)))
-      })
+    const base='http://127.0.0.1:'+PORT;
+    const startResponse=await fetch(base+'/api/url-to-mp4',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reference})
     });
-    const outline=await outlineRes.json().catch(()=>null);
-    if(!outlineRes.ok)throw new Error(outline?.error||'No se pudo generar la estructura.');
-
-    const planRes=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        topic:referenceTitle,reference,referenceTopic:referenceTitle,
-        referenceData:{...(video||{title:referenceTitle}),transcript:transcript?.transcript||''},
-        transcript:transcript?.transcript||'',
-        visualReferenceAnalysis,referenceStyle:style,referenceBlueprint,
-        language:'es',duration:String(Math.max(1,Math.ceil(targetDurationSeconds/60))),title:outline?.title||referenceTitle,
-        outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
-      })
-    });
-    const plan=await planRes.json().catch(()=>null);
-    if(!planRes.ok||!Array.isArray(plan?.scenes)||!plan.scenes.length)
-      throw new Error(plan?.error||'Plan de producción inválido.');
-
-    const blueprintScenes=applyReferenceBlueprint(plan.scenes,referenceBlueprint,targetDurationSeconds);
-    const scenes=blueprintScenes.map((s,i)=>({
-      ...s,number:i+1,duration:Math.max(1,Math.min(20,Number(s.duration)||8)),
-      mediaType:'video',constantImage:false
-    }));
-
-    // Render a short but complete original remake on the constrained
-    // Render instance. The visual generator is driven by the analyzed
-    // subject/style rather than copying the source recording.
-    const maxSeconds=targetDurationSeconds;
-    let used=0;
-    const finalScenes=[];
-    let cursor=0;
-    while(used<maxSeconds&&scenes.length){
-      const sourceScene=scenes[cursor%scenes.length];
-      const remainingTarget=maxSeconds-used;
-      const duration=Math.max(4,Math.min(Number(sourceScene.duration)||8,remainingTarget));
-      finalScenes.push({...sourceScene,number:finalScenes.length+1,duration});
-      used+=duration;
-      cursor++;
-      if(cursor>5000)throw new Error('El vídeo de referencia es demasiado largo para procesarlo de forma segura en una sola tarea.');
-    }
-    if(job)job.progress=30;
-
-    const referenceAudio=style?.visualAnalysis?.audioProfile||{};
-    const wantsVoice=Boolean(referenceAudio.hasSpeech);
-    const wantsMusic=Boolean(referenceAudio.hasMusic);
-    const narrationAudio=[];
-    let musicBuffer=null;
-
-    // Audio is generated only when the reference actually contains that layer.
-    // Voice-only references never receive an invented music bed; music-only
-    // references never receive invented narration; mixed references receive both.
-    if(wantsVoice){
-      for(let i=0;i<finalScenes.length;i++){
-        let narration=String(finalScenes[i]?.narration||'').trim();
-        if(!narration){
-          const script=await callGemini({
-            system:'Eres guionista de YouTube. Escribe una narración ORIGINAL, factual y directamente relacionada con el tema de la referencia. No copies frases del vídeo de referencia.',
-            user:JSON.stringify({
-              topic:referenceTitle,
-              scene:finalScenes[i]?.title||'',
-              visualPrompt:finalScenes[i]?.visualPrompt||'',
-              durationSeconds:finalScenes[i]?.duration||8,
-              language:'es',
-              audioProfile:referenceAudio
-            }),
-            temperature:0.5,maxOutputTokens:350,json:false
-          });
-          narration=String(script||'').trim();
-        }
-        if(!narration)throw new Error('La referencia contiene voz, pero no se pudo crear la narración original de la escena '+String(finalScenes[i].number)+'.');
-        narrationAudio[i]=await generateNarrationTts(
-          narration,
-          String(referenceAudio.language||'es'),
-          String(referenceAudio.voiceStyle||'Natural y cercana'),
-          referenceAudio
-        );
-      }
+    const startData=await startResponse.json().catch(()=>null);
+    if(!startResponse.ok||!startData?.jobId){
+      throw new Error(startData?.error||'No se pudo iniciar la obtención del vídeo original de YouTube.');
     }
 
-    if(wantsMusic){
-      const totalDuration=finalScenes.reduce((n,s)=>n+Math.max(4,Math.min(20,Number(s.duration)||8)),0);
-      musicBuffer=await generateMusicBuffer({
-        topic:referenceTitle,
-        mood:String(referenceAudio.musicMood||'original instrumental'),
-        audioProfile:referenceAudio,
-        durationSeconds:Math.max(4,totalDuration)
-      });
+    const exactJobId=String(startData.jobId);
+    const deadline=Date.now()+15*60*1000;
+    let exact=null;
+    while(Date.now()<deadline){
+      await new Promise(resolve=>setTimeout(resolve,2000));
+      const response=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(exactJobId));
+      const data=await response.json().catch(()=>null);
+      if(data?.status==='done'){
+        exact=data;
+        break;
+      }
+      if(data?.status==='error'||data?.ok===false&&data?.status==='error'){
+        throw new Error(data?.error||'La obtención del vídeo original falló.');
+      }
+      if(job)job.progress=Math.min(75,5+Math.round((Date.now()-(deadline-15*60*1000))/(15*60*1000)*65));
     }
 
-    const resultsByScene=[];
-    const aiClips=new Array(finalScenes.length).fill(null);
-    let ltxQuotaUnavailable=false;
-    for(let i=0;i<finalScenes.length;i++){
-      const scene=finalScenes[i];
-      const query=String(scene.searchQuery||scene.title||referenceTitle).trim().slice(0,120);
-      let media=null;
-
-      // En URL-reference mode, the analyzed audiovisual blueprint is the primary
-      // visual source. Generate an original AI clip from the exact section
-      // direction before considering stock footage, so the result follows the
-      // reference's subject, shot language, composition and camera movement.
-      if(referenceBlueprint?.sections?.length&&!ltxQuotaUnavailable){
-        try{
-          const rb=scene.referenceStructure||referenceBlueprint.sections[Math.min(i,referenceBlueprint.sections.length-1)]||{};
-          const aiPrompt=[
-            'Original AI video recreation of this reference section.',
-            'Do NOT copy footage, faces, logos, text, audio or identifiable copyrighted elements.',
-            'Keep the same semantic subject and visual function.',
-            'section purpose: '+String(rb.purpose||''),
-            'visual subject: '+String(rb.visualSubject||''),
-            'shot type: '+String(rb.shotType||''),
-            'composition: '+String(rb.composition||''),
-            'camera motion: '+String(rb.cameraMotion||''),
-            'motion intensity: '+String(rb.motionIntensity||''),
-            'transition: '+String(rb.transition||''),
-            'global visual style: '+String(referenceBlueprint.global?.visualStyle||''),
-            'editing style: '+String(referenceBlueprint.global?.editingStyle||''),
-            'color mood: '+String(referenceBlueprint.global?.colorMood||''),
-            '16:9 cinematic original footage, no text, no logos'
-          ].join('; ');
-          const generated=await generateFreeLtxVideoClip(aiPrompt,dir,{
-            durationSeconds:Math.max(3,Math.min(6,Number(scene.duration)||4)),
-            width:512,
-            height:288,
-            improveTexture:false
-          });
-          aiClips[i]={path:generated.outputPath,mediaType:'video',source:'reference-blueprint-ai'};
-          resultsByScene.push({number:scene.number,media:[],mediaType:'video',source:'reference-blueprint-ai'});
-        }catch(err){
-          const msg=String(err?.message||err||'');
-          if(/ZeroGPU quota|exceeded your ZeroGPU quota|Authenticate with a Hugging Face token/i.test(msg))ltxQuotaUnavailable=true;
-          console.warn('Reference-blueprint AI visual failed; using visual search fallback:',i,msg);
-        }
-      }
-      if(aiClips[i]){
-        if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
-        continue;
-      }
-      // When Hugging Face ZeroGPU is exhausted, do not spend minutes probing
-      // external stock CDNs. Use the public reference thumbnail immediately;
-      // the renderer applies the existing cinematic motion to it.
-      if(ltxQuotaUnavailable){
-        // LTX quota is exhausted: generate a fresh ORIGINAL 16:9 still from
-        // the reference blueprint instead of copying the YouTube thumbnail.
-        try{
-          const rb=scene.referenceStructure||referenceBlueprint?.sections?.[Math.min(i,Math.max(0,(referenceBlueprint.sections?.length||1)-1))]||{};
-          const imagePrompt=[
-            'Create an ORIGINAL 16:9 cinematic still for a YouTube video.',
-            'Do not reproduce or edit the reference thumbnail, footage, person, face, logo, text or exact composition.',
-            'Use only the semantic subject and audiovisual direction as inspiration.',
-            'subject: '+String(rb.visualSubject||scene.title||referenceTitle),
-            'purpose: '+String(rb.purpose||''),
-            'shot type: '+String(rb.shotType||'wide or medium wide'),
-            'composition: '+String(rb.composition||'cinematic horizontal composition'),
-            'camera language: '+String(rb.cameraMotion||'subtle cinematic movement'),
-            'motion intensity: '+String(rb.motionIntensity||'low to medium'),
-            'visual style: '+String(referenceBlueprint?.global?.visualStyle||'cinematic documentary'),
-            'color mood: '+String(referenceBlueprint?.global?.colorMood||'natural cinematic color'),
-            'No text, no logos, no identifiable real person, no copied frame.'
-          ].join('; ');
-          const generated=await generateGeminiOriginalImage(imagePrompt,dir,{model:'gemini-2.5-flash-image'});
-          aiClips[i]={path:generated.outputPath,mediaType:'image',source:'gemini-original-image'};
-          resultsByScene.push({number:scene.number,media:[],mediaType:'image',source:'gemini-original-image'});
-          if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
-          continue;
-        }catch(err){console.warn('Gemini original image fallback failed; continuing to visual-search fallback:',i,err?.message||String(err));}
-      }
-      try{
-        const videos=await searchPixabay(query);
-        media=videos.find(x=>x?.downloadUrl)||null;
-      }catch(err){console.warn('Pixabay video search fallback:',err.message||err)}
-      if(!media){
-        try{
-          const images=await searchPexelsPhotos(query);
-          media=images.find(x=>x?.downloadUrl)||null;
-        }catch(err){console.warn('Pexels search fallback:',err.message||err)}
-      }
-      if(!media&&(video?.thumbnail||video?.thumbnails?.[0])){
-        try{
-          const thumbPath=path.join(dir,'reference-thumb-'+i+'.jpg');
-          await downloadToFile(String(video.thumbnail||video.thumbnails?.[0]),thumbPath);
-          const stat=await fs.stat(thumbPath);
-          if(stat.size>0){
-            aiClips[i]={path:thumbPath,mediaType:'image',source:'youtube-reference-thumbnail'};
-            resultsByScene.push({number:scene.number,media:[],mediaType:'image',source:'youtube-reference-thumbnail'});
-          }
-        }catch(err){console.warn('Reference thumbnail fallback failed:',i,err?.message||String(err));}
-      }
-      if(aiClips[i]){
-        if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
-        continue;
-      }
-      if(!media){
-        try{
-          const images=await searchPixabayImages(query);
-          media=images.find(x=>x?.downloadUrl)||null;
-        }catch(err){console.warn('Pixabay image search fallback:',err.message||err)}
-      }
-
-      // A visual search hit is not enough: verify that the asset can actually
-      // be downloaded before handing it to FFmpeg. A dead CDN URL must never
-      // abort the whole job; fall through to the next provider or LTX.
-      if(media?.downloadUrl){
-        try{
-          const probePath=path.join(dir,'source-probe-'+i+'.bin');
-          await downloadToFile(media.downloadUrl,probePath);
-          const probeStat=await fs.stat(probePath);
-          await fs.rm(probePath,{force:true}).catch(()=>{});
-          if(!probeStat.size)throw new Error('Fuente visual vacía.');
-        }catch(err){
-          console.warn('Visual source unusable; using next fallback:',query,err.message||err);
-          media=null;
-        }
-      }
-
-      if(media){
-        resultsByScene.push({
-          number:scene.number,
-          media:[{...media,mediaType:String(media.mediaType||'video').toLowerCase()}],
-          mediaType:String(media.mediaType||'video').toLowerCase()
-        });
-      }else{
-        // Last visual fallback: generate original motion from the scene
-        // prompt so missing stock credentials never prevent MP4 creation.
-        const generated=await generateFreeLtxVideoClip(
-          String(scene.visualPrompt||scene.title||referenceTitle)+'; original footage; cinematic; 16:9; no text; no logos; do not imitate a specific existing video',
-          dir,
-          {durationSeconds:3,width:512,height:288,improveTexture:false}
-        );
-        aiClips[i]={path:generated.outputPath,mediaType:'video'};
-        resultsByScene.push({number:scene.number,media:[],mediaType:'video'});
-      }
-      if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
+    if(!exact)throw new Error('La obtención del vídeo original superó el tiempo máximo de 15 minutos.');
+    if(!exact.final?.duration||!exact.final?.width||!exact.final?.height){
+      throw new Error('El archivo original no pudo ser validado técnicamente.');
     }
 
-    // La fase de preparación puede ejecutarse mientras otro render termina.
-    // En lugar de fallar por una colisión transitoria, esperamos a que se libere
-    // el único slot de FFmpeg disponible en Render Free.
-    const renderLockDeadline=Date.now()+10*60*1000;
-    while(activeRenderJobId && activeRenderJobId!==jobId){
-      if(job)job.progress=Math.min(58,Number(job.progress||30)+1);
-      if(Date.now()>renderLockDeadline)throw new Error('Otro render lleva demasiado tiempo en curso. Inténtalo de nuevo cuando termine.');
-      await new Promise(r=>setTimeout(r,2000));
-    }
-    activeRenderJobId=jobId;
+    const internal=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(exactJobId)+'/internal-path');
+    const internalData=await internal.json().catch(()=>null);
+    if(!internal.ok||!internalData?.path)throw new Error('El MP4 original ya no está disponible en el proceso interno.');
 
+    const sourcePath=String(internalData.path);
     const outputPath=path.join(renderJobDir,jobId+'.mp4');
-    const result=await renderAutotubeVideo({
-      scenes:finalScenes,
-      mediaResults:resultsByScene,
-      aiClips,
-      narrationAudio,
-      musicBuffer:musicBuffer?.buffer||null,
-      onProgress:p=>{if(job)job.progress=60+Math.round(Math.max(0,Math.min(100,Number(p)||0))*0.38)},
-      finalOutputPath:outputPath
+    await fs.copyFile(sourcePath,outputPath);
+
+    const sourceStat=await fs.stat(sourcePath);
+    const outputStat=await fs.stat(outputPath);
+    if(!outputStat.size)throw new Error('El MP4 final está vacío.');
+    if(sourceStat.size!==outputStat.size)throw new Error('La copia del MP4 no conserva exactamente el tamaño del archivo original.');
+
+    const hashFile=async file=>{
+      const hash=crypto.createHash('sha256');
+      const data=await fs.readFile(file);
+      hash.update(data);
+      return hash.digest('hex');
+    };
+    const sourceSha256=await hashFile(sourcePath);
+    const outputSha256=await hashFile(outputPath);
+
+    // Byte-identical is the strongest possible result. If the upstream pipeline
+    // had to remux a non-MP4 container, hashes can differ while streams remain
+    // identical; the strict technical comparison below still has to pass.
+    const byteIdentical=sourceSha256===outputSha256;
+    const sourceMeta=internalData.final||exact.final;
+    const finalMeta=exact.final;
+
+    const sameDuration=Math.abs(Number(sourceMeta.duration||0)-Number(finalMeta.duration||0))<0.01;
+    const sameWidth=Number(sourceMeta.width||0)===Number(finalMeta.width||0);
+    const sameHeight=Number(sourceMeta.height||0)===Number(finalMeta.height||0);
+    const sameFps=Math.abs(Number(sourceMeta.fps||0)-Number(finalMeta.fps||0))<0.01;
+    const sameVideoCodec=String(sourceMeta.videoLine||'').split('Video:')[1]?.split(',')[0]?.trim()===String(finalMeta.videoLine||'').split('Video:')[1]?.split(',')[0]?.trim();
+    const sameAudioCodec=String(sourceMeta.audioCodec||'').toLowerCase()===String(finalMeta.audioCodec||'').toLowerCase();
+
+    if(!sameDuration||!sameWidth||!sameHeight||!sameFps||!sameVideoCodec||!sameAudioCodec){
+      throw new Error('La validación estricta detectó cambios en los streams audiovisuales; el MP4 no se considera una coincidencia válida.');
+    }
+
+    // Final independent FFmpeg decode check. It validates the resulting MP4
+    // without altering it.
+    await new Promise((resolve,reject)=>{
+      const p=spawn(ffmpegPath,['-hide_banner','-i',outputPath,'-map','0:v:0','-map','0:a:0?','-c','copy','-f','null','-'],{stdio:['ignore','ignore','pipe']});
+      let stderr='';
+      p.stderr.on('data',x=>{stderr+=x.toString();if(stderr.length>12000)stderr=stderr.slice(-12000)});
+      p.on('error',reject);
+      p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg no pudo validar el MP4 exacto: '+stderr.slice(-2000))));
     });
 
-    const validation=await validateRenderedMp4(outputPath,result.duration);
-    const stat=await fs.stat(outputPath);
-    if(!stat.size)throw new Error('El MP4 final está vacío.');
+    const validation={
+      mode:'exact-original-media',
+      byteIdentical,
+      sourceSha256,
+      outputSha256,
+      sourceBytes:sourceStat.size,
+      outputBytes:outputStat.size,
+      durationSeconds:Number(finalMeta.duration||0),
+      width:Number(finalMeta.width||0),
+      height:Number(finalMeta.height||0),
+      fps:Number(finalMeta.fps||0),
+      videoCodec:finalMeta.videoLine||'',
+      audioCodec:finalMeta.audioCodec||'',
+      sameDuration,sameWidth,sameHeight,sameFps,sameVideoCodec,sameAudioCodec,
+      audiovisualStreamsUnchanged:true
+    };
+
     if(job){
-      job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
-      job.validation=validation;job.referenceTitle=referenceTitle;
-      job.sceneCount=finalScenes.length;job.durationSeconds=validation.durationSeconds;job.referenceBlueprint=referenceBlueprint;
+      job.status='done';
+      job.progress=100;
+      job.outputPath=outputPath;
+      job.size=outputStat.size;
+      job.referenceTitle=reference;
+      job.sceneCount=1;
+      job.durationSeconds=validation.durationSeconds;
+      job.validation=validation;
       job.finishedAt=Date.now();
     }
-    return{ok:true,jobId,reference:{url:reference,title:referenceTitle},
-      scenes:finalScenes.length,durationSeconds:validation.durationSeconds,size:stat.size,
-      validation,referenceBlueprint};
+
+    return{ok:true,jobId,reference,referenceTitle:reference,sceneCount:1,
+      durationSeconds:validation.durationSeconds,size:outputStat.size,validation};
   }catch(err){
-    if(job){job.status='error';job.progress=0;job.error=err?.message||String(err);job.finishedAt=Date.now();}
+    if(job){
+      job.status='error';
+      job.progress=0;
+      job.error=err?.message||String(err);
+      job.finishedAt=Date.now();
+    }
     throw err;
   }finally{
-    if(activeRenderJobId===jobId)activeRenderJobId=null;
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
 }
