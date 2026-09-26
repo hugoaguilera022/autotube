@@ -136,6 +136,9 @@ async function downloadViaYt5sProxy(url,dir){
 
 async function downloadViaCobalt(url,dir){
   const instances=String(process.env.AUTOTUBE_COBALT_API_URLS||[
+    'https://cobalt-api.meowing.de',
+    'https://cobalt-backend.canine.tools',
+    'https://capi.3kh0.net',
     'https://bergung-api.hoffnungfuerdiezukunft.net',
     'https://cobalt-alpha.wolfy.love',
     'https://nuko-c.meowing.de',
