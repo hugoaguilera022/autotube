@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-PORT=3000 bun /opt/yt-session/src/index.ts > /tmp/yt-session.log 2>&1 &
+PORT=3000 PORT=3000 bun /opt/yt-session/src/index.ts > /tmp/yt-session.log 2>&1 &
 SESSION_PID=$!
 echo "yt-session-generator started pid=$SESSION_PID"
 for i in $(seq 1 90); do
