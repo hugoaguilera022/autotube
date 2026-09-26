@@ -1958,6 +1958,25 @@ async function executeUrlToVideo(reference,jobId){
         if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
         continue;
       }
+      // When Hugging Face ZeroGPU is exhausted, do not spend minutes probing
+      // external stock CDNs. Use the public reference thumbnail immediately;
+      // the renderer applies the existing cinematic motion to it.
+      if(ltxQuotaUnavailable){
+        const thumb=String(video?.thumbnail||video?.thumbnails?.[0]||'').trim();
+        if(thumb){
+          try{
+            const thumbPath=path.join(dir,'reference-thumb-'+i+'.jpg');
+            await downloadToFile(thumb,thumbPath);
+            const stat=await fs.stat(thumbPath);
+            if(stat.size>0){
+              aiClips[i]={path:thumbPath,mediaType:'image',source:'youtube-reference-thumbnail-quota-fallback'};
+              resultsByScene.push({number:scene.number,media:[],mediaType:'image',source:'youtube-reference-thumbnail-quota-fallback'});
+              if(job)job.progress=30+Math.round(((i+1)/finalScenes.length)*30);
+              continue;
+            }
+          }catch(err){console.warn('Reference thumbnail quota fallback failed:',i,err?.message||String(err));}
+        }
+      }
       try{
         const videos=await searchPixabay(query);
         media=videos.find(x=>x?.downloadUrl)||null;
@@ -1968,10 +1987,10 @@ async function executeUrlToVideo(reference,jobId){
           media=images.find(x=>x?.downloadUrl)||null;
         }catch(err){console.warn('Pexels search fallback:',err.message||err)}
       }
-      if(!media&&referenceData?.thumbnail){
+      if(!media&&(video?.thumbnail||video?.thumbnails?.[0])){
         try{
           const thumbPath=path.join(dir,'reference-thumb-'+i+'.jpg');
-          await downloadToFile(String(referenceData.thumbnail),thumbPath);
+          await downloadToFile(String(video.thumbnail||video.thumbnails?.[0]),thumbPath);
           const stat=await fs.stat(thumbPath);
           if(stat.size>0){
             aiClips[i]={path:thumbPath,mediaType:'image',source:'youtube-reference-thumbnail'};
