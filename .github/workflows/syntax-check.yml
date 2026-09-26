@@ -2,7 +2,7 @@ name: AutoTube syntax check
 on:
   push:
     branches: [main]
-    paths: ['server.js']
+    paths: ['server.js','.github/workflows/syntax-check.yml']
   workflow_dispatch:
 jobs:
   check:
