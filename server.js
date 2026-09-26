@@ -1033,6 +1033,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
     const missing=sceneInputs.filter(x=>!x.aiClip?.path&&!x.aiClip?.buffer&&!x.media?.downloadUrl);
     if(missing.length)throw new Error('Faltan visuales para las escenas: '+missing.map(x=>String(x.scene.number)).join(', ')+'. Genera los vídeos IA de esas escenas o busca visuales de respaldo.');
     const total=sceneInputs.length;
+    // Scene media downloads are independent I/O tasks and may be prepared concurrently.
     for(let i=0;i<total;i++){
       const{scene,found,aiClip,media,audio}=sceneInputs[i];
       const input=path.join(dir,'in-'+i+'.mp4');
