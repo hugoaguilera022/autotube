@@ -222,39 +222,45 @@ async function downloadViaInvidious(url,dir){
 }
 
 async function downloadViaAllDL(url,dir){
-  const target='https://ahm7xmakki.com/api/alldl?url='+encodeURIComponent(url)+'&download=1'; const endpoint='https://api.allorigins.win/raw?url='+encodeURIComponent(target);
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),90000);
-  try{
-    const res=await fetch(endpoint,{headers:{Accept:'video/mp4,application/octet-stream;q=0.9,application/json;q=0.8','User-Agent':'Mozilla/5.0','Referer':'https://ahm7xmakki.com/'},signal:controller.signal});
-    if(!res.ok)throw new Error('AllDL HTTP '+res.status);
-    const initialType=String(res.headers.get('content-type')||'').toLowerCase();
-    if(initialType.includes('video/mp4')||initialType.includes('application/octet-stream')){
-      const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
-      try{if(!res.body)throw new Error('AllDL binary sin body');const reader=res.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
-      const st=await fs.stat(out);if(!st.size)throw new Error('AllDL binary vacío');
-      const p=await probe(out);if(!p.duration||!p.width||!p.height)throw new Error('AllDL binary no es vídeo válido');
-      return{source:out,bytes:st.size,strategy:'alldl-binary'};
-    }
-    const data=await res.json();
-    if(!data?.success)throw new Error('AllDL no disponible: '+JSON.stringify(data).slice(0,800));
-    const qualities=Array.isArray(data.mediaInfo?.qualities)?data.mediaInfo.qualities:[];
-    const candidates=[...qualities.filter(q=>q?.url).sort((a,b)=>Number(String(b.quality||'').replace(/\\D/g,''))-Number(String(a.quality||'').replace(/\\D/g,''))),{url:data.mediaInfo?.videoUrl,quality:'direct'}].filter(x=>x?.url);
-    if(!candidates.length)throw new Error('AllDL no devolvió videoUrl.');
-    let last='';
-    for(const candidate of candidates){
-      try{
-        const fr=await fetch('https://api.allorigins.win/raw?url='+encodeURIComponent(candidate.url),{headers:{'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36','Referer':'https://ahm7xmakki.com/','Origin':'https://ahm7xmakki.com'},redirect:'follow'});
-        const ct=String(fr.headers.get('content-type')||'').toLowerCase();
-        if(!fr.ok||!fr.body||(!ct.includes('video')&&!ct.includes('mp4')&&!ct.includes('octet-stream')))throw new Error('stream HTTP '+fr.status+' '+ct);
-        const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
-        try{const reader=fr.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
-        const st=await fs.stat(out);if(!st.size)throw new Error('MP4 vacío');
-        const p=await probe(out);if(!p.duration||!p.width||!p.height)throw new Error('archivo no válido');
-        return{source:out,bytes:st.size,strategy:'alldl:'+String(candidate.quality||'direct'),external:{title:String(data.mediaInfo?.title||''),duration:Number(data.mediaInfo?.duration||0),thumbnail:String(data.mediaInfo?.thumbnail||'')}};
-      }catch(e){last=String(e?.message||e);await fs.rm(path.join(dir,'source.mp4'),{force:true}).catch(()=>{})}
-    }
-    throw new Error('AllDL streams fallaron: '+last);
-  }finally{clearTimeout(timer)}
+  const api='https://ahm7xmakki.com/api/alldl?url='+encodeURIComponent(url);
+  const apiRelays=[
+    api,
+    'https://api.allorigins.win/raw?url='+encodeURIComponent(api),
+    'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(api)
+  ];
+  let last='';
+  for(const endpoint of apiRelays){
+    try{
+      const res=await fetch(endpoint,{redirect:'follow',headers:{Accept:'application/json,text/plain,*/*','User-Agent':'Mozilla/5.0'}});
+      if(!res.ok)throw new Error('AllDL API HTTP '+res.status);
+      const data=await res.json();
+      if(!data?.success)throw new Error('AllDL no disponible: '+JSON.stringify(data).slice(0,500));
+      const urls=[
+        data.mediaInfo?.videoUrl,
+        ...(Array.isArray(data.mediaInfo?.qualities)?data.mediaInfo.qualities.sort((a,b)=>Number(String(b.quality||'').replace(/\D/g,''))-Number(String(a.quality||'').replace(/\D/g,''))).map(x=>x.url):[])
+      ].filter(Boolean);
+      if(!urls.length)throw new Error('AllDL no devolvió URL de vídeo');
+      for(const media of urls){
+        for(const relay of [
+          media,
+          'https://api.allorigins.win/raw?url='+encodeURIComponent(media),
+          'https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent(media)
+        ]){
+          try{
+            const fr=await fetch(relay,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0','Referer':'https://ahm7xmakki.com/','Origin':'https://ahm7xmakki.com','Accept':'video/mp4,video/*,application/octet-stream,*/*'}});
+            const ct=String(fr.headers.get('content-type')||'').toLowerCase();
+            if(!fr.ok||!fr.body||(!ct.includes('video')&&!ct.includes('mp4')&&!ct.includes('octet-stream')))throw new Error('media HTTP '+fr.status+' '+ct);
+            const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
+            try{const reader=fr.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
+            const st=await fs.stat(out);if(st.size<100000)throw new Error('respuesta demasiado pequeña: '+st.size+' bytes');
+            const p=await probe(out);if(!p.duration||!p.width||!p.height)throw new Error('archivo no válido');
+            return{source:out,bytes:st.size,strategy:'alldl-relay',external:{title:String(data.mediaInfo?.title||''),duration:Number(data.mediaInfo?.duration||0),thumbnail:String(data.mediaInfo?.thumbnail||'')}};
+          }catch(e){last=String(e?.message||e);await fs.rm(path.join(dir,'source.mp4'),{force:true}).catch(()=>{})}
+        }
+      }
+    }catch(e){last=String(e?.message||e)}
+  }
+  throw new Error('AllDL falló en todos los relays: '+last);
 }
 
 async function downloadViaYtdlApi(url,dir){
