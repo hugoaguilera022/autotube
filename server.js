@@ -555,11 +555,8 @@ app.get('/api/reference-e2e-test',async(req,res)=>{
     const reference='https://www.youtube.com/watch?v=jNQXAC9IVRw';
     const jobId='urlvideo_test_'+Date.now();
     const job={id:jobId,status:'processing',progress:1,reference,startedAt:Date.now(),testOnly:true};
-    jobs.set(jobId,job);
-    (async()=>{
-      try{await runUrlToVideoJob(jobId,reference);}
-      catch(err){job.status='error';job.error=err?.message||String(err);console.error('Reference E2E test error:',job.error);}
-    })();
+    urlVideoJobs.set(jobId,job);
+    executeUrlToVideo(reference,jobId).catch(err=>console.error('Reference E2E test error:',jobId,err));
     return res.json({ok:true,testOnly:true,jobId,statusUrl:'/api/url-to-video/'+jobId,reference});
   }catch(err){return res.status(500).json({ok:false,error:err?.message||String(err)});}
 });
