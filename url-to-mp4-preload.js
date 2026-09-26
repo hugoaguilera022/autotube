@@ -249,7 +249,16 @@ async function downloadViaInvidious(url,dir){
   else if(u.searchParams.get('v')) id=u.searchParams.get('v');
   else { const parts=u.pathname.split('/').filter(Boolean); if((parts[0]==='shorts'||parts[0]==='embed')&&parts[1]) id=parts[1]; }
   if(!id) throw new Error('No se pudo extraer el ID de YouTube.');
-  const instances=String(process.env.AUTOTUBE_INVIDIOUS_INSTANCES||'https://inv.nadeko.net,https://invidious.nerdvpn.de,https://yt.chocolatemoo53.com,https://invidious.tiekoetter.com').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
+  let instances=String(process.env.AUTOTUBE_INVIDIOUS_INSTANCES||'https://inv.nadeko.net,https://invidious.nerdvpn.de,https://yt.chocolatemoo53.com,https://invidious.tiekoetter.com').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
+  try{
+    const discovery=await fetch('https://api.invidious.io/instances.json',{headers:{Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+    if(discovery.ok){
+      const list=await discovery.json();
+      const dynamic=Object.values(list||{}).map(x=>Array.isArray(x)?x[0]:null).filter(x=>x&&x.uri&&x.type==='https'&&x.api).map(x=>String(x.uri).replace(/\/$/,''));
+      instances=[...new Set([...dynamic,...instances])].slice(0,40);
+      console.log('AUTOTUBE INVIDIOUS DISCOVERY',instances.length);
+    }
+  }catch(e){console.error('AUTOTUBE INVIDIOUS DISCOVERY FAILED',e?.message||e)}
   let last='';
   for(const base of instances){
     try{
