@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: autotube-render-e2e
+  group: autotube-render-e2e-v2
   cancel-in-progress: true
 
 jobs:
@@ -24,7 +24,6 @@ jobs:
             sleep 5
           done
           test -s /tmp/health.json
-          # Allow the live instance to settle before starting a long render.
           sleep 60
 
       - name: Start AI URL-to-video pipeline
