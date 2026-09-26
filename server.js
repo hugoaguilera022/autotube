@@ -1263,7 +1263,26 @@ async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   const response=await fetch(String(url));
   if(!response.ok)throw new Error('LTX/ZeroGPU no pudo descargar el vídeo generado ('+response.status+').');
   const outputPath=path.join(dir,'ltx-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-  await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+  // Stream the remote MP4 directly to disk. Do not materialize the whole clip
+  // as an ArrayBuffer/Buffer: on Render Free the extra peak can exhaust 512 MB.
+  if(response.body?.getReader){
+    const handle=await fs.open(outputPath,'w');
+    const reader=response.body.getReader();
+    let total=0;
+    try{
+      while(true){
+        const part=await reader.read();
+        if(part.done)break;
+        total+=part.value.byteLength;
+        if(total>180*1024*1024){await reader.cancel().catch(()=>{});throw new Error('El vídeo IA generado supera el límite de 180 MB.');}
+        await handle.write(Buffer.from(part.value));
+      }
+    }finally{await handle.close().catch(()=>{});}
+    if(!total)throw new Error('LTX/ZeroGPU devolvió un vídeo vacío.');
+  }else{
+    await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+  }
+  if(typeof global.gc==='function')global.gc();
   const stat=await fs.stat(outputPath);
   if(!stat.size)throw new Error('LTX/ZeroGPU devolvió un vídeo vacío.');
   return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX Video',model:'LTX Video 0.9.8 distilled',durationSeconds:duration,status:'complete'};
