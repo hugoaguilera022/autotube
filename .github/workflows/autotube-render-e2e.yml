@@ -12,7 +12,7 @@ concurrency:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Wait for Render deployment
         shell: bash
@@ -25,56 +25,82 @@ jobs:
           done
           exit 1
 
-      - name: Start exact URL-to-MP4 pipeline
-        id: urlvideo
+      - name: Start AI URL-to-video pipeline
+        id: aivideo
         shell: bash
         run: |
           set -euo pipefail
-          reference='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
-          response=$(curl -fsS --max-time 30 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-mp4' -H 'Content-Type: application/json' --data "{\"reference\":\"$reference\"}")
+          reference='https://www.youtube.com/watch?v=mMggTkdN3Eo'
+          response=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "{\"reference\":\"$reference\",\"url\":\"$reference\"}")
           echo "$response"
-          job_id=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])')
+          job_id=$(printf '%s' "$response" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("jobId") or d.get("id") or "")')
+          test -n "$job_id"
           echo "job_id=$job_id" >> "$GITHUB_OUTPUT"
 
-      - name: Poll until final MP4 is complete and validated
+      - name: Poll AI render until a real MP4 exists
         shell: bash
         env:
-          JOB_ID: ${{ steps.urlvideo.outputs.job_id }}
+          JOB_ID: ${{ steps.aivideo.outputs.job_id }}
         run: |
           set -euo pipefail
-          for i in {1..360}; do
-            response=$(curl -fsS --max-time 30 "https://autotube-hfeu.onrender.com/api/url-to-mp4/$JOB_ID")
-            echo "--- poll $i ---"
+          for i in {1..540}; do
+            response=$(curl -fsS --max-time 60 "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID")
+            echo "--- AI poll $i ---"
             echo "$response"
-            status=$(printf '%s' "$response" | python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')
-            if [ "$status" = "done" ]; then
+            status=$(printf '%s' "$response" | python -c 'import json,sys; print(str(json.load(sys.stdin).get("status","")).lower())')
+            if [ "$status" = "done" ] || [ "$status" = "completed" ] || [ "$status" = "success" ]; then
+              printf '%s' "$response" > ai-render-result.json
               python - "$response" <<'PY'
           import json,sys
-          d=json.loads(sys.argv[1]); s=d["source"]; f=d["final"]
-          assert d["size"] > 0
-          assert abs(float(s["duration"])-float(f["duration"])) <= max(1.0,float(s["duration"])*0.01)
-          assert s["width"] == f["width"] and s["height"] == f["height"]
-          assert bool(s["audioLine"]) == bool(f["audioLine"])
-          print("AUTOTUBE_EXACT_MP4_VALIDATION_PASS")
+          d=json.loads(sys.argv[1])
+          candidates=[]
+          for k in ('downloadUrl','videoUrl','url','outputUrl','fileUrl'):
+              if d.get(k): candidates.append(str(d[k]))
+          print('VIDEO_URL_CANDIDATES=',candidates)
+          assert candidates, 'AI render finished without an MP4 URL'
           PY
-              curl -fL --retry 3 --max-time 1200 "https://autotube-hfeu.onrender.com/api/url-to-mp4/$JOB_ID/download" -o autotube-final.mp4
-              test -s autotube-final.mp4
-              sudo apt-get update -qq
-              sudo apt-get install -y -qq ffmpeg
-              ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels -of json autotube-final.mp4 | tee autotube-ffprobe.json
-              exit 0
+              break
             fi
-            if [ "$status" = "error" ]; then echo "AUTOTUBE_EXACT_MP4_FAIL"; exit 1; fi
+            if [ "$status" = "error" ] || [ "$status" = "failed" ]; then
+              echo "AUTOTUBE_AI_RENDER_FAIL"
+              exit 1
+            fi
             sleep 5
           done
-          echo "AUTOTUBE_EXACT_MP4_TIMEOUT"; exit 1
+          test -s ai-render-result.json
+          python - ai-render-result.json <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))
+          urls=[]
+          for k in ('downloadUrl','videoUrl','url','outputUrl','fileUrl'):
+              if d.get(k): urls.append(str(d[k]))
+          if not urls:
+              urls=[f'https://autotube-hfeu.onrender.com/api/url-to-video/{d["jobId"]}/download'] if d.get('jobId') else []
+          assert urls
+          open('ai-download-url.txt','w').write(urls[0])
+          PY
+          curl -fL --retry 3 --max-time 1800 "$(cat ai-download-url.txt)" -o autotube-ai-final.mp4
+          test -s autotube-ai-final.mp4
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels -of json autotube-ai-final.mp4 | tee autotube-ai-ffprobe.json
+          python - <<'PY'
+          import json
+          d=json.load(open('autotube-ai-ffprobe.json'))
+          assert float(d['format']['duration']) > 0
+          assert int(d['format']['size']) > 100000
+          video=[s for s in d['streams'] if s.get('codec_type')=='video']
+          assert video and video[0].get('width',0)>=1280 and video[0].get('height',0)>=720
+          print('AUTOTUBE_AI_MP4_VALIDATION_PASS')
+          PY
 
-      - name: Upload verified MP4
+      - name: Upload verified AI MP4
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: autotube-verified-mp4
+          name: autotube-ai-verified-mp4
           path: |
-            autotube-final.mp4
-            autotube-ffprobe.json
+            autotube-ai-final.mp4
+            autotube-ai-ffprobe.json
+            ai-render-result.json
           retention-days: 7
