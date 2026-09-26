@@ -58,7 +58,7 @@ async function downloadYoutubeReference(url,dir){
   // another verifier run, leaving a partial source.mp4 (moov atom not found).
   // Call the same exact downloader directly and validate before returning.
   try{
-    const downloaded=await downloadExactYoutube(url,dir);
+    const exactDownloader=global.__autotubeDownloadExactYoutube;if(typeof exactDownloader!=='function')throw new Error('El descargador exacto no está disponible en el verificador.');const downloaded=await exactDownloader(url,dir);
     const sourcePath=String(downloaded?.source||'');
     if(!sourcePath)throw new Error('El descargador exacto no devolvió ruta de archivo.');
     const sourceProbe=await probe(sourcePath);
