@@ -25,15 +25,33 @@ jobs:
           URL: https://youtu.be/mh48xOkLhgU?si=FxdwPeg3v2TMmo_H
         run: |
           mkdir -p /tmp/ref
-          yt-dlp --js-runtimes node --remote-components ejs:github \
-            --extractor-args "youtube:player_client=web_safari,android_vr,tv" \
-            --format "bestvideo*+bestaudio/best" \
-            --merge-output-format mp4 --no-playlist --force-ipv4 \
-            --retries 10 --fragment-retries 10 \
-            -o "/tmp/ref/reference.%(ext)s" "$URL"
+          python -m pip install -U yt-dlp
+          success=0
+          for strategy in \
+            'tv|best[ext=mp4]/18' \
+            'web_embedded|bestvideo*+bestaudio/best' \
+            'web_safari|bestvideo*+bestaudio/best' \
+            'android_vr|18/best[ext=mp4]'; do
+            client="${strategy%%|*}"
+            format="${strategy#*|}"
+            echo "Trying YouTube client: $client"
+            rm -f /tmp/ref/reference.*
+            if python -m yt_dlp --js-runtimes node --remote-components ejs:github \
+              --extractor-args "youtube:player_client=$client;player_skip=webpage,configs" \
+              --format "$format" --merge-output-format mp4 --no-playlist --force-ipv4 \
+              --retries 10 --fragment-retries 10 --concurrent-fragments 1 \
+              -o "/tmp/ref/reference.%(ext)s" "$URL"; then
+              if test -s /tmp/ref/reference.mp4; then
+                success=1
+                echo "SUCCESS with $client"
+                break
+              fi
+            fi
+          done
+          test "$success" = 1
           ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,avg_frame_rate,codec_type \
             -of json /tmp/ref/reference.mp4 | tee /tmp/ref/probe.json
-          test -s /tmp/ref/reference.mp4
+          test "$(stat -c%s /tmp/ref/reference.mp4)" -gt 100000
       - name: Publish reference artifact to release
         env:
           GH_TOKEN: ${{ github.token }}
