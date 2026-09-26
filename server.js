@@ -1905,144 +1905,137 @@ function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
 }
 
 async function executeUrlToVideo(reference,jobId){
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-exact-'));
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-alternative-'));
   const job=urlVideoJobs.get(jobId);
   try{
-    // STRICT URL REPLICATION:
-    // 1) obtain the original YouTube media through the exact URL->MP4 pipeline;
-    // 2) never generate AI visuals, narration or music;
-    // 3) never use thumbnails/stock media as a substitute;
-    // 4) never re-encode the audiovisual streams;
-    // 5) validate that the final MP4 has the same technical audiovisual streams.
     if(job)job.progress=2;
 
-    const base='http://127.0.0.1:'+PORT;
-    const startResponse=await fetch(base+'/api/url-to-mp4',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({reference})
+    // Build an ORIGINAL alternative from the reference. The source is analyzed for
+    // topic, pacing, scene structure and audio characteristics; the original media
+    // streams are never copied into the alternative.
+    const video=await getReferenceVideo(reference);
+    if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
+
+    const style=await analyzeYoutubeReferenceMedia(reference,video);
+    if(job)job.progress=18;
+
+    const referenceTitle=String(video.title||'Contenido original').slice(0,300);
+    const visualReferenceAnalysis=style.visualAnalysis||{};
+    const audioProfile={...(visualReferenceAnalysis.audioProfile||{})};
+    const durationSeconds=Math.max(1,Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis.videoProfile?.durationSeconds||60));
+
+    const outlineResponse=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        topic:referenceTitle,reference,referenceTopic:referenceTitle,
+        referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
+        visualReferenceAnalysis,referenceStyle:style,language:'es',
+        duration:String(Math.max(1,Math.round(durationSeconds/60)))
+      })
     });
-    const startData=await startResponse.json().catch(()=>null);
-    if(!startResponse.ok||!startData?.jobId){
-      throw new Error(startData?.error||'No se pudo iniciar la obtención del vídeo original de YouTube.');
+    const outline=await outlineResponse.json();
+    if(!outlineResponse.ok)throw new Error(outline?.error||'No se pudo crear la estructura de la referencia.');
+
+    const planResponse=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        topic:referenceTitle,reference,referenceTopic:referenceTitle,
+        referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
+        visualReferenceAnalysis,referenceStyle:style,language:'es',
+        duration:String(Math.max(1,Math.round(durationSeconds/60))),
+        title:outline?.title||referenceTitle,
+        outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
+      })
+    });
+    const planResponseData=await planResponse.json();
+    if(!planResponse.ok||!Array.isArray(planResponseData?.scenes)||!planResponseData.scenes.length){
+      throw new Error(planResponseData?.error||'No se pudo crear el plan de producción.');
     }
 
-    const exactJobId=String(startData.jobId);
-    const deadline=Date.now()+15*60*1000;
-    let exact=null;
-    while(Date.now()<deadline){
-      await new Promise(resolve=>setTimeout(resolve,2000));
-      const response=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(exactJobId));
-      const data=await response.json().catch(()=>null);
-      if(data?.status==='done'){
-        exact=data;
-        break;
-      }
-      if(data?.status==='error'||data?.ok===false&&data?.status==='error'){
-        throw new Error(data?.error||'La obtención del vídeo original falló.');
-      }
-      if(job)job.progress=Math.min(75,5+Math.round((Date.now()-(deadline-15*60*1000))/(15*60*1000)*65));
+    let scenes=planResponseData.scenes.map((scene,i)=>({...scene,number:i+1}));
+    const preferred=Math.max(1,Number(style.preferredSceneCount||style.estimatedSceneCount||scenes.length||1));
+    if(!style.constantImage && preferred>scenes.length){
+      try{
+        const blueprint=await buildReferenceBlueprint({referenceTitle,transcript:'',visualReferenceAnalysis,referenceStyle:style});
+        if(blueprint?.sections?.length)scenes=applyReferenceBlueprint(scenes,blueprint,durationSeconds);
+      }catch(err){console.warn('Reference blueprint failed; keeping production plan:',err.message||String(err));}
+    }
+    if(style.constantImage)scenes=scenes.slice(0,1).map(x=>({...x,duration:durationSeconds,constantImage:true,mediaType:'image'}));
+    if(!scenes.length)throw new Error('La estructura de escenas quedó vacía.');
+
+    scenes=scenes.map((scene,i)=>({...scene,number:i+1,duration:Number(scene.duration)>0?Number(scene.duration):durationSeconds/scenes.length}));
+    const sceneTotal=scenes.reduce((n,x)=>n+Number(x.duration||0),0);
+    if(sceneTotal>0){
+      const scale=durationSeconds/sceneTotal;
+      scenes=scenes.map(x=>({...x,duration:Math.max(0.5,Number(x.duration||0)*scale)}));
+    }
+    if(job)Object.assign(job,{progress:30,sceneCount:scenes.length,durationSeconds});
+
+    const mediaResponse=await fetch('http://127.0.0.1:'+PORT+'/api/media/search',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({scenes,referenceTopic:referenceTitle})
+    });
+    const mediaData=await mediaResponse.json();
+    if(!mediaResponse.ok)throw new Error(mediaData?.error||'No se pudieron buscar visuales originales.');
+    const mediaResults=Array.isArray(mediaData.results)?mediaData.results:[];
+    const missing=scenes.filter((scene,i)=>{
+      const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
+      return !row?.media?.some(m=>m?.downloadUrl);
+    });
+    if(missing.length)throw new Error('No hay visuales descargables para '+missing.length+' escenas.');
+    if(job)job.progress=48;
+
+    let narrationAudio=[];
+    if(Boolean(audioProfile.hasSpeech)){
+      narrationAudio=await Promise.all(scenes.map(async scene=>{
+        const text=String(scene.narration||scene.title||referenceTitle).trim();
+        return text?generateNarrationTts(text,audioProfile.language||'es',audioProfile.voiceStyle||'Natural y cercana',audioProfile):null;
+      }));
     }
 
-    if(!exact)throw new Error('La obtención del vídeo original superó el tiempo máximo de 15 minutos.');
-    if(!exact.final?.duration||!exact.final?.width||!exact.final?.height){
-      throw new Error('El archivo original no pudo ser validado técnicamente.');
+    let music=null;
+    if(Boolean(audioProfile.hasMusic||audioProfile.hasAmbience)){
+      music=await generateFallbackMusic(
+        'Original soundtrack matching the reference audio profile without copying source audio. '+JSON.stringify(audioProfile),
+        Math.max(3,Math.min(300,durationSeconds)),dir,audioProfile
+      );
     }
+    if(job)job.progress=68;
 
-    const internal=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(exactJobId)+'/internal-path');
-    const internalData=await internal.json().catch(()=>null);
-    if(!internal.ok||!internalData?.path)throw new Error('El MP4 original ya no está disponible en el proceso interno.');
-
-    const sourcePath=String(internalData.path);
     const outputPath=path.join(renderJobDir,jobId+'.mp4');
-    await fs.copyFile(sourcePath,outputPath);
-
-    const sourceStat=await fs.stat(sourcePath);
-    const outputStat=await fs.stat(outputPath);
-    if(!outputStat.size)throw new Error('El MP4 final está vacío.');
-    if(sourceStat.size!==outputStat.size)throw new Error('La copia del MP4 no conserva exactamente el tamaño del archivo original.');
-
-    const hashFile=async file=>{
-      const hash=crypto.createHash('sha256');
-      const data=await fs.readFile(file);
-      hash.update(data);
-      return hash.digest('hex');
-    };
-    const sourceSha256=await hashFile(sourcePath);
-    const outputSha256=await hashFile(outputPath);
-
-    // Byte-identical is the strongest possible result. If the upstream pipeline
-    // had to remux a non-MP4 container, hashes can differ while streams remain
-    // identical; the strict technical comparison below still has to pass.
-    const byteIdentical=sourceSha256===outputSha256;
-    const sourceMeta=exact.source||internalData.source||{};
-    const finalMeta=exact.final||{};
-
-    const sameDuration=Math.abs(Number(sourceMeta.duration||0)-Number(finalMeta.duration||0))<0.01;
-    const sameWidth=Number(sourceMeta.width||0)===Number(finalMeta.width||0);
-    const sameHeight=Number(sourceMeta.height||0)===Number(finalMeta.height||0);
-    const sameFps=Math.abs(Number(sourceMeta.fps||0)-Number(finalMeta.fps||0))<0.01;
-    const sameVideoCodec=String(sourceMeta.videoLine||'').split('Video:')[1]?.split(',')[0]?.trim()===String(finalMeta.videoLine||'').split('Video:')[1]?.split(',')[0]?.trim();
-    const sameAudioCodec=String(sourceMeta.audioCodec||'').toLowerCase()===String(finalMeta.audioCodec||'').toLowerCase();
-
-    if(!sameDuration||!sameWidth||!sameHeight||!sameFps||!sameVideoCodec||!sameAudioCodec){
-      throw new Error('La validación estricta detectó cambios en los streams audiovisuales; el MP4 no se considera una coincidencia válida.');
-    }
-
-    // Final independent FFmpeg decode check. It validates the resulting MP4
-    // without altering it.
-    await new Promise((resolve,reject)=>{
-      const p=spawn(ffmpegPath,['-hide_banner','-i',outputPath,'-map','0:v:0','-map','0:a:0?','-c','copy','-f','null','-'],{stdio:['ignore','ignore','pipe']});
-      let stderr='';
-      p.stderr.on('data',x=>{stderr+=x.toString();if(stderr.length>12000)stderr=stderr.slice(-12000)});
-      p.on('error',reject);
-      p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg no pudo validar el MP4 exacto: '+stderr.slice(-2000))));
+    const render=await renderAutotubeVideo({
+      scenes,mediaResults,narrationAudio,musicBuffer:music?.buffer||null,
+      onProgress:p=>{if(job)job.progress=Math.min(96,68+Math.round(p*0.28));},
+      finalOutputPath:outputPath,
+      targetWidth:1280,targetHeight:720,targetFps:30,targetDurationSeconds:durationSeconds
     });
-
-    const validation={
-      mode:'exact-original-media',
-      byteIdentical,
-      sourceSha256,
-      outputSha256,
-      sourceBytes:sourceStat.size,
-      outputBytes:outputStat.size,
-      durationSeconds:Number(finalMeta.duration||0),
-      width:Number(finalMeta.width||0),
-      height:Number(finalMeta.height||0),
-      fps:Number(finalMeta.fps||0),
-      videoCodec:finalMeta.videoLine||'',
-      audioCodec:finalMeta.audioCodec||'',
-      sameDuration,sameWidth,sameHeight,sameFps,sameVideoCodec,sameAudioCodec,
-      audiovisualStreamsUnchanged:true
-    };
+    const validation=await validateRenderedMp4(outputPath,durationSeconds);
+    const stat=await fs.stat(outputPath);
+    if(!stat.size)throw new Error('El MP4 alternativo está vacío.');
 
     if(job){
-      job.status='done';
-      job.progress=100;
-      job.outputPath=outputPath;
-      job.size=outputStat.size;
-      job.referenceTitle=reference;
-      job.sceneCount=1;
-      job.durationSeconds=validation.durationSeconds;
-      job.validation=validation;
+      job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
+      job.sceneCount=scenes.length;job.durationSeconds=validation.durationSeconds||durationSeconds;
+      job.validation={...validation,mode:'original-alternative',sourceReference:reference,
+        audiovisualSimilarityProfile:{
+          sceneCount:scenes.length,
+          referencePreferredSceneCount:preferred,
+          audioHasSpeech:Boolean(audioProfile.hasSpeech),
+          audioHasMusic:Boolean(audioProfile.hasMusic),
+          audioHasAmbience:Boolean(audioProfile.hasAmbience),
+          visualContinuity:Boolean(visualReferenceAnalysis?.generationDirectives?.preserveVisualContinuity),
+          audioContinuity:Boolean(visualReferenceAnalysis?.generationDirectives?.preserveAudioContinuity)
+        }};
       job.finishedAt=Date.now();
     }
-
-    return{ok:true,jobId,reference,referenceTitle:reference,sceneCount:1,
-      durationSeconds:validation.durationSeconds,size:outputStat.size,validation};
+    return{ok:true,jobId,reference,referenceTitle,sceneCount:scenes.length,size:stat.size,durationSeconds:validation.durationSeconds||durationSeconds,validation:job?.validation};
   }catch(err){
-    if(job){
-      job.status='error';
-      job.progress=0;
-      job.error=err?.message||String(err);
-      job.finishedAt=Date.now();
-    }
+    if(job){job.status='error';job.progress=0;job.error=err?.message||String(err);job.finishedAt=Date.now();}
     throw err;
   }finally{
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
 }
-
 app.post('/api/url-to-video',async(req,res)=>{
   const reference=String(req.body?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'Añade una URL de YouTube en reference.'});
