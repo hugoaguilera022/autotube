@@ -2117,6 +2117,14 @@ app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
 });
 
 
+setTimeout(()=>{
+  const reference='https://www.youtube.com/watch?v=jNQXAC9IVRw';
+  const jobId='urlvideo_oneshot_'+Date.now();
+  const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null,testOnly:true};
+  urlVideoJobs.set(jobId,job);
+  console.log('AUTOTUBE_REFERENCE_ONESHOT_START',jobId,reference);
+  executeUrlToVideo(reference,jobId).then(()=>console.log('AUTOTUBE_REFERENCE_ONESHOT_DONE',jobId,job.status,job.outputPath)).catch(err=>console.error('AUTOTUBE_REFERENCE_ONESHOT_ERROR',jobId,err?.message||String(err)));
+},15000);
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
