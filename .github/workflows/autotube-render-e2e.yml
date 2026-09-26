@@ -24,10 +24,11 @@ jobs:
             sleep 10
           done
           test -s /tmp/health.json
-          # Render can return the old healthy instance for a short time while the
-          # new commit is being rolled out. Give the new container a brief window
-          # to replace it before starting a long-running render job.
-          sleep 75
+          # The health endpoint can be served by the old instance while Render
+          # is still switching containers. The deployment observed in Render
+          # takes about two minutes; wait long enough that the render job is not
+          # killed by the next container replacement.
+          sleep 180
 
       - name: Start AI URL-to-video pipeline
         id: aivideo
