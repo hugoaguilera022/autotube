@@ -46,5 +46,43 @@
     }finally{if(btn){btn.disabled=false;btn.textContent='▶ Generar vídeo original desde esta URL';}}
   }
 
-  window.addEventListener('DOMContentLoaded',function(){var exact=document.getElementById('urlToVideoBtn');if(exact)exact.onclick=exactUrlToMp4;var y=document.getElementById('youtubeBtn'),y2=document.getElementById('youtubeConnect2');if(y)y.onclick=connect;if(y2)y2.onclick=connect;health();});
+  async function showYoutubeTranscript(){
+    var input=document.getElementById('reference'),btn=document.getElementById('viewTranscriptBtn'),panel=document.getElementById('transcriptPanel'),area=document.getElementById('youtubeTranscript'),state=document.getElementById('transcriptState'),meta=document.getElementById('transcriptMeta');
+    var reference=String(input&&input.value||'').trim();
+    if(!reference)return alert('Añade primero una URL de YouTube.');
+    if(btn)btn.disabled=true;
+    if(state)state.textContent='Obteniendo guion…';
+    try{
+      var r=await fetch('/api/youtube/transcript?language='+encodeURIComponent(document.getElementById('language')?.value||'es')+'&reference='+encodeURIComponent(reference),{cache:'no-store'});
+      var d=await r.json().catch(function(){return null;});
+      if(!r.ok||!d?.available)throw new Error(d?.error||'No hay una transcripción accesible para este vídeo.');
+      window.autotubeReferenceTranscript=String(d.transcript||'');
+      window.autotubeReferenceTranscriptLanguage=d.language||'';
+      if(panel)panel.classList.remove('hidden');
+      if(area)area.value=window.autotubeReferenceTranscript;
+      if(meta)meta.textContent=(d.language||'')+' · '+(d.source||'YouTube');
+      if(state)state.textContent='✓ Guion disponible';
+    }catch(e){
+      if(state)state.textContent='No disponible';
+      if(panel)panel.classList.remove('hidden');
+      if(area)area.value='';
+      alert(String(e?.message||e));
+    }finally{if(btn)btn.disabled=false;}
+  }
+  function useYoutubeTranscript(){
+    var text=String(window.autotubeReferenceTranscript||document.getElementById('youtubeTranscript')?.value||'').trim();
+    if(!text)return alert('Primero obtén una transcripción.');
+    var direct=document.getElementById('scriptInput');
+    if(direct){
+      direct.value=text;
+      direct.dispatchEvent(new Event('input',{bubbles:true}));
+      var topic=document.getElementById('topic')?.value||'';
+      var brief=document.getElementById('briefTopic');
+      if(brief&&!String(brief.value||'').trim()&&topic)brief.value=topic;
+      alert('Guion cargado en la creación directa. Puedes editarlo antes de generar.');
+    }else{
+      alert('Guion guardado para la siguiente generación.');
+    }
+  }
+  window.addEventListener('DOMContentLoaded',function(){var exact=document.getElementById('urlToVideoBtn');if(exact)exact.onclick=exactUrlToMp4;var transcript=document.getElementById('viewTranscriptBtn');if(transcript)transcript.onclick=showYoutubeTranscript;var useTranscript=document.getElementById('useTranscriptBtn');if(useTranscript)useTranscript.onclick=useYoutubeTranscript;var y=document.getElementById('youtubeBtn'),y2=document.getElementById('youtubeConnect2');if(y)y.onclick=connect;if(y2)y2.onclick=connect;health();});
 })();
