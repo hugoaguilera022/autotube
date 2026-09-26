@@ -1962,8 +1962,90 @@ app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
   return res.status(j.result?.ok?200:503).json({status:j.status,jobId:j.id,...(j.result||{ok:false})});
 });
 
+
+async function executeDirectPipelineSmokeTest(){
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-direct-smoke-'));
+  const checks={};
+  const started=Date.now();
+  const run=async(name,fn)=>{
+    const t=Date.now();
+    try{const value=await fn();checks[name]={ok:true,ms:Date.now()-t,...(value&&typeof value==='object'?value:{})};return value;}
+    catch(err){checks[name]={ok:false,ms:Date.now()-t,error:err?.message||String(err)};throw err;}
+  };
+  try{
+    const brief='Vídeo educativo original sobre cómo se forman las tormentas y por qué producen rayos.';
+    const script='Las tormentas nacen cuando el aire cálido y húmedo asciende y se encuentra con capas más frías de la atmósfera. Dentro de la nube, las corrientes de aire separan cargas eléctricas hasta crear una diferencia de potencial que puede terminar en un rayo.';
+    let plan=null;
+    await run('production-plan-direct',async()=>{
+      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          topic:brief,brief,customScript:script,outline:[script],
+          visualReferences:'Animación cinematográfica educativa, atmósfera realista, cámara suave.',
+          visualIdeas:['Animación cinematográfica de una tormenta, nubes volumétricas y rayos.'],
+          language:'es',duration:'1',title:'Cómo se forman las tormentas',
+          reference:'',referenceData:null,referenceTopic:brief,
+          visualReferenceAnalysis:null,referenceStyle:null,creationMode:'brief'
+        })
+      });
+      const d=await r.json().catch(()=>null);
+      if(!r.ok||!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error(d?.error||'El plan directo no devolvió escenas.');
+      plan=d;
+      if(String(d.reference||'')!=='')throw new Error('El plan directo conservó una referencia de YouTube.');
+      return{scenes:d.scenes.length,hasYouTubeReference:Boolean(d.reference),firstNarration:String(d.scenes[0]?.narration||'').slice(0,180)};
+    });
+
+    const scene={...(plan.scenes[0]||{}),number:1,duration:6,mediaType:'image',constantImage:true};
+    await run('visual-local-fallback',async()=>{
+      const image=path.join(dir,'visual.png');
+      const source=path.join(dir,'visual.mp4');
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','gradients=s=1280x720:c0=0x0b1020:c1=0x294b70','-frames:v','1',image]);
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',image,'-t','6','-vf','scale=1280:720,fps=30,format=yuv420p','-an','-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-threads','1',source]);
+      const check=await validateGeneratedVideoClip(source);
+      return{provider:'local-ffmpeg-fallback',durationSeconds:check.durationSeconds,width:check.width,height:check.height};
+    });
+
+    const visualSource=path.join(dir,'visual.mp4');
+    const narration=await run('tts-direct',async()=>{
+      const audio=await generateNarrationTts(String(scene.narration||script),'es','Natural y cercana',{});
+      if(!audio?.length)throw new Error('TTS vacío.');
+      return{bytes:audio.length};
+    });
+
+    const music=await run('music-direct',async()=>{
+      const m=await generateFallbackMusic('Original instrumental educational background.',6,dir,{musicMood:'cinematic',energy:'medium'});
+      if(!m?.buffer?.length)throw new Error('Música vacía.');
+      return{provider:m.provider,bytes:m.buffer.length};
+    });
+
+    const finalPath=path.join(dir,'direct-smoke-final.mp4');
+    const rendered=await run('render-direct',async()=>{
+      const r=await renderAutotubeVideo({
+        scenes:[scene],
+        mediaResults:[{number:1,media:[{downloadUrl:visualSource,mediaType:'video'}]}],
+        aiClips:[],
+        narrationAudio:[narration],
+        musicBuffer:music.buffer,
+        finalOutputPath:finalPath,
+        onProgress:()=>{}
+      });
+      const validation=await validateRenderedMp4(finalPath,6);
+      return{bytes:r.size,validation};
+    });
+    return{ok:true,mode:'direct-brief',elapsedMs:Date.now()-started,checks,mp4Bytes:rendered.bytes,validation:rendered.validation};
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+}
+
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
 httpServer.keepAliveTimeout=120000;
+setTimeout(async()=>{
+  try{
+    const result=await executeDirectPipelineSmokeTest();
+    console.log('AUTOTUBE DIRECT PIPELINE SMOKE PASS:',JSON.stringify(result));
+  }catch(err){
+    console.error('AUTOTUBE DIRECT PIPELINE SMOKE FAIL:',err?.message||String(err));
+  }
+},8000);
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
 const startupSelfTestReference='https://www.youtube.com/watch?v=dQw4w9WgXcQ';
