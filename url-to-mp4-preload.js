@@ -152,7 +152,7 @@ async function downloadViaCobalt(url,dir){
   let last='';
   for(const base of instances){
     try{
-      const headers={'Accept':'application/json','Content-Type':'application/json'};
+      const headers={'Accept':'application/json','Content-Type':'application/json','User-Agent':'AutoTube/1.0 (+https://github.com/hugoaguilera022/autotube)'};
       const key=String(process.env.AUTOTUBE_COBALT_API_KEY||'').trim();
       if(key)headers.Authorization='Api-Key '+key;
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
@@ -160,7 +160,7 @@ async function downloadViaCobalt(url,dir){
       try{
         r=await fetch(base+'/',{method:'POST',headers,body:JSON.stringify({
           url,videoQuality:'max',downloadMode:'auto',youtubeVideoCodec:'h264',
-          youtubeVideoContainer:'mp4',youtubeBetterAudio:true,disableMetadata:false
+          youtubeVideoContainer:'mp4',youtubeBetterAudio:true,disableMetadata:false,alwaysProxy:true,localProcessing:'disabled'
         }),signal:controller.signal});
       }finally{clearTimeout(timer)}
       const raw=await r.text();
@@ -169,7 +169,7 @@ async function downloadViaCobalt(url,dir){
       if(data.status==='error')throw new Error(base+' '+String(data.code||'error')+' '+JSON.stringify(data.context||{}));
       const fileUrl=data.url;
       if(!fileUrl)throw new Error(base+' no devolvió URL de archivo: '+raw.slice(0,700));
-      const fr=await fetch(fileUrl,{headers:key?{Authorization:'Api-Key '+key}:{}});
+      const fr=await fetch(fileUrl,{redirect:'follow',headers:{'User-Agent':'AutoTube/1.0 (+https://github.com/hugoaguilera022/autotube)',Accept:'video/mp4,video/*,application/octet-stream,*/*',...(key?{Authorization:'Api-Key '+key}:{})}});
       if(!fr.ok||!fr.body)throw new Error(base+' file HTTP '+fr.status);
       const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
       try{const reader=fr.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
