@@ -36,6 +36,7 @@ jobs:
             STATUS=$(python -c "import json; print(json.load(open('result.json')).get('status',''))" 2>/dev/null || true)
             if [ "$STATUS" = "done" ]; then exit 0; fi
             if [ "$STATUS" = "failed" ]; then exit 1; fi
+            if [ "$STATUS" = "" ] || [ "$STATUS" = "not_found" ]; then sleep 2; fi
             sleep 5
           done
           echo "Timed out"
