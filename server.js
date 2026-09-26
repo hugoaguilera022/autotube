@@ -1898,8 +1898,8 @@ async function executeUrlToVideo(reference,jobId){
     // had to remux a non-MP4 container, hashes can differ while streams remain
     // identical; the strict technical comparison below still has to pass.
     const byteIdentical=sourceSha256===outputSha256;
-    const sourceMeta=internalData.final||exact.final;
-    const finalMeta=exact.final;
+    const sourceMeta=exact.source||internalData.source||{};
+    const finalMeta=exact.final||{};
 
     const sameDuration=Math.abs(Number(sourceMeta.duration||0)-Number(finalMeta.duration||0))<0.01;
     const sameWidth=Number(sourceMeta.width||0)===Number(finalMeta.width||0);
