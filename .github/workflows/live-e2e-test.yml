@@ -28,3 +28,5 @@ jobs:
           done
           echo "Timed out"
           exit 1
+
+# live target verification pass
