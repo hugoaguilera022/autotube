@@ -1,0 +1,46 @@
+name: AutoTube E2E verification
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    if: contains(github.event.head_commit.message, '[e2e]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Run full pipeline test against Render
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://autotube-hfeu.onrender.com"
+          REF="https://www.youtube.com/watch?v=qMUk5jrgENE"
+          start=$(curl -fsS --max-time 30 "$BASE/api/full-pipeline-test?reference=$(python -c 'import urllib.parse; print(urllib.parse.quote("'"$REF"'"))')")
+          echo "$start"
+          job=$(echo "$start" | jq -r '.jobId // empty')
+          if [ -z "$job" ]; then
+            echo "No se obtuvo jobId"
+            exit 1
+          fi
+          for i in $(seq 1 120); do
+            sleep 10
+            status=$(curl -fsS --max-time 30 "$BASE/api/full-pipeline-test/$job")
+            echo "$status"
+            state=$(echo "$status" | jq -r '.status // empty')
+            if [ "$state" = "done" ]; then
+              ok=$(echo "$status" | jq -r '.ok // false')
+              if [ "$ok" != "true" ]; then
+                echo "E2E terminó sin ok=true"
+                exit 1
+              fi
+              echo "AUTOTUBE E2E MP4 PASS"
+              exit 0
+            fi
+            if [ "$state" = "failed" ] || [ "$state" = "error" ]; then
+              echo "E2E falló"
+              exit 1
+            fi
+          done
+          echo "Timeout esperando E2E"
+          exit 1
