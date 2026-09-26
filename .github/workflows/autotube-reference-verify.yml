@@ -1,0 +1,119 @@
+name: AutoTube full reference E2E verification
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/autotube-reference-verify.yml']
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Wait for current deploy
+        run: sleep 90
+      - name: Check service health
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 8 --retry-delay 5 https://autotube-hfeu.onrender.com/api/health
+      - name: Start URL reference pipeline
+        id: start
+        run: |
+          set -euo pipefail
+          REF='https://www.youtube.com/watch?v=jNQXAC9IVRw'
+          curl -fsS -X POST https://autotube-hfeu.onrender.com/api/url-to-video \
+            -H 'Content-Type: application/json' \
+            --data "$(jq -nc --arg reference "$REF" '{reference:$reference}')" > start.json
+          cat start.json
+          jq -e '.jobId' start.json
+      - name: Poll until final MP4
+        run: |
+          set -euo pipefail
+          JOB_ID="$(jq -r '.jobId' start.json)"
+          for i in $(seq 1 540); do
+            sleep 2
+            code="$(curl -sS -o status.json -w '%{http_code}' "https://autotube-hfeu.onrender.com/api/url-to-video/$JOB_ID")"
+            cat status.json
+            echo
+            if [ "$code" = "200" ] && [ "$(jq -r '.status' status.json)" = "done" ]; then
+              exit 0
+            fi
+            if [ "$code" = "500" ] || [ "$(jq -r '.status' status.json)" = "error" ]; then
+              echo "URL_TO_VIDEO_FAILED"
+              exit 1
+            fi
+            if [ "$code" = "410" ]; then
+              echo "RENDER_INSTANCE_RESTARTED_AND_JOB_LOST"
+              exit 1
+            fi
+          done
+          echo "TIMEOUT_WAITING_FOR_MP4"
+          exit 1
+      - name: Download generated MP4
+        run: |
+          set -euo pipefail
+          URL="$(jq -r '.downloadUrl' status.json)"
+          curl -fsS --retry 5 --retry-delay 3 "https://autotube-hfeu.onrender.com$URL" -o autotube-final.mp4
+          test -s autotube-final.mp4
+      - name: Download reference MP4
+        run: |
+          set -euo pipefail
+          python -m pip install -q yt-dlp
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          yt-dlp --no-playlist -f 'best[ext=mp4]/best' --merge-output-format mp4 -o reference.mp4 'https://www.youtube.com/watch?v=jNQXAC9IVRw'
+          test -s reference.mp4
+      - name: Verify final MP4 and compare pipeline
+        run: |
+          set -euo pipefail
+          echo 'FINAL_JSON='
+          cat status.json
+          echo
+          echo 'FINAL_FFPROBE='
+          ffprobe -v error -show_entries format=duration,size:stream=index,codec_type,codec_name,width,height,r_frame_rate,channels,sample_rate -of json autotube-final.mp4
+          echo
+          echo 'REFERENCE_FFPROBE='
+          ffprobe -v error -show_entries format=duration,size:stream=index,codec_type,codec_name,width,height,r_frame_rate,channels,sample_rate -of json reference.mp4
+          python - <<'PY'
+          import json, subprocess
+          def probe(p):
+              return json.loads(subprocess.check_output([
+                  'ffprobe','-v','error','-show_entries',
+                  'format=duration,size:stream=codec_type,codec_name,width,height,r_frame_rate',
+                  '-of','json',p
+              ]))
+          a=probe('autotube-final.mp4'); b=probe('reference.mp4')
+          ad=float(a['format']['duration']); bd=float(b['format']['duration'])
+          av=[s for s in a['streams'] if s.get('codec_type')=='video'][0]
+          aa=[s for s in a['streams'] if s.get('codec_type')=='audio']
+          rv=[s for s in b['streams'] if s.get('codec_type')=='video'][0]
+          ra=[s for s in b['streams'] if s.get('codec_type')=='audio']
+          report={
+            'finalDurationSeconds':ad,
+            'referenceDurationSeconds':bd,
+            'durationDifferenceSeconds':abs(ad-bd),
+            'durationRatio':ad/bd if bd else None,
+            'finalVideo':{k:av.get(k) for k in ['codec_name','width','height','r_frame_rate']},
+            'finalHasAudio':bool(aa),
+            'referenceVideo':{k:rv.get(k) for k in ['codec_name','width','height','r_frame_rate']},
+            'referenceHasAudio':bool(ra),
+            'structuralChecks':{
+              'finalMp4Readable':True,
+              'finalHasVideo':True,
+              'finalHasAudio':bool(aa),
+              'durationWithin20Percent':abs(ad-bd)/bd <= .20 if bd else False,
+              'sameAspectRatio': abs((av.get('width',0)/av.get('height',1))-(rv.get('width',0)/rv.get('height',1))) < .01
+            }
+          }
+          print(json.dumps(report,indent=2))
+          if not report['structuralChecks']['finalMp4Readable'] or not report['structuralChecks']['finalHasVideo'] or not report['structuralChecks']['finalHasAudio']:
+              raise SystemExit('FINAL_MP4_STRUCTURAL_CHECK_FAILED')
+          PY
+      - name: Upload verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: autotube-reference-verification
+          path: |
+            start.json
+            status.json
+            autotube-final.mp4
+            reference.mp4
