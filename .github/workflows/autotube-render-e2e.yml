@@ -55,7 +55,7 @@ jobs:
             set -e
             echo "--- AI poll $i job=$job_id curl=$code ---"
             echo "$response"
-            if [ "$code" -ne 0 ] || printf '%s' "$response" | grep -q 'Trabajo no encontrado\|servidor se reinició\|restart'; then
+            if [ "$code" -ne 0 ] || printf '%s' "$response" | grep -q 'Trabajo no encontrado\\|servidor se reinició\\|restart'; then
               if [ "$restarted" -eq 0 ]; then
                 echo 'AI job was lost during a Render restart; starting the URL-to-video job again.'
                 response2=$(curl -fsS --max-time 60 -X POST 'https://autotube-hfeu.onrender.com/api/url-to-video' -H 'Content-Type: application/json' --data "{\"reference\":\"$REFERENCE\",\"url\":\"$REFERENCE\"}")
