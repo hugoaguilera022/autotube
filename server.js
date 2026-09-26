@@ -54,8 +54,8 @@ async function getReferenceVideo(input){const rawInput=String(input||'').trim();
 async function downloadYoutubeReference(url,dir){
   // Prefer the verified external GitHub Actions reference artifact.
   try{
-    const artifactUrl=String(process.env.AUTOTUBE_REFERENCE_ARTIFACT_URL||'https://raw.githubusercontent.com/hugoaguilera022/autotube/main/reference-artifact/reference.mp4').trim();
-    const response=await fetch(artifactUrl,{redirect:'follow',headers:{'User-Agent':'AutoTube-reference/1.0',Accept:'video/mp4,application/octet-stream'}});
+    const artifactUrl=String(process.env.AUTOTUBE_REFERENCE_ARTIFACT_URL||'').trim();
+    const response=artifactUrl?await fetch(artifactUrl,{redirect:'follow',headers:{'User-Agent':'AutoTube-reference/1.0',Accept:'video/mp4,application/octet-stream'}}):null;
     if(response.ok&&response.body){
       const file=path.join(dir,'reference.mp4'),fh=await fs.open(file,'w');
       try{const reader=response.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
