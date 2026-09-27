@@ -2136,6 +2136,37 @@ async function collectGradioJob(job,timeoutSeconds){
   }finally{if(timer)clearTimeout(timer);}
 }
 
+async function generateGeminiOmniImageToVideoClip(imagePath,dir,options={}){
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('Falta GEMINI_API_KEY para generación de vídeo.');
+  const image=await fs.readFile(imagePath);
+  const mime='image/jpeg';
+  const prompt=String(options.prompt||'Turn this reference image into NEW original cinematic footage. Preserve the observed subject, environment, composition, lighting and visual identity, but create a different shot with new motion and camera movement. Do not reproduce the source frame literally, do not copy text, logos or recordings.').slice(0,7000);
+  const response=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions?key='+encodeURIComponent(key),{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      model:'gemini-omni-1.1-flash',
+      input:[
+        {type:'image',data:image.toString('base64'),mime_type:mime},
+        {type:'text',text:prompt}
+      ],
+      generation_config:{video_config:{task:'image_to_video'}},
+      response_format:{type:'video',aspect_ratio:'16:9'}
+    }),
+    signal:AbortSignal.timeout(600000)
+  });
+  const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}
+  if(!response.ok)throw new Error('Gemini vídeo HTTP '+response.status+': '+(data?.error?.message||raw.slice(0,500)));
+  const b64=data?.output_video?.data;
+  if(!b64)throw new Error('Gemini Omni no devolvió output_video.');
+  const outputPath=path.join(dir,'gemini-omni-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  await fs.writeFile(outputPath,Buffer.from(b64,'base64'));
+  const stat=await fs.stat(outputPath);
+  if(!stat.size)throw new Error('Gemini Omni devolvió un vídeo vacío.');
+  return{outputPath,bytes:stat.size,provider:'Google Gemini Omni Flash',model:'gemini-omni-1.1-flash',referenceDriven:true,status:'complete'};
+}
+
 async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('Jiny34/Image-to-video');
@@ -2333,12 +2364,12 @@ async function executeUrlToVideo(reference,jobId,options={}){
           await fs.writeFile(publicReferenceImage,imageBytes);
         }
         generatedVideo=await Promise.race([
-          generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),600000))
+          generateGeminiOmniImageToVideoClip(publicReferenceImage,dir,{prompt}),
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('gemini-omni timeout')),600000))
         ]);
       }catch(err){
-        videoProviderErrors.push('svd-space: '+String(err?.message||err));
-        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
+        videoProviderErrors.push('gemini-omni: '+String(err?.message||err));
+        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','gemini-omni',err?.message||String(err));
       }
       if(!generatedVideo?.outputPath) try{        generatedVideo=await Promise.race([generateWaveSpeedWanVideoClip(publicReferenceImage,dir,{prompt}),new Promise((_,reject)=>setTimeout(()=>reject(new Error('wan21-space timeout')),240000))]);      }catch(err){videoProviderErrors.push('wan21-space: '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','wan21-space',err?.message||String(err));}      if(!generatedVideo?.outputPath) for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
         try{
