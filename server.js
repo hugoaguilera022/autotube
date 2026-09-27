@@ -1932,7 +1932,7 @@ async function downloadReferenceDirectForAiE2E(url,dir){
   return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'direct-exact'};
 }
 
-async function executeUrlToVideo(reference,jobId){
+async function executeUrlToVideo(reference,jobId,options={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-alternative-'));
   const job=urlVideoJobs.get(jobId);
   try{
@@ -1941,13 +1941,22 @@ async function executeUrlToVideo(reference,jobId){
     // Build an ORIGINAL alternative from the reference. The source is analyzed for
     // topic, pacing, scene structure and audio characteristics; the original media
     // streams are never copied into the alternative.
-    const video=await getReferenceVideo(reference);
-    if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
+    let video;
     const referenceSourceDir=path.join(dir,'reference-source');
-    const referenceDownloaded=await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
+    const referenceDownloaded=options.directReferenceFile
+      ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
+      : await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
+    if(options.directReferenceFile){
+      video={title:options.referenceTitle||reference,videoId:'',channelTitle:'',duration:String(referenceDownloaded.probe?.durationSeconds||'')};
+    }else{
+      video=await getReferenceVideo(reference);
+    }
+    if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
     const referenceProbe=referenceDownloaded.probe||{};
     if(!referenceDownloaded?.bytes)throw new Error('No se obtuvo una referencia MP4 validada.');
-    const style=await analyzeYoutubeReferenceMedia(reference,video);
+    const style=options.directReferenceFile
+      ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
+      : await analyzeYoutubeReferenceMedia(reference,video);
     if(job)job.progress=18;
 
     const referenceTitle=String(video.title||'Contenido original').slice(0,300);
@@ -2185,7 +2194,7 @@ if(String(process.env.AUTOTUBE_E2E_REFERENCE||'').trim() && String(process.env.A
 // lanzar trabajos duplicados cuando Render recicla la instancia.
 if(String(process.env.AUTOTUBE_ENABLE_AI_E2E||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_ONCE||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){
   const aiReference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE).trim();
-  setTimeout(async()=>{console.log('AUTOTUBE AI E2E START',aiReference);try{const jobId='ai-e2e-'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference:aiReference,status:'processing',progress:1});const result=await executeUrlToVideo(aiReference,jobId);console.log('AUTOTUBE AI E2E RESULT',JSON.stringify(result));}catch(err){console.error('AUTOTUBE AI E2E FAILED',err?.stack||err?.message||String(err));}},25000);
+  setTimeout(async()=>{console.log('AUTOTUBE AI E2E START',aiReference);try{const jobId='ai-e2e-'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference:aiReference,status:'processing',progress:1});const directDir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-ref-')); const direct=await downloadReferenceDirectForAiE2E(aiReference,directDir); const result=await executeUrlToVideo(aiReference,jobId,{directReferenceFile:direct.file,referenceTitle:'AI reference'});console.log('AUTOTUBE AI E2E RESULT',JSON.stringify(result));}catch(err){console.error('AUTOTUBE AI E2E FAILED',err?.stack||err?.message||String(err));}},25000);
 }
 if(String(process.env.AUTOTUBE_VERIFY_FORCE_E2E||'')==='1'){
   const verifyReference='https://youtu.be/mh48xOkLhgU?si=FxdwPeg3v2TMmo_H';
