@@ -1656,7 +1656,7 @@ app.get('/api/preflight',async(_req,res)=>{
 
 
 const fullPipelineTestJobs=new Map();
-async function executeFullPipelineTest(reference){
+async function executeFullPipelineTest(reference,testId=null){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-full-test-'));
   const started=Date.now();
   const checks={};
@@ -1818,7 +1818,7 @@ async function executeFullPipelineTest(reference){
       elapsedMs:Date.now()-started,
       reference:{url:reference,title:referenceTitle,durationSeconds},
       checks,
-      result:{sceneCount:plan.scenes.length,referenceDurationSeconds:durationSeconds,renderedBytes:validation?.size||render?.size||0}
+      result:{sceneCount:plan.scenes.length,referenceDurationSeconds:durationSeconds,renderedBytes:validation?.size||render?.size||0,downloadPath:checks['render-all-scenes']?.downloadPath||null,downloadUrl:testId?'/api/full-pipeline-test/'+encodeURIComponent(testId)+'/download':null}
     };
   }finally{
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
@@ -2093,9 +2093,9 @@ app.get('/api/full-pipeline-test',async(req,res)=>{
   const id='fulltest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
   fullPipelineTestJobs.set(id,{id,reference,status:'running',startedAt:Date.now(),result:null});
   res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/full-pipeline-test/'+encodeURIComponent(id),message:'Prueba completa iniciada: YouTube → IA → vídeo → voz → música → MP4.'});
-  executeFullPipelineTest(reference).then(result=>{const j=fullPipelineTestJobs.get(id);if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}}).catch(err=>{const j=fullPipelineTestJobs.get(id);if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}});
+  executeFullPipelineTest(reference,id).then(result=>{const j=fullPipelineTestJobs.get(id);if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}}).catch(err=>{const j=fullPipelineTestJobs.get(id);if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}});
 });
-app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
+app.get('/api/full-pipeline-test/:jobId/download',async(req,res)=>{\n  const j=fullPipelineTestJobs.get(String(req.params.jobId||''));\n  const file=j?.result?.downloadPath;\n  if(!j||j.status!=='done'||!file)return res.status(404).json({ok:false,error:'El MP4 validado todavía no está disponible.'});\n  try{await fs.stat(file);res.download(file,'autotube-verified-final.mp4')}catch{res.status(404).json({ok:false,error:'El MP4 validado ya no está disponible.'})}\n});\napp.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
   const j=fullPipelineTestJobs.get(String(req.params.jobId||''));
   if(!j)return res.status(410).json({ok:false,status:'restart',error:'La prueba se perdió porque Render reinició la instancia.'});
   if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt});
