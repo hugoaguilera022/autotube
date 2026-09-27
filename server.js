@@ -446,8 +446,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       onProgress(Math.min(78,Math.round(((i+1)/total)*70)+5));
     }
     const list=path.join(dir,'concat.txt');
-    await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('
-'));
+    await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
     const videoOnly=path.join(dir,'video-only.mp4');
     try{
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',videoOnly]);
