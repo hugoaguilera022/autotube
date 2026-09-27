@@ -2454,6 +2454,14 @@ if(options.forceAi){
       }
       return{ok:true,jobId,reference,referenceTitle:options.referenceTitle||'AI reference',sceneCount:1,size:finalStat.size,durationSeconds:validation.durationSeconds,validation:job?.validation};
     }
+    if(options.forceAi && !video.geminiReferenceAnalysis){
+      try{
+        const direct=await geminiYoutubeUrlAnalysis(reference);
+        video.geminiReferenceAnalysis=direct.raw;
+        video.geminiReferenceProfile=direct.profile;
+        console.log('AUTOTUBE GEMINI DIRECT YOUTUBE ANALYSIS READY',JSON.stringify({jobId,sceneCount:direct.profile?.scene_count||null}));
+      }catch(err){console.warn('AUTOTUBE GEMINI DIRECT YOUTUBE ANALYSIS FAILED',err?.message||String(err));}
+    }
     const style=options.forceAi
       ? (referenceDownloaded?.file
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
