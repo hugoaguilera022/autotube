@@ -2263,20 +2263,14 @@ async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
   const app=await Promise.race([Client.connect('Wan-AI/Wan2.1'),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Wan2.1 connect timeout')),30000))]);
   const prompt=String(options.prompt||'Generate an original cinematic video with the same subject category, setting, mood, lighting, palette, depth and motion language as the reference image, but with a different story, framing, moment and details.').slice(0,4000);
   const payload=[prompt,handle_file(imagePath),false,-1];
-  const job=app.submit('/i2v_generation_async',payload);
-  let finalData=null, eventCount=0;
-  for await(const msg of job){
-    eventCount++;
-    if(msg?.type==='data'){finalData=msg.data;console.log('AUTOTUBE WAN21 I2V DATA',JSON.stringify(msg.data).slice(0,3000));}
-    else if(msg?.type==='status' && (msg.stage==='complete'||msg.stage==='error'))console.log('AUTOTUBE WAN21 I2V STATUS',JSON.stringify(msg).slice(0,1600));
-  }
-  if(!finalData)throw new Error('Wan2.1 terminó sin datos finales.');
-  const data=Array.isArray(finalData)?finalData:[finalData];
-  console.log('AUTOTUBE WAN21 I2V FINAL',JSON.stringify(data).slice(0,3500),'events',eventCount);
-  const candidates=[];
+  const result=await Promise.race([
+    app.predict('/i2v_generation',payload),
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error('Wan2.1 I2V timeout')),600000))
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[result?.data??result];
+  console.log('AUTOTUBE WAN21 I2V SYNC RESULT',JSON.stringify(data).slice(0,4000));
   const unwrap=(x)=>typeof x==='string'?x:(x?.url||x?.path||x?.video?.url||x?.video?.path||x?.value||'');
-  for(const x of data){candidates.push(x);const u=unwrap(x);if(u)candidates.push(u);}
-  for(const candidate of candidates){
+  for(const candidate of data){
     const url=unwrap(candidate);
     if(!url||!/^https?:/i.test(String(url)))continue;
     const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
@@ -2288,7 +2282,7 @@ async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
     const stat=await fs.stat(outputPath);
     if(stat.size>10000)return{outputPath,bytes:stat.size,provider:'Hugging Face Wan-AI/Wan2.1',model:'Wan2.1 I2V',referenceDriven:true,status:'complete'};
   }
-  throw new Error('Wan2.1 no devolvió una URL de vídeo final: '+JSON.stringify(data).slice(0,2500));
+  throw new Error('Wan2.1 no devolvió una URL MP4 en i2v_generation: '+JSON.stringify(data).slice(0,2500));
 }
 
 async function getPublicYoutubeReferenceFallback(reference){
