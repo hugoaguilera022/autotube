@@ -87,6 +87,55 @@ async function downloadViaPiped(url,dir){
 }
 
 async function downloadViaVevioz(url,dir){
+  let last='';
+  // Vevioz API v1: metadata -> MP4 job -> signed file URL.
+  try{
+    const infoRes=await fetch('https://api.vevioz.com/api/v1/info?url='+encodeURIComponent(url),{headers:{'User-Agent':'AutoTube/1.0','Accept':'application/json'},signal:AbortSignal.timeout(15000)});
+    if(infoRes.ok){
+      const info=await infoRes.json().catch(()=>null);
+      const formats=Array.isArray(info?.formats)?info.formats:[];
+      const videoFormats=formats.filter(f=>/mp4/i.test(String(f?.format||f?.ext||f?.container||''))||/video/i.test(String(f?.type||'')));
+      const preferred=videoFormats.sort((a,b)=>Number(b?.height||b?.quality||0)-Number(a?.height||a?.quality||0))[0]||{};
+      const qualities=[preferred.quality,preferred.label,preferred.height&&String(preferred.height)+'p','720p','480p','360p'].filter(Boolean);
+      for(const quality of [...new Set(qualities)]){
+        for(const payload of [
+          {url,format:'mp4',quality},
+          {url,type:'mp4',quality},
+          {url,output:'mp4',quality}
+        ]){
+          try{
+            const jr=await fetch('https://api.vevioz.com/api/v1/jobs',{method:'POST',headers:{'User-Agent':'AutoTube/1.0','Accept':'application/json','Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(20000)});
+            const jd=await jr.json().catch(()=>null);
+            if(!jr.ok||!jd)throw new Error('v1 job HTTP '+jr.status);
+            const id=String(jd.job_id||jd.jobId||jd.id||'').trim();
+            const token=String(jd.token||jd.access_token||jd.accessToken||'').trim();
+            if(!id)throw new Error('v1 job sin id');
+            for(let poll=0;poll<90;poll++){
+              await new Promise(r=>setTimeout(r,2000));
+              const q='https://api.vevioz.com/api/v1/jobs/'+encodeURIComponent(id)+(token?'?token='+encodeURIComponent(token):'');
+              const sr=await fetch(q,{headers:{'User-Agent':'AutoTube/1.0','Accept':'application/json'},signal:AbortSignal.timeout(15000)});
+              const sd=await sr.json().catch(()=>null);
+              if(!sr.ok||!sd)continue;
+              const status=String(sd.status||sd.state||sd.job?.status||'').toLowerCase();
+              const fileUrl=String(sd.url||sd.download_url||sd.downloadUrl||sd.file_url||sd.fileUrl||sd.result?.url||sd.result?.download_url||sd.result?.downloadUrl||sd.data?.url||'').trim();
+              if(fileUrl && /^https?:/i.test(fileUrl)){
+                const fr=await fetch(fileUrl,{redirect:'follow',headers:{'User-Agent':'AutoTube/1.0','Accept':'video/mp4,video/*,application/octet-stream,*/*'},signal:AbortSignal.timeout(300000)});
+                const ct=String(fr.headers.get('content-type')||'').toLowerCase();
+                if(!fr.ok||!fr.body||(/text\/html|application\/json/.test(ct)))throw new Error('v1 file HTTP '+fr.status+' '+ct);
+                const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
+                try{const reader=fr.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
+                const st=await fs.stat(out);const p=await probe(out);
+                if(!st.size||!p.duration||!p.width||!p.height)throw new Error('v1 MP4 no válido');
+                return{source:out,bytes:st.size,strategy:'vevioz-v1',external:{quality}};
+              }
+              if(/failed|error|cancelled|canceled/.test(status))throw new Error('v1 job '+status);
+            }
+          }catch(e){last=String(e?.message||e)}
+        }
+      }
+    }else last='v1 info HTTP '+infoRes.status;
+  }catch(e){last=String(e?.message||e)}
+  // Legacy/public integration fallback.
   const vid=extractYoutubeVideoId(url);
   const targets=[
     vid&&'https://api.vevioz.com/api/button/videos/'+encodeURIComponent(vid),
@@ -94,12 +143,10 @@ async function downloadViaVevioz(url,dir){
     'https://api.vevioz.com/api/single/mp4?url='+encodeURIComponent(url),
     'https://api.vevioz.com/api/button/mp4?url='+encodeURIComponent(url)
   ].filter(Boolean);
-  let last='';
   for(const target of targets){
-    const endpoints=[target,'https://api.allorigins.win/raw?url='+encodeURIComponent(target)];
-    for(const endpoint of endpoints){
+    for(const endpoint of [target,'https://api.allorigins.win/raw?url='+encodeURIComponent(target)]){
       try{
-        const res=await fetch(endpoint,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0','Accept':'video/mp4,application/octet-stream,*/*;q=0.8'}});
+        const res=await fetch(endpoint,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0','Accept':'video/mp4,application/octet-stream,*/*;q=0.8'},signal:AbortSignal.timeout(30000)});
         if(!res.ok)throw new Error('Vevioz HTTP '+res.status);
         const ct=String(res.headers.get('content-type')||'').toLowerCase();
         if(!res.body)throw new Error('Vevioz sin body');
@@ -107,13 +154,13 @@ async function downloadViaVevioz(url,dir){
         try{const reader=res.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
         const st=await fs.stat(out);
         if(!st.size||ct.includes('text/html')||ct.includes('application/json')){await fs.rm(out,{force:true});throw new Error('Vevioz no devolvió MP4 ('+ct+', '+st.size+' bytes).')}
+        const p=await probe(out);if(!p.duration||!p.width||!p.height)throw new Error('Vevioz MP4 inválido');
         return{source:out,bytes:st.size,strategy:'vevioz',external:{contentType:ct}};
-      }catch(e){last=String(e?.message||e)}
+      }catch(e){last=String(e?.message||e);await fs.rm(path.join(dir,'source.mp4'),{force:true}).catch(()=>{})}
     }
   }
   throw new Error(last||'Vevioz failed');
 }
-
 async function downloadViaYt5sProxy(url,dir){
   const bases=String(process.env.AUTOTUBE_YT5S_PROXY_URLS||'https://autotube-yt5s-proxy.onrender.com,https://yt5s.biz').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
   let last='';
