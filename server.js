@@ -1991,7 +1991,20 @@ async function executeUrlToVideo(reference,jobId,options={}){
     let referenceDownloaded={file:null,bytes:0,probe:{}};
     const referenceSourceDir=path.join(dir,'reference-source');
     if(options.forceAi){
-      video=await getReferenceVideo(reference);
+      const videoId=extractYoutubeVideoId(reference);
+      if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
+      video={
+        videoId,
+        title:'YouTube AI reference '+videoId,
+        channelTitle:'',
+        description:'',
+        duration:'PT60S',
+        thumbnail:'https://img.youtube.com/vi/'+videoId+'/hqdefault.jpg',
+        thumbnails:[
+          'https://img.youtube.com/vi/'+videoId+'/maxresdefault.jpg',
+          'https://img.youtube.com/vi/'+videoId+'/hqdefault.jpg'
+        ]
+      };
     }else{
       referenceDownloaded=options.directReferenceFile
         ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
