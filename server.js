@@ -2190,7 +2190,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       job.validation={...validation,mode:'original-alternative',sourceReference:reference,
         audiovisualSimilarityProfile:{
           sceneCount:scenes.length,
-          referencePreferredSceneCount:preferred,
+          referencePreferredSceneCount:scenes.length,
           audioHasSpeech:Boolean(audioProfile.hasSpeech),
           audioHasMusic:Boolean(audioProfile.hasMusic),
           audioHasAmbience:Boolean(audioProfile.hasAmbience),
