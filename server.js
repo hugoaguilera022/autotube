@@ -2072,7 +2072,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       scenes=planResponseData.scenes.map((scene,i)=>({...scene,number:i+1}));
     }else{
       const segments=Array.isArray(visualReferenceAnalysis?.structureProfile?.sceneSegments)?visualReferenceAnalysis.structureProfile.sceneSegments:[];
-      const count=Math.max(1,Math.min(120,Number(style.preferredSceneCount||style.estimatedSceneCount||segments.length||6)));
+      const count=Math.max(1,Math.min(240,Number(style.preferredSceneCount||style.estimatedSceneCount||segments.length||6)));
       for(let i=0;i<count;i++){
         const seg=segments[Math.min(Math.max(segments.length-1,0),Math.floor(i*Math.max(segments.length,1)/count))]||{};
         const title=String(seg.summary||seg.subject||referenceTitle).slice(0,180);
@@ -2117,7 +2117,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
     // Keep the scene count bounded for Render while preserving the full timeline.
     let aiClips=[];
     if(aiMode){
-      const maxAiScenes=Math.max(1,Math.min(120,Number(process.env.AUTOTUBE_AI_MAX_SCENES)||120));
+      const maxAiScenes=Math.max(1,Math.min(240,Number(process.env.AUTOTUBE_AI_MAX_SCENES)||240));
       if(scenes.length>maxAiScenes){
         const grouped=[];
         for(let i=0;i<maxAiScenes;i++){
