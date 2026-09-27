@@ -2114,12 +2114,34 @@ async function downloadReferenceDirectForAiE2E(url,dir){
   return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'validated-exact'};
 }
 
+async function collectGradioJob(job,timeoutSeconds){
+  let timer;
+  const consume=(async()=>{
+    let last=null;
+    for await(const msg of job){
+      if(msg?.type==='data')last=msg;
+      if(msg?.type==='status' && msg?.stage==='error')throw new Error(msg?.message||'Gradio job failed.');
+    }
+    if(!last)throw new Error('Gradio no devolvió datos de salida.');
+    return last;
+  })();
+  try{
+    return await Promise.race([
+      consume,
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Gradio timeout')),Math.max(1,Number(timeoutSeconds)||120)*1000);})
+    ]);
+  }catch(err){
+    try{job?.cancel?.();}catch{}
+    throw err;
+  }finally{if(timer)clearTimeout(timer);}
+}
+
 async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('Jiny34/Image-to-video');
   const prompt=String(options.prompt||'Generate original natural camera motion from this reference image, preserve the main subject and setting.').trim();
   const job=app.submit('/make_video',[[handle_file(imagePath)],prompt]);
-  const result=await job.result(90);
+  const result=await collectGradioJob(job,90);
   const data=Array.isArray(result?.data)?result.data:[];
   const output=data[0];
   const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
@@ -2134,25 +2156,41 @@ async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
 }
 
 async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
-  // Use the current public Wan2.1 I2V endpoint. The previous WaveSpeed Space
-  // exposed a /generate endpoint that no longer exists and could crash Node.
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('Wan-AI/Wan2.1');
   const prompt=String(options.prompt||'Generate original natural cinematic motion while preserving the main subject, setting and visual identity of the reference image.').slice(0,4000);
   try{await app.predict('/switch_i2v_tab');}catch{}
-  const job=app.submit('/i2v_generation',[prompt,handle_file(imagePath),false,-1]);
-  const result=await job.result(420);
-  const data=Array.isArray(result?.data)?result.data:[];
-  const output=data[0];
-  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
-  if(!url)throw new Error('Wan2.1 I2V no devolvió un vídeo.');
-  const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
-  if(!response.ok)throw new Error('Wan2.1 I2V no pudo descargar el vídeo ('+response.status+').');
-  const outputPath=path.join(dir,'wan21-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-  await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
-  const stat=await fs.stat(outputPath);
-  if(!stat.size)throw new Error('Wan2.1 I2V devolvió un vídeo vacío.');
-  return{outputPath,bytes:stat.size,provider:'Hugging Face Wan-AI/Wan2.1',model:'Wan2.1 I2V',referenceDriven:true,status:'complete'};
+  const submitResult=await app.predict('/i2v_generation_async',[prompt,handle_file(imagePath),false,-1]);
+  const submitData=Array.isArray(submitResult?.data)?submitResult.data:[];
+  const taskId=String(submitData[0]||'').trim();
+  if(!taskId)throw new Error('Wan2.1 no devolvió task_id.');
+  const started=Date.now();
+  let lastStatus='';
+  for(let i=0;i<150;i++){
+    await new Promise(r=>setTimeout(r,4000));
+    try{
+      const status=await app.predict('/status_refresh_1',[taskId,'i2v',false]);
+      const data=Array.isArray(status?.data)?status.data:[];
+      const candidate=data[0];
+      const url=typeof candidate==='string'?candidate:(candidate?.url||candidate?.path||candidate?.video?.url||'');
+      if(url){
+        const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
+        if(response.ok){
+          const outputPath=path.join(dir,'wan21-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+          await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+          const stat=await fs.stat(outputPath);
+          if(stat.size)return{outputPath,bytes:stat.size,provider:'Hugging Face Wan-AI/Wan2.1',model:'Wan2.1 I2V',referenceDriven:true,status:'complete'};
+        }
+      }
+      const pct=Number(data[3]?.value??data[3]??0);
+      if(i<3 || (i+1)%15===0)console.log('AUTOTUBE WAN21 I2V POLL',JSON.stringify({taskId,elapsedSeconds:Math.round((Date.now()-started)/1000),progress:pct,status:String(data[1]||'')}));
+      lastStatus=JSON.stringify(data).slice(0,500);
+    }catch(err){
+      if((i+1)%15===0)console.warn('AUTOTUBE WAN21 I2V POLL ERROR',err?.message||String(err));
+      lastStatus=String(err?.message||err);
+    }
+  }
+  throw new Error('Wan2.1 I2V timeout: '+lastStatus);
 }
 
 async function getPublicYoutubeReferenceFallback(reference){
