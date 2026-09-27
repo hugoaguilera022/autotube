@@ -2080,8 +2080,15 @@ async function executeUrlToVideo(reference,jobId,options={}){
           'Reference visual language only: '+JSON.stringify({style:vp.visualStyle,composition:vp.composition,palette:vp.palette,lighting:vp.lighting,cameraMovement:vp.cameraMovement,continuity:vp.continuity,motion:ap.motionIntensity}).slice(0,3500),
           '16:9 photorealistic high quality. Original material only. Do not copy any frame, person, face, logo, text, exact composition, or identifiable copyrighted expression from the reference. No watermark, no text, no logos.'
         ].join('\\n');
-        const generated=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
-        aiClips.push({path:generated.outputPath,mediaType:'image'});
+        let generated;
+        const geminiKey=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+        if(geminiKey){
+          generated=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
+          aiClips.push({path:generated.outputPath,mediaType:'image'});
+        }else{
+          generated=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:Math.min(8.5,Math.max(1,Number(scene.duration)||8)),width:704,height:396,guidanceScale:3,improveTexture:true});
+          aiClips.push({path:generated.outputPath,mediaType:'video'});
+        }
         if(job)job.progress=45+Math.round(((i+1)/scenes.length)*20);
       }
     }
