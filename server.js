@@ -1444,6 +1444,35 @@ app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
 });
 
 
+app.post('/api/ai/production-plan',async(req,res)=>{
+  try{
+    const body=req.body||{};
+    const topic=String(body.topic||body.brief||body.referenceTopic||'').trim();
+    const customScript=String(body.script||body.customScript||'').trim() || (Array.isArray(body.outline)?body.outline.join('\n'):'');
+    if(!topic&&!customScript)return res.status(400).json({ok:false,error:'Indica un tema o un guion.'});
+    const language=String(body.language||'es').trim();
+    const durationMinutes=Math.max(0.25,Math.min(60,Number(body.duration)||8));
+    const totalSeconds=Math.max(15,Math.round(durationMinutes*60));
+    const requestedDirection=body.creativeDirection&&typeof body.creativeDirection==='object'?body.creativeDirection:null;
+    const visualReference=body.visualReferenceAnalysis&&typeof body.visualReferenceAnalysis==='object'?body.visualReferenceAnalysis:null;
+    const system='Eres el director creativo y productor de AutoTube. Crea vídeos originales a partir de una idea o guion. Analiza el tema, audiencia, tono y referencias y PROPÓN 4 direcciones audiovisuales distintas y apropiadas. Cada dirección puede ser realista/cinematográfica, animación 2D/3D, ilustración, dibujo, stop-motion, surrealista, documental u otra, pero solo si tiene sentido para el contenido. No repitas categorías por obligación. Después genera un plan de escenas para la dirección seleccionada. La cantidad de escenas es libre y debe adaptarse al ritmo y duración. Devuelve SOLO JSON válido con title, creativeOptions, recommendedOptionId, creativeDirection, script, scenes, musicMood, voiceStyle y aspectRatio. Cada creativeOption debe tener id,name,concept,visualStyle,animationStyle,cameraLanguage,palette,lighting,motion,transitions,voice,music,soundDesign,aspectRatio y why. Cada scene debe tener number,title,duration,narration,visualPrompt,animationNotes,cameraMovement,transition,searchQuery y mediaType. La suma de duraciones debe cubrir aproximadamente la duración objetivo. Cada visualPrompt debe describir material NUEVO, sin logos, marcas, personajes protegidos, frames ni audio copiado. Si hay referencia audiovisual, úsala solo para describir rasgos generales. La IA debe decidir qué tipos de imagen/animación/realismo/dibujo tienen más sentido y ofrecerlos como opciones seleccionables.';
+    const user=JSON.stringify({topic,customScript,language,targetDurationSeconds:totalSeconds,selectedCreativeDirection:requestedDirection,referenceProfile:visualReference,userInstruction:'Propón opciones audiovisuales adecuadas al contenido, no una lista fija.'});
+    const raw=await callGemini({system,user,temperature:0.75,maxOutputTokens:12000,json:true});
+    const data=parseJsonResponse(raw);
+    const options=Array.isArray(data.creativeOptions)?data.creativeOptions.filter(x=>x&&x.id).slice(0,6):[];
+    if(!options.length)throw new Error('La IA no devolvió direcciones creativas seleccionables.');
+    let selected=requestedDirection||options.find(x=>x.id===data.recommendedOptionId)||options[0];
+    if(requestedDirection?.id){const matched=options.find(x=>x.id===requestedDirection.id);if(matched)selected={...matched,...requestedDirection};}
+    let scenes=Array.isArray(data.scenes)?data.scenes.filter(Boolean):[];
+    if(!scenes.length)throw new Error('La IA no devolvió escenas.');
+    scenes=scenes.map((s,i)=>({...s,number:i+1,duration:Math.max(0.5,Number(s.duration)||totalSeconds/scenes.length),title:String(s.title||('Escena '+(i+1))),narration:String(s.narration||'').trim(),visualPrompt:String(s.visualPrompt||((topic||'contenido')+'; '+(selected.visualStyle||'')+'; '+(selected.animationStyle||''))).trim(),animationNotes:String(s.animationNotes||selected.animationStyle||'').trim(),cameraMovement:String(s.cameraMovement||selected.cameraLanguage||'').trim(),transition:String(s.transition||selected.transitions||'Corte').trim(),searchQuery:String(s.searchQuery||topic).trim(),mediaType:'video',constantImage:false}));
+    const sum=scenes.reduce((n,s)=>n+Number(s.duration||0),0);
+    if(sum>0){const scale=totalSeconds/sum;scenes=scenes.map(s=>({...s,duration:Math.max(0.5,Number(s.duration)*scale)}));}
+    const actualScript=String(data.script||customScript||scenes.map(s=>s.narration).filter(Boolean).join('\n')).trim();
+    return res.json({ok:true,mode:'brief',title:String(data.title||topic).slice(0,200),topic,brief:topic,language,duration:String(durationMinutes),targetDurationSeconds:totalSeconds,script:actualScript,customScript,creativeOptions:options,creativeDirection:selected,recommendedOptionId:String(data.recommendedOptionId||options[0].id),aspectRatio:String(selected.aspectRatio||data.aspectRatio||'16:9'),musicMood:String(data.musicMood||selected.music||'Original'),voiceStyle:String(data.voiceStyle||selected.voice||'Natural y cercana'),scenes,sceneCount:scenes.length,visualReferenceAnalysis:visualReference,referenceStyle:body.referenceStyle||null,creationMode:'brief'});
+  }catch(err){console.error('AI production-plan error:',err?.message||String(err));return res.status(500).json({ok:false,error:err?.message||String(err)});}
+});
+
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
 
 
