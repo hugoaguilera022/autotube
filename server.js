@@ -2346,7 +2346,7 @@ if(String(process.env.AUTOTUBE_E2E_REFERENCE||'').trim() && String(process.env.A
 }
 // E2E completo se ejecuta exclusivamente mediante /api/full-pipeline-test para evitar
 // lanzar trabajos duplicados cuando Render recicla la instancia.
-if(String(process.env.AUTOTUBE_ENABLE_AI_E2E||'1')!=='0'&&String(process.env.AUTOTUBE_AI_E2E_ONCE||'1')!=='0'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){
+if(String(process.env.AUTOTUBE_RUN_AI_E2E||'0')==='1'&&String(process.env.AUTOTUBE_AI_E2E_ONCE||'1')!=='0'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){
   const aiReference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE).trim();
   setTimeout(async()=>{console.log('AUTOTUBE AI E2E START',aiReference);try{const jobId='ai-e2e-'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference:aiReference,status:'processing',progress:1});const directDir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-ref-')); let direct=null;
 for(let attempt=1;attempt<=3;attempt++){
