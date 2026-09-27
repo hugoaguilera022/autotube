@@ -554,6 +554,33 @@ async function validateRenderedMp4(file,expectedDuration=0){
 }
 
 
+async function generatePollinationsOriginalImage(prompt,dir,options={}) {
+  const width=Math.max(512,Math.min(1280,Number(options.width)||1280));
+  const height=Math.max(288,Math.min(720,Number(options.height)||720));
+  const seed=Number.isFinite(Number(options.seed))?Number(options.seed):Math.floor(Math.random()*2147483647);
+  const url='https://image.pollinations.ai/prompt/'+encodeURIComponent(String(prompt||'').trim())+'?'+new URLSearchParams({model:'flux',width:String(width),height:String(height),seed:String(seed),nologo:'true',private:'true',enhance:'true',safe:'true'}).toString();
+  const response=await fetch(url,{signal:AbortSignal.timeout(90000),headers:{Accept:'image/jpeg,image/png;q=0.9,*/*;q=0.1','User-Agent':'AutoTube/1.0'}});
+  if(!response.ok)throw new Error('Pollinations image generation '+response.status);
+  const bytes=Buffer.from(await response.arrayBuffer());
+  if(bytes.length<50000)throw new Error('Pollinations devolvió una imagen demasiado pequeña.');
+  const outputPath=path.join(dir,'pollinations-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.jpg');
+  await fs.writeFile(outputPath,bytes);
+  return{outputPath,bytes:bytes.length,provider:'Pollinations AI · Flux',model:'flux',status:'complete'};
+}
+
+async function generateNarrationTts(text,language='es',voiceStyle='Natural y cercana',audioProfile={}) {
+  const clean=String(text||'').replace(/\s+/g,' ').trim().slice(0,280);
+  if(!clean)return null;
+  const tl=String(language||'es').toLowerCase().split(/[-_]/)[0]||'es';
+  const url='https://translate.google.com/translate_tts?'+new URLSearchParams({ie:'UTF-8',client:'tw-ob',tl,q:clean});
+  const response=await fetch(url,{signal:AbortSignal.timeout(30000),headers:{Accept:'audio/mpeg','User-Agent':'Mozilla/5.0 AutoTube/1.0'}});
+  if(!response.ok)throw new Error('Google TTS '+response.status);
+  const bytes=Buffer.from(await response.arrayBuffer());
+  if(bytes.length<1000)throw new Error('Google TTS devolvió audio vacío.');
+  return bytes;
+}
+const generateGeminiTts=generateNarrationTts;
+
 async function generateGeminiOriginalImage(prompt,dir,options={}) {
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
@@ -1068,11 +1095,10 @@ async function executeFullPipelineTest(reference,testId=null){
         if(aiClips[i]?.path||row?.media?.some(m=>m?.downloadUrl))continue;
         try{
           const imageDir=await fs.mkdtemp(path.join(dir,'scene-image-'));
-          const generated=await generateGeminiOriginalImage(
-            String(scene.visualPrompt||scene.searchQuery||scene.title||referenceTitle)+'; preserve the reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3500)+'. Create original material, no logos, no copied characters or frames, cinematic 16:9.',
-            imageDir,
-            {model:'gemini-2.5-flash-image'}
-          );
+          let generated;
+          const visualPrompt=String(scene.visualPrompt||scene.searchQuery||scene.title||referenceTitle)+'; preserve the reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3500)+'. Create original material, no logos, no copied characters or frames, cinematic 16:9.';
+          try{generated=await generateGeminiOriginalImage(visualPrompt,imageDir,{model:'gemini-2.5-flash-image'});}
+          catch(geminiErr){console.warn('Gemini image unavailable; using free Pollinations fallback:',geminiErr.message||String(geminiErr));generated=await generatePollinationsOriginalImage(visualPrompt,imageDir,{width:1280,height:720});}
           row.media=[{provider:generated.provider,id:'generated-'+scene.number,title:'Original AI visual',duration:0,downloadUrl:generated.outputPath,mediaType:'image'}];
           row.generatedAsset=true;
         }catch(err){console.warn('Original visual generation failed for scene '+scene.number+':',err.message||String(err))}
@@ -1112,7 +1138,11 @@ async function executeFullPipelineTest(reference,testId=null){
         narrationAudio,
         musicBuffer:music?.buffer||null,
         onProgress:()=>{},
-        finalOutputPath:output
+        finalOutputPath:output,
+        targetWidth:1280,
+        targetHeight:720,
+        targetFps:30,
+        targetDurationSeconds:durationSeconds
       });
       validation=await validateRenderedMp4(output,durationSeconds);
       const st=await fs.stat(output);
