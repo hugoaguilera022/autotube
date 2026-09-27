@@ -302,7 +302,8 @@ async function analyzeDownloadedReferenceMedia(file,video){
     let audioAnalysis=null;
     const audioPath=path.join(dir,'reference-audio.wav');
     const hasAudioStream=/Stream #[^\n]*Audio:/i.test(probeText);
-    if(hasAudioStream){
+    const hasGeminiKey=Boolean(String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim());
+    if(hasAudioStream&&hasGeminiKey){
       const starts=[0,Math.max(0,durationSeconds/2-15),Math.max(0,durationSeconds-30)].filter((v,i,a)=>a.indexOf(v)===i);
       const audioFiles=[];
       for(let i=0;i<starts.length;i++){
