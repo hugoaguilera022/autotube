@@ -344,6 +344,32 @@ async function downloadViaLegacyYtdl(url,dir){
 }
 
 async function getTrustedYoutubeSession(){const bases=String(process.env.AUTOTUBE_YT_SESSION_URLS||'https://autotube-yt-session.onrender.com').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);for(const base of bases){try{const r=await fetch(base+'/token',{headers:{Accept:'application/json'}});if(!r.ok)continue;const d=await r.json();const po=String(d.poToken||d.po_token||'').trim(),vd=String(d.visitorData||d.visitor_data||'').trim();if(po&&vd)return{po,vd}}catch(e){console.warn('AUTOTUBE TRUSTED SESSION FAILED',base,String(e?.message||e))}}return null;}
+async function downloadViaRumble(url,dir){
+  const u=new URL(url);
+  const m=u.pathname.match(/\/(v[0-9a-z]+)/i);
+  const id=m?m[1]:'';
+  if(!id)throw new Error('Rumble ID no encontrado.');
+  const api='https://rumble.com/embedJS/u3/?request=video&ver=2&v='+encodeURIComponent(id);
+  const res=await fetch(api,{headers:{Accept:'application/json','User-Agent':'Mozilla/5.0'}});
+  if(!res.ok)throw new Error('Rumble API HTTP '+res.status);
+  const data=await res.json();
+  const formats=[];
+  for(const [height,entry] of Object.entries(data?.ua||{})){
+    if(entry&&typeof entry==='object'){
+      for(const item of Object.values(entry)){
+        if(item?.url&&/\.mp4(?:$|\?)/i.test(String(item.url)))formats.push({...item,height:Number(item?.meta?.h||height)||0,width:Number(item?.meta?.w||0)||0});
+      }
+    }
+  }
+  const selected=formats.sort((a,b)=>(b.width*b.height)-(a.width*a.height))[0];
+  if(!selected?.url)throw new Error('Rumble no devolvió MP4.');
+  const fr=await fetch(selected.url,{headers:{'User-Agent':'Mozilla/5.0'}});
+  if(!fr.ok||!fr.body)throw new Error('Rumble media HTTP '+fr.status);
+  const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
+  try{const reader=fr.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
+  const st=await fs.stat(out);if(!st.size)throw new Error('Rumble MP4 vacío.');
+  return{source:out,bytes:st.size,strategy:'rumble-mirror',external:{title:String(data?.title||''),duration:Number(data?.duration||0),width:selected.width,height:selected.height}};
+}
 async function downloadReferenceFast(url,dir){
   await fs.mkdir(dir,{recursive:true});
   const artifact=String(process.env.AUTOTUBE_REFERENCE_ARTIFACT_URL||'').trim();
@@ -356,14 +382,17 @@ async function downloadReferenceFast(url,dir){
       return await validateExactCandidate({source:out,strategy:'verified-reference-artifact'});
     }catch(e){console.error('AUTOTUBE VERIFIED ARTIFACT FAILED',String(e?.message||e));}
   }
-  const attempts=[
+  const attempts=[];
+  const mirror=String(process.env.AUTOTUBE_REFERENCE_MIRROR_URL||'').trim();
+  if(mirror)attempts.push(['mirror-rumble',downloadViaRumble]);
+  attempts.push(
     ['yt5s',downloadViaYt5sProxy],
     ['piped',downloadViaPiped],
     ['cobalt',downloadViaCobalt],
     ['alldl',downloadViaAllDL],
     ['ytdl-api',downloadViaYtdlApi],
     ['invidious',downloadViaInvidious]
-  ];
+  ]);
   let last='';
   for(const [name,fn] of attempts){
     try{
