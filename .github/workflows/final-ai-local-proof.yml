@@ -71,7 +71,7 @@ jobs:
           echo '--- SERVER LOG (AI PROVIDER PATH) ---'
           tail -n 400 server.log
           ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,r_frame_rate -of json autotube-ai-reference.mp4 | tee validation.json
-          python -c 'import json; d=json.load(open("validation.json")); s=d.get("streams",[]); v=[x for x in s if x.get("codec_type")=="video"]; a=[x for x in s if x.get("codec_type")=="audio"]; assert v and a, "video/audio missing"; assert v[0].get("codec_name")=="h264"; assert a[0].get("codec_name")=="aac"; print("VALID AI MP4: H.264 + AAC")'
+          python -c 'import json; d=json.load(open("validation.json")); s=d.get("streams",[]); v=[x for x in s if x.get("codec_type")=="video"]; a=[x for x in s if x.get("codec_type")=="audio"]; assert v and a, "video/audio missing"; assert v[0].get("codec_name")=="h264"; assert a[0].get("codec_name")=="aac"; r=json.load(open("result.json")); val=r.get("validation",{}); assert val.get("generatedByAi") is True; assert val.get("referenceFrameConditioned") is True, "AI output was not conditioned on the YouTube reference image/frame"; print("VALID REFERENCE-CONDITIONED AI MP4: H.264 + AAC")'
       - name: Upload verified MP4
         uses: actions/upload-artifact@v4
         with:
