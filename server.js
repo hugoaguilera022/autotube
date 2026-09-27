@@ -1444,8 +1444,10 @@ async function generateChopperBluLtxVideoClip(prompt,dir,options={}) {
   const width=832;
   const height=512;
   const seed=Math.floor(Math.random()*2147483647);
+  const imagePath=String(options.referenceImagePath||'').trim();
+  const {handle_file}=require('@gradio/client');
   const result=await app.predict('/generate_video',[
-    String(prompt||'').trim(),null,width,height,duration,false,seed,true,'conv'
+    String(prompt||'').trim(),imagePath?handle_file(imagePath):null,width,height,duration,false,seed,true,'conv'
   ]);
   const data=Array.isArray(result?.data)?result.data:[];
   const output=data[0];
@@ -1458,7 +1460,7 @@ async function generateChopperBluLtxVideoClip(prompt,dir,options={}) {
   const outputPath=path.join(dir,'chopperblu-ltx-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
   await fs.writeFile(outputPath,dataBuf);
   const stat=await fs.stat(outputPath);
-  return{outputPath,bytes:stat.size,provider:'Hugging Face · ChopperBlu LTX-2.5',model:'ChopperBlu/ltx-2-5-demo',durationSeconds:duration,status:'complete'};
+  return{outputPath,bytes:stat.size,provider:'Hugging Face · ChopperBlu LTX-2.5',model:'ChopperBlu/ltx-2-5-demo',durationSeconds:duration,status:'complete',referenceFrameConditioned:Boolean(imagePath)};
 }
 
 async function generatePollinationsOriginalImage(prompt,dir,options={}){
@@ -2258,16 +2260,18 @@ async function executeUrlToVideo(reference,jobId,options={}){
         videoProviderErrors.push('svd-space: '+String(err?.message||err));
         console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
       }
-      if(!generatedVideo?.outputPath) for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
+      if(!generatedVideo?.outputPath){
         try{
-          const fn=provider==='chopperblu'?generateChopperBluLtxVideoClip:(provider==='goalsave'?generateGoalsaveLtxVideoClip:(provider==='ltx'?generateFreeLtxVideoClip:generatePollinationsVideoClip));
-          generatedVideo=await Promise.race([fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImageUrl:video?.thumbnail||video?.thumbnails?.[0]||''}),new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))]);
-          if(generatedVideo?.outputPath)break;
-        }catch(err){videoProviderErrors.push(provider+': '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));}
+          generatedVideo=await Promise.race([
+            generateChopperBluLtxVideoClip(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImagePath:publicReferenceImage}),
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error('chopperblu image-to-video timeout')),600000))
+          ]);
+          if(!generatedVideo?.outputPath||!generatedVideo.referenceFrameConditioned)generatedVideo=null;
+        }catch(err){
+          videoProviderErrors.push('chopperblu-image-to-video: '+String(err?.message||err));
+          console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','chopperblu-image-to-video',err?.message||String(err));
+        }
       }
-      // A reference run is valid only when the generated video is actually
-      // conditioned on the reference frame/thumbnail. Never accept text-only
-      // generation as a reference match.
       if(!generatedVideo?.outputPath){
         throw new Error('No se pudo generar un vídeo IA condicionado visualmente por la referencia de YouTube. Proveedores probados: '+videoProviderErrors.join(' | '));
       }
