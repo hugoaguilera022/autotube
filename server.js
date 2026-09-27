@@ -2513,8 +2513,25 @@ app.get('/api/url-to-video',async(req,res)=>{
   executeUrlToVideo(reference,jobId,{forceAi:true,referenceHint}).catch(err=>console.error('URL-to-video error:',jobId,err));
 });
 app.get('/api/url-to-video/:jobId',async(req,res)=>{
-  const job=urlVideoJobs.get(String(req.params.jobId||''));
-  if(!job)return res.status(410).json({ok:false,status:'restart',error:'El trabajo se perdió porque Render reinició la instancia.'});
+  const jobId=String(req.params.jobId||'');
+  const reference=String(req.query?.reference||'').trim();
+  let job=urlVideoJobs.get(jobId);
+  // A Render restart clears the in-memory job map. The client deliberately
+  // resends the original reference so this status endpoint can resurrect it.
+  if(!job){
+    if(!reference)return res.status(410).json({ok:false,status:'restart',error:'El trabajo se perdió porque Render reinició la instancia. Reintenta con la referencia de YouTube.'});
+    const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
+    if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,progress:existing.progress||1,resurrected:true,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)});
+    const resurrectedId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+    job={id:resurrectedId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null,resurrected:true};
+    urlVideoJobs.set(resurrectedId,job);
+    executeUrlToVideo(reference,resurrectedId,{forceAi:true}).catch(err=>{
+      const current=urlVideoJobs.get(resurrectedId);
+      if(current){current.status='error';current.error=err?.message||String(err);current.progress=100;current.finishedAt=Date.now();}
+      console.error('AUTOTUBE URL-TO-VIDEO RESURRECT FAILED',resurrectedId,err);
+    });
+    return res.status(202).json({ok:false,status:'processing',jobId:resurrectedId,progress:1,resurrected:true,statusUrl:'/api/url-to-video/'+encodeURIComponent(resurrectedId)});
+  }
   if(job.status==='processing')return res.status(202).json({ok:false,status:'processing',jobId:job.id,progress:job.progress});
   if(job.status==='error')return res.status(500).json({ok:false,status:'error',jobId:job.id,error:job.error});
   res.json({ok:true,status:'done',jobId:job.id,progress:100,reference:job.reference,referenceTitle:job.referenceTitle,
