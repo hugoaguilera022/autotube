@@ -352,7 +352,7 @@ async function analyzeYoutubeReferenceMedia(url,video){
         ? await downloadYoutubeReference(referenceUrl,dir)
         : (()=>{throw new Error('Full YouTube reference download disabled on constrained Render; using public thumbnail/metadata fallback.')})();
       const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
-      const analyzed=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
+      const analyzed=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:Number(downloaded?.finalProbe?.duration||video?.duration||measured.durationSeconds||0)});
       analyzed.referenceFileBytes=downloaded.bytes;
       analyzed.downloadStrategy=downloaded.strategy;
       analyzed.measuredVisualContinuity={
