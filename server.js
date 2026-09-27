@@ -1286,30 +1286,31 @@ async function executeUrlToVideo(reference,jobId,options={}){
     const audioProfile={...(visualReferenceAnalysis.audioProfile||{})};
     const durationSeconds=Math.max(1,Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis.videoProfile?.durationSeconds||60));
 
-    const outlineResponse=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        topic:referenceTitle,reference,referenceTopic:referenceTitle,
-        referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
-        visualReferenceAnalysis,referenceStyle:style,language:'es',
-        duration:String(Math.max(1,Math.round(durationSeconds/60)))
-      })
-    });
-    const outline=await outlineResponse.json();
-    if(!outlineResponse.ok)throw new Error(outline?.error||'No se pudo crear la estructura de la referencia.');
+    // Build the narrative outline locally from the direct Gemini video analysis and
+    // available YouTube captions. This avoids depending on a removed /api/ai/outline route.
+    const transcriptData=await getYoutubeTranscript(reference,audioProfile.language||'es').catch(()=>({available:false,transcript:'',language:null,source:null}));
+    const segments=Array.isArray(visualReferenceAnalysis?.structureProfile?.sceneSegments)
+      ?visualReferenceAnalysis.structureProfile.sceneSegments:[];
+    const fallbackOutline=segments.map((s,i)=>String(s.summary||s.subject||s.generationPrompt||('Escena '+(i+1))).trim()).filter(Boolean);
+    const referenceScript=String(transcriptData.transcript||fallbackOutline.join(' ')).slice(0,100000);
+    const outline={
+      title:referenceTitle,
+      script:referenceScript,
+      outline:fallbackOutline,
+      visualIdeas:segments.map(s=>String(s.generationPrompt||s.summary||'').trim()).filter(Boolean)
+    };
 
     const planResponse=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         topic:referenceTitle,reference,referenceTopic:referenceTitle,
         referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
-        visualReferenceAnalysis,referenceStyle:style,language:'es',
+        visualReferenceAnalysis,referenceStyle:style,language:transcriptData.language||'es',
         duration:String(Math.max(1,Math.round(durationSeconds/60))),
-        title:outline?.title||referenceTitle,
-        // Recreate the reference's narrative structure, but force the requested
-        // visual language to be animated original material.
-        script:String(outline?.script||outline?.customScript||'').trim(),
-        outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[],
+        title:referenceTitle,
+        script:referenceScript,
+        outline:outline.outline,
+        visualIdeas:outline.visualIdeas,
         creativeDirection:{
           id:'autotube-animated-reference',
           name:'Animación original basada en el guion',
