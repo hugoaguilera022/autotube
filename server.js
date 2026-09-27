@@ -1330,7 +1330,7 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key){
     const promptText=encodeURIComponent(String(prompt||'').replace(/\s+/g,' ').trim().slice(0,1800));
-    const url='https://image.pollinations.ai/prompt/'+promptText+'?width=1920&height=1080&nologo=true&model=flux';
+    const url='https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true&model=flux';
     const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),90000);
     try{
       const response=await fetch(url,{signal:controller.signal});
