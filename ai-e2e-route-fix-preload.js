@@ -1,9 +1,21 @@
-require('dotenv').config();
-const crypto=require('crypto');
 const Express=require('express');
 const originalListen=Express.application.listen;
+const originalPost=Express.application.post;
 if(!Express.application.__autotubeAiE2EFix){
   Express.application.__autotubeAiE2EFix=true;
+  Express.application.post=function(path,...handlers){
+    if(path==='/api/verify-ai-e2e'){
+      const parseBody=(req,res,next)=>{
+        if(req.body!==undefined)return next();
+        let raw='';req.setEncoding('utf8');
+        req.on('data',chunk=>{raw+=chunk;if(raw.length>2*1024*1024){req.destroy();}});
+        req.on('end',()=>{try{req.body=raw?JSON.parse(raw):{};next()}catch(e){res.status(400).json({error:'JSON inválido'});}});
+        req.on('error',next);
+      };
+      return originalPost.call(this,path,parseBody,...handlers);
+    }
+    return originalPost.call(this,path,...handlers);
+  };
   Express.application.listen=function(...args){
     const app=this;
     app.get('/api/verify-ai-e2e',async(req,res)=>{
@@ -11,16 +23,11 @@ if(!Express.application.__autotubeAiE2EFix){
       if(!reference)return res.status(400).json({ok:false,error:'reference requerida'});
       try{
         const upstream=await fetch('http://127.0.0.1:'+(process.env.PORT||10000)+'/api/verify-ai-e2e',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({reference}),
-          signal:AbortSignal.timeout(15000)
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({reference}),signal:AbortSignal.timeout(15000)
         });
-        const raw=await upstream.text();
-        res.status(upstream.status).type('application/json').send(raw);
-      }catch(err){
-        res.status(502).json({ok:false,error:'No se pudo iniciar la generación IA: '+String(err?.message||err)});
-      }
+        const raw=await upstream.text();res.status(upstream.status).type('application/json').send(raw);
+      }catch(err){res.status(502).json({ok:false,error:'No se pudo iniciar la generación IA: '+String(err?.message||err)});}
     });
     return originalListen.apply(this,args);
   };
