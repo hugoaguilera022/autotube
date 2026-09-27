@@ -5,7 +5,7 @@ on:
     paths: ['.github/final-ai-proof-trigger.txt']
   workflow_dispatch:
 concurrency:
-  group: autotube-final-local-proof-isolated
+  group: autotube-final-local-proof-frozen
   cancel-in-progress: false
 jobs:
   proof:
