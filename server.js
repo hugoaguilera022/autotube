@@ -2031,7 +2031,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
 
     // E2E exact verification: when the real reference MP4 was supplied, make the
     // final artifact from that exact file and prove byte-for-byte identity.
-    if(options.directReferenceFile){
+    if(options.directReferenceFile && !options.forceAi){
       const source=String(referenceDownloaded.file);
       const outputPath=path.join(renderJobDir,jobId+'.mp4');
       await fs.copyFile(source,outputPath);
@@ -2309,5 +2309,5 @@ if(String(process.env.AUTOTUBE_E2E_REFERENCE||'').trim() && String(process.env.A
 // lanzar trabajos duplicados cuando Render recicla la instancia.
 if(String(process.env.AUTOTUBE_ENABLE_AI_E2E||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_ONCE||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){
   const aiReference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE).trim();
-  setTimeout(async()=>{console.log('AUTOTUBE AI E2E START',aiReference);try{const jobId='ai-e2e-'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference:aiReference,status:'processing',progress:1});const directDir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-ref-')); const direct=await downloadReferenceDirectForAiE2E(aiReference,directDir); const result=await executeUrlToVideo(aiReference,jobId,{directReferenceFile:direct.file,referenceTitle:'AI reference'});console.log('AUTOTUBE AI E2E RESULT',JSON.stringify(result));}catch(err){console.error('AUTOTUBE AI E2E FAILED',err?.stack||err?.message||String(err));}},25000);
+  setTimeout(async()=>{console.log('AUTOTUBE AI E2E START',aiReference);try{const jobId='ai-e2e-'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference:aiReference,status:'processing',progress:1});const directDir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-ref-')); const direct=await downloadReferenceDirectForAiE2E(aiReference,directDir); const result=await executeUrlToVideo(aiReference,jobId,{directReferenceFile:direct.file,referenceTitle:'AI reference',forceAi:true});console.log('AUTOTUBE AI E2E RESULT',JSON.stringify(result));}catch(err){console.error('AUTOTUBE AI E2E FAILED',err?.stack||err?.message||String(err));}},25000);
 }
