@@ -2263,43 +2263,11 @@ async function executeUrlToVideo(reference,jobId,options={}){
           if(generatedVideo?.outputPath)break;
         }catch(err){videoProviderErrors.push(provider+': '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));}
       }
+      // A reference run is valid only when the generated video is actually
+      // conditioned on the reference frame/thumbnail. Never accept text-only
+      // generation as a reference match.
       if(!generatedVideo?.outputPath){
-        const fallbackSegments=Array.isArray(segments)&&segments.length ? segments : [{startSeconds:0,endSeconds:4,summary:aiReferenceTitle}];
-        const count=Math.max(2,Math.min(6,fallbackSegments.length));
-        const imagePaths=[];
-        for(let n=0;n<count;n++){
-          const seg=fallbackSegments[Math.min(fallbackSegments.length-1,Math.floor(n*fallbackSegments.length/count))]||{};
-          const imagePrompt=[
-            'Create an ORIGINAL AI-generated cinematic frame for a new video based on the specific YouTube reference analyzed by AutoTube.',
-            'Keep the SAME concrete subject, setting, action, composition, lighting, palette, animation language and visual rhythm described by the reference profile.',
-            'Do not switch to a generic unrelated topic. Do not copy the source frame, logo, text, face, watermark or exact composition.',
-            'Reference title: '+aiReferenceTitle,
-            'Reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3000),
-            'Reference animation profile: '+JSON.stringify(visualReferenceAnalysis?.animationProfile||{}).slice(0,2200),
-            'Reference segment: '+JSON.stringify(seg).slice(0,4000),
-            'Reference generation directives: '+JSON.stringify(visualReferenceAnalysis?.generationDirectives||{}).slice(0,1800),
-            'Create coherent original 16:9 cinematic material, high detail, natural continuity, no watermark.',
-            'This is scene '+(n+1)+' of '+count+'; preserve continuity with the reference across scenes.'
-          ].join('\\n');
-          const generatedImage=await generateGeminiOriginalImage(imagePrompt,dir,{
-            model:'gemini-2.5-flash-image',
-            referenceImagePath:referenceDownloaded?.file?publicReferenceImage:'',
-            referenceImageUrl:(!referenceDownloaded?.file)?(video?.thumbnail||video?.thumbnails?.[0]||''):''
-          });
-          imagePaths.push(generatedImage.outputPath);
-        }
-        const montagePath=path.join(dir,'ai-reference-frame-conditioned.mp4');
-        const concatList=path.join(dir,'ai-reference-frame-conditioned.txt');
-        const durationPer=4/count;
-        const lines=[];
-        for(const p of imagePaths){lines.push('file '+JSON.stringify(p));lines.push('duration '+durationPer);}
-        lines.push('file '+JSON.stringify(imagePaths[imagePaths.length-1]));
-        await fs.writeFile(concatList,lines.join('\\n')+'\\n');
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',concatList,'-vf',"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0012,1.05)':d=120:s=1280x720:fps=30",'-t','4','-c:v','libx264','-preset','veryfast','-crf','22','-pix_fmt','yuv420p','-an',montagePath]);
-        const st=await fs.stat(montagePath);
-        if(!st.size)throw new Error('El fallback IA condicionado produjo un MP4 vacío.');
-        generatedVideo={outputPath:montagePath,bytes:st.size,provider:'AI image-conditioned montage',model:'Pollinations/Imagen + FFmpeg motion',status:'complete',referenceDriven:true};
-        console.log('AUTOTUBE URL->AI IMAGE-CONDITIONED MONTAGE DONE',JSON.stringify({reference,bytes:st.size,count}));
+        throw new Error('No se pudo generar un vídeo IA condicionado visualmente por la referencia de YouTube. Proveedores probados: '+videoProviderErrors.join(' | '));
       }
       if(!generatedVideo?.outputPath){
         throw new Error('No hay proveedor de vídeo IA disponible tras '+videoProviderErrors.join(' | '));
