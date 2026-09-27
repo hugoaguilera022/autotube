@@ -1,5 +1,4 @@
-const fs=require('fs');
 const originalFetch=global.fetch;
-function timeoutForRequest(url){const u=String(url||'');if(/generativelanguage\\.googleapis\\.com\\/v1beta\\/interactions/i.test(u))return 120000;if(/^https?:/i.test(u))return 30000;return 0;}
+function timeoutForRequest(url){const u=String(url||'');if(u.includes('generativelanguage.googleapis.com/v1beta/interactions'))return 120000;if(/^https?:/i.test(u))return 30000;return 0;}
 global.fetch=async function(url,options={}){const timeoutMs=timeoutForRequest(url);if(!timeoutMs)return originalFetch(url,options);const controller=new AbortController();const upstream=options?.signal;if(upstream){if(upstream.aborted)controller.abort(upstream.reason);else upstream.addEventListener('abort',()=>controller.abort(upstream.reason),{once:true});}const timer=setTimeout(()=>controller.abort(new Error('AutoTube external request timeout')),timeoutMs);try{return await originalFetch(url,{...options,signal:controller.signal});}finally{clearTimeout(timer)}};
 console.log('AutoTube render stability preload active');
