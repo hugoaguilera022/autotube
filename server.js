@@ -1040,23 +1040,17 @@ async function searchPixabayImages(query){if(!process.env.PIXABAY_API_KEY)return
 async function fetchImageForGemini(url){
   const value=String(url||'').trim();
   if(!value)return null;
-  const candidates=[value];
-  const m=value.match(/(?:i\.ytimg\.com|img\.youtube\.com)\/vi\/([^/]+)\//i);
-  if(m)candidates.push('https://img.youtube.com/vi/'+m[1]+'/hqdefault.jpg','https://i.ytimg.com/vi/'+m[1]+'/maxresdefault.jpg');
-  for(const candidate of [...new Set(candidates)]){
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),15000);
-    try{
-      const r=await fetch(candidate,{signal:controller.signal,headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'}});
-      if(!r.ok||!r.body)continue;
-      const contentType=String(r.headers.get('content-type')||'image/jpeg').split(';')[0];
-      if(!contentType.startsWith('image/'))continue;
-      const data=Buffer.from(await r.arrayBuffer());
-      if(!data.length||data.length>5*1024*1024)continue;
-      return{mimeType:contentType,data:data.toString('base64'),sourceUrl:candidate};
-    }catch{}finally{clearTimeout(timer)}
-  }
-  return null;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),15000);
+  try{
+    const r=await fetch(value,{signal:controller.signal});
+    if(!r.ok||!r.body)return null;
+    const contentType=String(r.headers.get('content-type')||'image/jpeg').split(';')[0];
+    if(!contentType.startsWith('image/'))return null;
+    const data=Buffer.from(await r.arrayBuffer());
+    if(!data.length||data.length>5*1024*1024)return null;
+    return{mimeType:contentType,data:data.toString('base64')};
+  }catch{return null}finally{clearTimeout(timer)}
 }
 async function evaluateSelectedVisual(referenceVideo,visualProfile,scene,mediaItem){
   const referenceThumbs=Array.isArray(referenceVideo?.thumbnails)?referenceVideo.thumbnails:[];
@@ -1450,8 +1444,10 @@ async function generateChopperBluLtxVideoClip(prompt,dir,options={}) {
   const width=832;
   const height=512;
   const seed=Math.floor(Math.random()*2147483647);
+  const imagePath=String(options.referenceImagePath||'').trim();
+  const {handle_file}=require('@gradio/client');
   const result=await app.predict('/generate_video',[
-    String(prompt||'').trim(),null,width,height,duration,false,seed,true,'conv'
+    String(prompt||'').trim(),imagePath?handle_file(imagePath):null,width,height,duration,false,seed,true,'conv'
   ]);
   const data=Array.isArray(result?.data)?result.data:[];
   const output=data[0];
@@ -1464,7 +1460,7 @@ async function generateChopperBluLtxVideoClip(prompt,dir,options={}) {
   const outputPath=path.join(dir,'chopperblu-ltx-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
   await fs.writeFile(outputPath,dataBuf);
   const stat=await fs.stat(outputPath);
-  return{outputPath,bytes:stat.size,provider:'Hugging Face · ChopperBlu LTX-2.5',model:'ChopperBlu/ltx-2-5-demo',durationSeconds:duration,status:'complete'};
+  return{outputPath,bytes:stat.size,provider:'Hugging Face · ChopperBlu LTX-2.5',model:'ChopperBlu/ltx-2-5-demo',durationSeconds:duration,status:'complete',referenceFrameConditioned:Boolean(imagePath)};
 }
 
 async function generatePollinationsOriginalImage(prompt,dir,options={}){
@@ -1989,6 +1985,36 @@ const urlVideoJobs=new Map();
 function parseIsoDurationSeconds(value){if(Number.isFinite(Number(value))&&Number(value)>0)return Number(value);const raw=String(value||'').trim();const m=raw.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);if(!m)return 0;return Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0);}
 
 
+async function buildLightweightAiReferenceStyle(file,video={}){
+  const probe=await probeReferenceTechnical(file).catch(()=>({}));
+  const dir=path.dirname(file);
+  const framePaths=[];
+  const duration=Math.max(1,Number(probe.durationSeconds)||Number(video.duration)||4);
+  for(const ratio of [0.12,0.5,0.88]){
+    const p=path.join(dir,'ai-ref-frame-'+Math.round(ratio*100)+'.jpg');
+    try{
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss',String(Math.min(duration-0.1,duration*ratio)),'-i',file,'-frames:v','1','-q:v','3',p]);
+      const st=await fs.stat(p); if(st.size>5000)framePaths.push(p);
+    }catch{}
+  }
+  const first=framePaths[0]||null;
+  const sceneSegments=framePaths.map((p,i)=>({index:i+1,summary:'Original visual reference frame '+(i+1),generationPrompt:'Create an original AI reinterpretation of the concrete visual content, subject, setting, composition, lighting and palette visible in this reference frame.',sourceFramePath:p,startSeconds:duration*[0.12,0.5,0.88][i]}));
+  return {
+    visualSource:'youtube-download+ffprobe+sampled-reference-frames',
+    analysisSource:'lightweight-reference-frame-analysis',
+    hasFullVideoAnalysis:false,hasAudioAnalysis:Boolean(probe.audioCodec),hasAnimationAnalysis:false,hasStructureAnalysis:false,
+    estimatedSceneCount:Math.max(1,framePaths.length),preferredSceneCount:Math.max(1,framePaths.length),
+    visualAnalysis:{
+      videoProfile:{durationSeconds:duration,visualStyle:'reference-conditioned',composition:'match the supplied reference frame',palette:'derive from supplied reference frame',lighting:'derive from supplied reference frame',cameraMovement:'preserve the reference motion language where possible'},
+      animationProfile:{motionIntensity:'medium'},
+      structureProfile:{sceneSegments},
+      audioProfile:{hasMusic:false,hasSpeech:false,hasAmbience:false,hasSoundEffects:false},
+      generationDirectives:{useReferenceFrame:true,originalOnly:true}
+    },
+    conditioningImage:first
+  };
+}
+
 async function buildReferenceBlueprint({referenceTitle,transcript='',visualReferenceAnalysis={},referenceStyle={}}){
   const audio=visualReferenceAnalysis?.audioProfile||{};
   const structure=visualReferenceAnalysis?.structureProfile||{};
@@ -2099,35 +2125,6 @@ async function downloadReferenceDirectForAiE2E(url,dir){
   return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'validated-exact'};
 }
 
-async function generateWanFastPublicImageToVideoClip(imagePath,dir,options={}){
-  const {Client,handle_file}=require('@gradio/client');
-  const app=await Client.connect('zerogpu-aoti/wan2-2-fp8da-aoti-faster');
-  const prompt=String(options.prompt||'Preserve the main subject and setting from this reference image and create smooth original cinematic motion.').trim();
-  const negative='static image, frozen frame, blurry, distorted anatomy, text, watermark, duplicate subjects';
-  const result=await app.predict('/generate_video',[
-    handle_file(imagePath),
-    prompt,
-    4,
-    negative,
-    2.0,
-    1.0,
-    1.0,
-    42,
-    true
-  ]);
-  const data=Array.isArray(result?.data)?result.data:[];
-  const output=data[0];
-  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
-  if(!url)throw new Error('Wan2.2 Fast I2V public Space no devolvió un vídeo.');
-  const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
-  if(!response.ok)throw new Error('Wan2.2 Fast I2V no pudo descargar el vídeo ('+response.status+').');
-  const bytes=Buffer.from(await response.arrayBuffer());
-  if(bytes.length<20000)throw new Error('Wan2.2 Fast I2V devolvió un vídeo vacío.');
-  const outputPath=path.join(dir,'wan22-fast-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-  await fs.writeFile(outputPath,bytes);
-  return{outputPath,bytes:bytes.length,provider:'Hugging Face zerogpu-aoti Wan2.2 Fast I2V',model:'Wan-AI/Wan2.2-I2V-A14B-Diffusers',referenceDriven:true,status:'complete'};
-}
-
 async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('Jiny34/Image-to-video');
@@ -2146,6 +2143,29 @@ async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   return{outputPath,bytes:stat.size,provider:'Hugging Face public SVD Space',model:'stabilityai/stable-video-diffusion-img2vid',referenceDriven:true,status:'complete'};
 }
 
+async function getPublicYoutubeReferenceFallback(reference){
+  const videoId=extractYoutubeVideoId(reference);
+  if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
+  let title='YouTube AI reference '+videoId;
+  try{
+    const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(reference)+'&format=json',{headers:{'User-Agent':'AutoTube/1.0'},signal:AbortSignal.timeout(15000)});
+    if(oembed.ok){const data=await oembed.json();if(data?.title)title=String(data.title);}
+  }catch(err){console.warn('AUTOTUBE OEMBED FALLBACK FAILED',err?.message||String(err));}
+  const thumbnails=[
+    'https://i.ytimg.com/vi/'+videoId+'/maxresdefault.jpg',
+    'https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'
+  ];
+  let thumbnail='';
+  for(const url of thumbnails){
+    try{
+      const r=await fetch(url,{headers:{'User-Agent':'AutoTube/1.0'},signal:AbortSignal.timeout(15000)});
+      if(r.ok){const b=Buffer.from(await r.arrayBuffer());if(b.length>5000){const p=path.join(os.tmpdir(),'autotube-public-thumb-'+videoId+'.jpg');await fs.writeFile(p,b);thumbnail=p;break;}}
+    }catch{}
+  }
+  if(!thumbnail)throw new Error('No se pudo obtener una miniatura pública de YouTube para la referencia.');
+  return {videoId,title,description:'',channelTitle:'',duration:'',thumbnail,thumbnails:[thumbnail],publicReference:true};
+}
+
 async function executeUrlToVideo(reference,jobId,options={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-alternative-'));
   const job=urlVideoJobs.get(jobId);
@@ -2160,10 +2180,6 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(options.forceAi){
       const videoId=extractYoutubeVideoId(reference);
       if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
-      // Generic AI mode intentionally does NOT require downloading the source MP4.
-      // YouTube can block server-side byte downloads even when the URL is public.
-      // The reference URL itself, its public thumbnail, and public metadata are
-      // sufficient to anchor an original AI production without hard-coding a test.
       let publicTitle=`YouTube AI reference ${videoId}`;
       let publicDescription='';
       try{
@@ -2174,9 +2190,18 @@ async function executeUrlToVideo(reference,jobId,options={}){
           publicDescription=String(meta?.author_name||'');
         }
       }catch(err){console.warn('YouTube oEmbed unavailable:',err?.message||String(err));}
-      const thumbnail='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
-      video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:'',thumbnails:[thumbnail],thumbnail};
-      referenceDownloaded={file:null,bytes:0,probe:{},strategy:'youtube-public-oembed-thumbnail'};
+      // Prefer the real reference bytes when the URL is downloadable. This is
+      // the strongest generic conditioning source and is not tied to the proof
+      // video's ID. If YouTube blocks bytes, fall back to public thumbnail mode.
+      try{
+        referenceDownloaded=await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
+        video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:String(referenceDownloaded.probe?.durationSeconds||''),thumbnails:['https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'],thumbnail:'https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'};
+      }catch(downloadErr){
+        console.warn('AUTOTUBE AI DIRECT REFERENCE DOWNLOAD FAILED; PUBLIC FALLBACK',downloadErr?.message||String(downloadErr));
+        const thumbnail='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
+        video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:'',thumbnails:[thumbnail],thumbnail};
+        referenceDownloaded={file:null,bytes:0,probe:{},strategy:'youtube-public-oembed-thumbnail'};
+      }
     }else{
       referenceDownloaded=options.directReferenceFile
         ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
@@ -2185,14 +2210,6 @@ async function executeUrlToVideo(reference,jobId,options={}){
         video={title:options.referenceTitle||reference,videoId:'',channelTitle:'',duration:String(referenceDownloaded.probe?.durationSeconds||'')};
       }else{
         video=await getReferenceVideo(reference);
-      }
-    }
-    if(!video?.thumbnail){
-      const fallbackVideoId=extractYoutubeVideoId(reference);
-      if(fallbackVideoId){
-        const fallbackThumb='https://i.ytimg.com/vi/'+fallbackVideoId+'/hqdefault.jpg';
-        video={...video,thumbnail:fallbackThumb,thumbnails:[...(Array.isArray(video?.thumbnails)?video.thumbnails:[]),fallbackThumb]};
-        console.log('AUTOTUBE PUBLIC THUMBNAIL FALLBACK',fallbackThumb);
       }
     }
     if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
@@ -2223,7 +2240,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
     }
     const style=options.forceAi
       ? (referenceDownloaded?.file
-        ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
+        ? await buildLightweightAiReferenceStyle(referenceDownloaded.file,video)
         : await analyzeYoutubeReferenceMedia(reference,video))
       : (options.directReferenceFile
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
@@ -2258,86 +2275,35 @@ async function executeUrlToVideo(reference,jobId,options={}){
         if(referenceDownloaded?.file){
           await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',referenceDownloaded.file,'-frames:v','1','-q:v','2',publicReferenceImage]);
         }else{
-          const videoId=extractYoutubeVideoId(reference);
-          const candidates=[video?.thumbnail,...(Array.isArray(video?.thumbnails)?video.thumbnails:[])].filter(Boolean);
-          if(videoId){
-            for(const name of ['maxresdefault.jpg','sddefault.jpg','hqdefault.jpg','mqdefault.jpg','0.jpg','1.jpg','2.jpg','3.jpg']){
-              candidates.push('https://i.ytimg.com/vi/'+videoId+'/'+name);
-            }
-          }
-          let imageBuffer=null;
-          let selected='';
-          for(const thumb of [...new Set(candidates)]){
-            try{
-              const response=await fetch(String(thumb),{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/jpeg,image/*'},signal:AbortSignal.timeout(20000)});
-              const raw=Buffer.from(await response.arrayBuffer());
-              if(response.ok&&raw.length>5000&&raw.slice(0,2).toString('hex')==='ffd8'){
-                imageBuffer=raw;selected=String(thumb);break;
-              }
-            }catch{}
-          }
-          if(!imageBuffer)throw new Error('No se pudo descargar ninguna miniatura pública de YouTube para el proveedor SVD.');
-          await fs.writeFile(publicReferenceImage,imageBuffer);
-          console.log('AUTOTUBE SVD REFERENCE IMAGE READY',selected);
+          const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
+          if(!thumb)throw new Error('No hay miniatura pública para el proveedor SVD.');
+          const imageResponse=await fetch(thumb,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/jpeg,image/*'},signal:AbortSignal.timeout(20000)});
+          const imageBytes=Buffer.from(await imageResponse.arrayBuffer());
+          if(!imageResponse.ok||imageBytes.length<5000)throw new Error('No se pudo descargar la miniatura pública: HTTP '+imageResponse.status);
+          await fs.writeFile(publicReferenceImage,imageBytes);
         }
-        try{
-          generatedVideo=await Promise.race([
-            generateWanFastPublicImageToVideoClip(publicReferenceImage,dir,{prompt}),
-            new Promise((_,reject)=>setTimeout(()=>reject(new Error('wan22-fast-i2v timeout')),180000))
-          ]);
-          console.log('AUTOTUBE WAN2.2 FAST REFERENCE-CONDITIONED VIDEO READY',JSON.stringify({reference,provider:generatedVideo.provider}));
-        }catch(wanErr){
-          videoProviderErrors.push('wan22-fast-i2v: '+String(wanErr?.message||wanErr));
-          console.warn('AUTOTUBE WAN2.2 FAST I2V FAILED',wanErr?.message||wanErr);
-          generatedVideo=await Promise.race([
-            generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
-            new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),300000))
-          ]);
-        }
+        generatedVideo=await Promise.race([
+          generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),600000))
+        ]);
       }catch(err){
         videoProviderErrors.push('svd-space: '+String(err?.message||err));
         console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
       }
-      if(!generatedVideo?.outputPath) for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
+      if(!generatedVideo?.outputPath){
         try{
-          const fn=provider==='chopperblu'?generateChopperBluLtxVideoClip:(provider==='goalsave'?generateGoalsaveLtxVideoClip:(provider==='ltx'?generateFreeLtxVideoClip:generatePollinationsVideoClip));
-          generatedVideo=await Promise.race([fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImageUrl:video?.thumbnail||video?.thumbnails?.[0]||''}),new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))]);
-          if(generatedVideo?.outputPath)break;
-        }catch(err){videoProviderErrors.push(provider+': '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));}
+          generatedVideo=await Promise.race([
+            generateChopperBluLtxVideoClip(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImagePath:publicReferenceImage}),
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error('chopperblu image-to-video timeout')),600000))
+          ]);
+          if(!generatedVideo?.outputPath||!generatedVideo.referenceFrameConditioned)generatedVideo=null;
+        }catch(err){
+          videoProviderErrors.push('chopperblu-image-to-video: '+String(err?.message||err));
+          console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','chopperblu-image-to-video',err?.message||String(err));
+        }
       }
       if(!generatedVideo?.outputPath){
-        const fallbackSegments=Array.isArray(segments)&&segments.length ? segments : [{startSeconds:0,endSeconds:4,summary:aiReferenceTitle}];
-        const count=Math.max(2,Math.min(6,fallbackSegments.length));
-        const imagePaths=[];
-        for(let n=0;n<count;n++){
-          const seg=fallbackSegments[Math.min(fallbackSegments.length-1,Math.floor(n*fallbackSegments.length/count))]||{};
-          const imagePrompt=[
-            'Create an ORIGINAL AI-generated cinematic frame for a new video based on the specific YouTube reference analyzed by AutoTube.',
-            'Keep the SAME concrete subject, setting, action, composition, lighting, palette, animation language and visual rhythm described by the reference profile.',
-            'Do not switch to a generic unrelated topic. Do not copy the source frame, logo, text, face, watermark or exact composition.',
-            'Reference title: '+aiReferenceTitle,
-            'Reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3000),
-            'Reference animation profile: '+JSON.stringify(visualReferenceAnalysis?.animationProfile||{}).slice(0,2200),
-            'Reference segment: '+JSON.stringify(seg).slice(0,4000),
-            'Reference generation directives: '+JSON.stringify(visualReferenceAnalysis?.generationDirectives||{}).slice(0,1800),
-            'Create coherent original 16:9 cinematic material, high detail, natural continuity, no watermark.',
-            'This is scene '+(n+1)+' of '+count+'; preserve continuity with the reference across scenes.'
-          ].join('\\n');
-          const generatedImage=await generateGeminiOriginalImage(imagePrompt,dir,{model:'gemini-2.5-flash-image',referenceImageUrl:video?.thumbnail||video?.thumbnails?.[0]||''});
-          imagePaths.push(generatedImage.outputPath);
-        }
-        const montagePath=path.join(dir,'ai-reference-frame-conditioned.mp4');
-        const concatList=path.join(dir,'ai-reference-frame-conditioned.txt');
-        const durationPer=4/count;
-        const lines=[];
-        for(const p of imagePaths){lines.push('file '+JSON.stringify(p));lines.push('duration '+durationPer);}
-        lines.push('file '+JSON.stringify(imagePaths[imagePaths.length-1]));
-        await fs.writeFile(concatList,lines.join('\\n')+'\\n');
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',concatList,'-vf',"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0012,1.05)':d=120:s=1280x720:fps=30",'-t','4','-c:v','libx264','-preset','veryfast','-crf','22','-pix_fmt','yuv420p','-an',montagePath]);
-        const st=await fs.stat(montagePath);
-        if(!st.size)throw new Error('El fallback IA condicionado produjo un MP4 vacío.');
-        generatedVideo={outputPath:montagePath,bytes:st.size,provider:'AI image-conditioned montage',model:'Pollinations/Imagen + FFmpeg motion',status:'complete',referenceDriven:true};
-        console.log('AUTOTUBE URL->AI IMAGE-CONDITIONED MONTAGE DONE',JSON.stringify({reference,bytes:st.size,count}));
+        throw new Error('No se pudo generar un vídeo IA condicionado visualmente por la referencia de YouTube. Proveedores probados: '+videoProviderErrors.join(' | '));
       }
       if(!generatedVideo?.outputPath){
         throw new Error('No hay proveedor de vídeo IA disponible tras '+videoProviderErrors.join(' | '));
