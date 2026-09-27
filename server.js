@@ -2007,6 +2007,22 @@ function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
 
 async function downloadReferenceDirectForAiE2E(url,dir){
   await fs.mkdir(dir,{recursive:true});
+  const cacheKey=crypto.createHash('sha256').update(String(url)).digest('hex').slice(0,32);
+  const cachePath=path.join(renderJobDir,'reference-cache-'+cacheKey+'.mp4');
+  const cacheMeta=cachePath+'.json';
+  try{
+    const meta=JSON.parse(await fs.readFile(cacheMeta,'utf8'));
+    const st=await fs.stat(cachePath);
+    if(meta?.reference===String(url)&&st.size&&Math.abs(Number(meta?.final?.duration||0)-Number(process.env.AUTOTUBE_REFERENCE_EXPECTED_DURATION||meta?.final?.duration||0))<=0.75){
+      const copy=path.join(dir,'reference.mp4');await fs.copyFile(cachePath,copy);
+      const probe=await probeReferenceTechnical(copy);
+      if(Math.abs(Number(probe.durationSeconds||0)-Number(meta?.final?.duration||0))<=0.75){
+        console.log('AUTOTUBE AI REFERENCE CACHE HIT',JSON.stringify({reference:url,bytes:st.size,durationSeconds:probe.durationSeconds}));
+        return{file:copy,bytes:st.size,probe,strategy:'validated-exact-cache'};
+      }
+    }
+  }catch{}
+
   const downloaded=await downloadYoutubeReference(url,dir);
   const sourcePath=String(downloaded?.file||downloaded?.source||'');
   if(!sourcePath)throw new Error('El descargador exacto validado no devolvió archivo.');
