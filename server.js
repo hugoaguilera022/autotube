@@ -281,7 +281,7 @@ async function analyzeDownloadedReferenceMedia(file,video){
     const durationSeconds=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
     if(!durationSeconds)throw new Error('No se pudo determinar la duración del vídeo de referencia.');
 
-    const frameCount=Math.min(24,Math.max(8,Math.ceil(durationSeconds/20)));
+    const frameCount=Math.min(120,Math.max(12,Math.ceil(durationSeconds/8)));
     const fps=Math.max(1/60,Math.min(1/3,frameCount/durationSeconds));
     const pattern=path.join(dir,'frame-%02d.jpg');
     await runFfmpeg([
@@ -327,7 +327,7 @@ async function analyzeDownloadedReferenceMedia(file,video){
       analysis=parseJsonResponse(text);
     }catch(aiErr){
       console.warn('Gemini visual analysis unavailable; using deterministic sampled-frame profile:',aiErr?.message||String(aiErr));
-      const segmentCount=Math.max(1,Math.min(24,files.length));
+      const segmentCount=Math.max(1,Math.min(120,files.length));
       const segments=Array.from({length:segmentCount},(_,i)=>{const start=i*durationSeconds/segmentCount;const end=(i+1)*durationSeconds/segmentCount;return{startSeconds:start,endSeconds:end,summary:String(video?.title||'Tema de referencia'),subject:String(video?.title||'Tema de referencia'),shotScale:'wide/medium',composition:'16:9 horizontal',cameraMovement:'subtle cinematic movement',motionIntensity:'medium',lighting:'derived from reference frames',palette:'derived from reference frames',transitionIn:i?'smooth':'opening',transitionOut:i<segmentCount-1?'smooth':'ending',audioRole:'continuous',narrationRole:'unknown',continuityAnchor:String(video?.title||'tema principal'),generationPrompt:String(video?.title||'')+'; original visual treatment matching sampled reference structure'};});
       analysis={videoProfile:{durationSeconds,constantImage:false,estimatedSceneCount:segmentCount,sceneChangeRate:'sampled',cameraMovement:'subtle cinematic',composition:'16:9 horizontal',palette:'derived from sampled frames',lighting:'derived from sampled frames',visualStyle:'original treatment based on real reference frames',continuity:'coherent'},animationProfile:{cameraMotion:'subtle cinematic movement',zoomStyle:'slow',panStyle:'gentle',overlays:'none',textAnimation:'minimal',effects:'natural',transitionStyle:'smooth',motionIntensity:'medium',visualRhythm:'steady'},audioProfile:{hasSpeech:null,language:'unknown',speechRate:'unknown',pauses:'unknown',emotion:'unknown',hasMusic:null,hasAmbience:null,hasSoundEffects:null,musicMood:'match reference profile',energy:'medium',dynamics:'medium',instrumentation:'original',voiceStyle:'natural',bpmEstimate:'unknown',voiceMusicBalance:'balanced',audioContinuity:'continuous'},structureProfile:{opening:'thematic opening',pacing:'steady',transitions:'smooth',segmentCount,segmentDurations:segments.map(x=>x.endSeconds-x.startSeconds),visualContinuity:'coherent',timestamps:segments.map(x=>x.startSeconds),sceneSegments:segments},generationDirectives:{useSingleContinuousVisual:false,preferredSceneCount:segmentCount,preserveVisualContinuity:true,preserveAudioContinuity:true,visualSearchStrategy:'match reference subject and composition',musicStrategy:'original audio matching measured profile',narrationStrategy:'only when detected',animationStrategy:'subtle cinematic motion'},deterministicFallback:true};
     }
@@ -2072,7 +2072,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       scenes=planResponseData.scenes.map((scene,i)=>({...scene,number:i+1}));
     }else{
       const segments=Array.isArray(visualReferenceAnalysis?.structureProfile?.sceneSegments)?visualReferenceAnalysis.structureProfile.sceneSegments:[];
-      const count=Math.max(1,Math.min(24,Number(style.preferredSceneCount||style.estimatedSceneCount||segments.length||6)));
+      const count=Math.max(1,Math.min(120,Number(style.preferredSceneCount||style.estimatedSceneCount||segments.length||6)));
       for(let i=0;i<count;i++){
         const seg=segments[Math.min(Math.max(segments.length-1,0),Math.floor(i*Math.max(segments.length,1)/count))]||{};
         const title=String(seg.summary||seg.subject||referenceTitle).slice(0,180);
@@ -2117,7 +2117,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
     // Keep the scene count bounded for Render while preserving the full timeline.
     let aiClips=[];
     if(aiMode){
-      const maxAiScenes=Math.max(1,Math.min(24,Number(process.env.AUTOTUBE_AI_MAX_SCENES)||24));
+      const maxAiScenes=Math.max(1,Math.min(120,Number(process.env.AUTOTUBE_AI_MAX_SCENES)||120));
       if(scenes.length>maxAiScenes){
         const grouped=[];
         for(let i=0;i<maxAiScenes;i++){
