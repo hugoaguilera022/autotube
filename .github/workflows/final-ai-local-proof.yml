@@ -81,3 +81,5 @@ jobs:
             result.json
             validation.json
             server.log
+
+# SVD direct YouTube thumbnail retry
