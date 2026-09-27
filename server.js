@@ -113,9 +113,12 @@ app.get('/api/verify-ai-e2e',async(req,res)=>{
         'Introduce new camera movement and new temporal action while keeping the same recognizable audiovisual concept.',
         'The result must be original AI-generated footage with coherent natural motion and synchronized generated audio appropriate to the observed scene.',
         'Reference title: '+job.referenceTitle,
+                'Reference visual profile: '+directReferenceAnalysis.slice(0,6000),
         '16:9, cinematic, high detail, original material.'
       ].join('\\n');
       job.progress=30;
+      let directReferenceAnalysis='';
+      try{ const direct=await geminiYoutubeUrlAnalysis(reference); directReferenceAnalysis=direct.raw; console.log('AUTOTUBE GEMINI DIRECT YOUTUBE ANALYSIS READY',JSON.stringify({jobId,sceneCount:direct.profile?.scene_count||null})); }catch(err){ console.warn('AUTOTUBE GEMINI DIRECT YOUTUBE ANALYSIS FAILED',err?.message||String(err)); }
       let generated=null;
       const providerErrors=[];
       try{
