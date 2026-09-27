@@ -1421,6 +1421,21 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
   }finally{clearTimeout(timer)}
 }
 
+async function generatePollinationsVideoClip(prompt,dir,options={}){
+  const duration=Math.max(3,Math.min(8,Number(options.durationSeconds)||4));
+  const body={prompt:String(prompt||'').trim(),model:'video-gen',duration,resolution:'720p',seed:Math.floor(Math.random()*2147483647)};
+  const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),180000);
+  try{
+    const response=await fetch('https://video.pollinations.ai/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});
+    const raw=Buffer.from(await response.arrayBuffer());
+    if(!response.ok||raw.length<20000)throw new Error('Pollinations video '+response.status+' ('+raw.length+' bytes)');
+    const outputPath=path.join(dir,'pollinations-ai-video-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+    await fs.writeFile(outputPath,raw);
+    const stat=await fs.stat(outputPath);
+    return{outputPath,bytes:stat.size,provider:'Pollinations AI Video',model:'video-gen',status:'complete'};
+  }finally{clearTimeout(timer)}
+}
+
 async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   const {Client}=require('@gradio/client');
   const space=String(process.env.LTX_SPACE||'Lightricks/ltx-video-distilled').trim();
