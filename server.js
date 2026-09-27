@@ -2066,6 +2066,24 @@ async function downloadReferenceDirectForAiE2E(url,dir){
   return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'validated-exact'};
 }
 
+async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
+  const {Client,handle_file}=require('@gradio/client');
+  const app=await Client.connect('Jiny34/Image-to-video');
+  const prompt=String(options.prompt||'Generate original natural camera motion from this reference image, preserve the main subject and setting.').trim();
+  const result=await app.predict('/make_video',[[handle_file(imagePath)],prompt]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!url)throw new Error('SVD public Space no devolvió un vídeo.');
+  const response=await fetch(String(url));
+  if(!response.ok)throw new Error('SVD public Space no pudo descargar el vídeo ('+response.status+').');
+  const outputPath=path.join(dir,'svd-public-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+  const stat=await fs.stat(outputPath);
+  if(!stat.size)throw new Error('SVD public Space devolvió un vídeo vacío.');
+  return{outputPath,bytes:stat.size,provider:'Hugging Face public SVD Space',model:'stabilityai/stable-video-diffusion-img2vid',referenceDriven:true,status:'complete'};
+}
+
 async function executeUrlToVideo(reference,jobId,options={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-alternative-'));
   const job=urlVideoJobs.get(jobId);
@@ -2202,7 +2220,26 @@ async function executeUrlToVideo(reference,jobId,options={}){
         '16:9, high-detail cinematic AI video, coherent continuous motion, original material, no watermark.'
       ].join('\\n');
       const videoProviderErrors=[];
-      for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
+      const publicReferenceImage=path.join(dir,'public-reference-conditioning.jpg');
+      try{
+        if(referenceDownloaded?.file){
+          await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',referenceDownloaded.file,'-frames:v','1','-q:v','2',publicReferenceImage]);
+        }else{
+          const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
+          if(!thumb)throw new Error('No hay miniatura pública para el proveedor SVD.');
+          const image=await fetchImageForGemini(thumb);
+          if(!image?.inlineData?.data)throw new Error('No se pudo descargar la miniatura pública.');
+          await fs.writeFile(publicReferenceImage,Buffer.from(image.inlineData.data,'base64'));
+        }
+        generatedVideo=await Promise.race([
+          generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),180000))
+        ]);
+      }catch(err){
+        videoProviderErrors.push('svd-space: '+String(err?.message||err));
+        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
+      }
+      if(!generatedVideo?.outputPath) for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
         try{
           const fn=provider==='chopperblu'?generateChopperBluLtxVideoClip:(provider==='goalsave'?generateGoalsaveLtxVideoClip:(provider==='ltx'?generateFreeLtxVideoClip:generatePollinationsVideoClip));
           generatedVideo=await Promise.race([fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false}),new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))]);
