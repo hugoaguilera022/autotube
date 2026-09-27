@@ -1,0 +1,90 @@
+name: AutoTube real YouTube to MP4 E2E
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Wait for Render to deploy this commit
+        env:
+          BASE_URL: https://autotube-hfeu.onrender.com
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            body="$(curl -fsS --max-time 15 "$BASE_URL/api/health" || true)"
+            commit="$(printf '%s' "$body" | jq -r '.commit // empty')"
+            echo "Render commit: $commit"
+            if [ "$commit" = "$EXPECTED_COMMIT" ]; then
+              echo "Render is serving the workflow commit."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Render did not serve commit $EXPECTED_COMMIT in time." >&2
+          exit 1
+
+      - name: Run real reference-to-MP4 pipeline
+        env:
+          BASE_URL: https://autotube-hfeu.onrender.com
+          REFERENCE: https://www.youtube.com/watch?v=P_iFWenf1VA
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 --get --data-urlencode "reference=$REFERENCE"             "$BASE_URL/api/full-pipeline-test" > start.json
+          cat start.json
+          job="$(jq -r '.jobId // empty' start.json)"
+          test -n "$job"
+          for i in $(seq 1 180); do
+            status="$(curl -fsS --max-time 30 "$BASE_URL/api/full-pipeline-test/$job")" || {
+              sleep 10
+              continue
+            }
+            printf '%s\n' "$status" > status.json
+            echo "$status" | jq '{status,ok,elapsedMs,result: .result, error}'
+            state="$(echo "$status" | jq -r '.status // empty')"
+            if [ "$state" = "done" ]; then
+              exit 0
+            fi
+            if [ "$state" = "failed" ] || [ "$(echo "$status" | jq -r '.ok // true')" = "false" -a "$state" != "running" ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "E2E timed out." >&2
+          exit 1
+
+      - name: Download and validate final MP4
+        env:
+          BASE_URL: https://autotube-hfeu.onrender.com
+        run: |
+          set -euo pipefail
+          job="$(jq -r '.jobId' status.json)"
+          curl -fL --max-time 180 "$BASE_URL/api/full-pipeline-test/$job/download" -o autotube-final.mp4 || {
+            # The full-pipeline endpoint exposes its own result; use the URL-to-video
+            # download only when the test result explicitly contains one.
+            echo "No direct full-pipeline download endpoint; failing rather than accepting an unverified output." >&2
+            exit 1
+          }
+          test -s autotube-final.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate -of json autotube-final.mp4 > ffprobe.json
+          cat ffprobe.json
+          jq -e '.streams | map(select(.codec_type=="video")) | length >= 1' ffprobe.json
+          jq -e '.streams | map(select(.codec_type=="audio")) | length >= 1' ffprobe.json
+          jq -e '.format.duration | tonumber > 0' ffprobe.json
+          jq -e '.format.size | tonumber > 10000' ffprobe.json
+
+      - name: Upload verified MP4 and reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-verified-mp4-${{ github.sha }}
+          path: |
+            autotube-final.mp4
+            status.json
+            ffprobe.json
+            start.json
+          retention-days: 7
