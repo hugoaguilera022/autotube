@@ -50,6 +50,9 @@ jobs:
           done
           exit 1
 
+      - name: Install FFmpeg for validation
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
       - name: Download and validate the actual MP4
         env:
           APP_URL: https://autotube-ai-e2e-isolated.onrender.com
@@ -82,3 +85,5 @@ jobs:
 # retry after reference-download bypass
 
 # retry after prompt fix
+
+# ffprobe validation enabled
