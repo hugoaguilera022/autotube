@@ -1362,7 +1362,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(job){
       job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
       job.sceneCount=scenes.length;job.durationSeconds=validation.durationSeconds||durationSeconds;
-      job.validation={...validation,mode:'original-alternative',sourceReference:reference,
+      job.validation={...validation,mode:'original-alternative',sourceReference:reference,referenceAudioVisualProfile:{videoProfile:visualReferenceAnalysis?.videoProfile||{},animationProfile:visualReferenceAnalysis?.animationProfile||{},audioProfile,structureProfile:visualReferenceAnalysis?.structureProfile||{}},
         audiovisualSimilarityProfile:{
           sceneCount:scenes.length,
           referencePreferredSceneCount:preferred,
@@ -1410,7 +1410,7 @@ app.get('/api/url-to-video/:jobId',async(req,res)=>{
   if(job.status==='processing')return res.status(202).json({ok:false,status:'processing',jobId:job.id,progress:job.progress});
   if(job.status==='error')return res.status(500).json({ok:false,status:'error',jobId:job.id,error:job.error});
   res.json({ok:true,status:'done',jobId:job.id,progress:100,reference:job.reference,referenceTitle:job.referenceTitle,
-    sceneCount:job.sceneCount,durationSeconds:job.durationSeconds,size:job.size,validation:job.validation,
+    sceneCount:job.sceneCount,durationSeconds:job.durationSeconds,size:job.size,validation:job.validation,referenceAudioVisualProfile:job.validation?.referenceAudioVisualProfile||null,
     downloadUrl:'/api/url-to-video/'+encodeURIComponent(job.id)+'/download'});
 });
 app.get('/api/url-to-video/:jobId/download',async(req,res)=>{
