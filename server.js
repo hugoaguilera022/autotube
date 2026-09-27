@@ -983,7 +983,7 @@ async function executeFullPipelineTest(reference,testId=null){
     }
   };
   try{
-    let video=null,style=null,outline=null,plan=null,narrationAudio=[],music=null,render=null,validation=null,mediaResults=[];
+    let video=null,style=null,outline=null,plan=null,narrationAudio=[],music=null,render=null,validation=null,mediaResults=[],aiClips=[];
     await run('youtube-source-and-reference-analysis',async()=>{
       video=await getReferenceVideo(reference);
       style=await analyzeYoutubeReferenceMediaDirect(reference,video);
@@ -1066,12 +1066,23 @@ async function executeFullPipelineTest(reference,testId=null){
       const d=await r.json();
       if(!r.ok)throw new Error(d?.error||'Media search '+r.status);
       mediaResults=Array.isArray(d.results)?d.results:[];
-      // Stock APIs are optional. If unavailable, generate original visual assets
-      // from the analyzed scene prompts instead of blocking the pipeline.
+      // Generate original motion clips sequentially when LTX is available. Never run
+      // scene generations concurrently on Render Free; that would spike memory/CPU.
+      if(!style.constantImage){
+        for(let i=0;i<plan.scenes.length;i++){
+          const scene=plan.scenes[i];
+          try{
+            const clip=await generateFreeLtxVideoClip(String(scene.visualPrompt||scene.title||referenceTitle)+'; '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3200)+'; '+String(scene.animationNotes||'').slice(0,1200)+'; ORIGINAL MATERIAL ONLY.',dir,{durationSeconds:Math.min(8.5,Math.max(3,Number(scene.duration)||5)),width:704,height:396,improveTexture:false});
+            await validateGeneratedVideoClip(clip.outputPath);
+            aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model};
+          }catch(err){console.warn('AI video scene '+(i+1)+' unavailable; fallback visual:',err.message||String(err));}
+        }
+      }
+      // Stock APIs remain a visual fallback; if absent, generate original images.
       for(let i=0;i<plan.scenes.length;i++){
         const scene=plan.scenes[i];
         const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
-        if(row?.media?.some(m=>m?.downloadUrl))continue;
+        if(aiClips[i]?.path||row?.media?.some(m=>m?.downloadUrl))continue;
         try{
           const imageDir=await fs.mkdtemp(path.join(dir,'scene-image-'));
           const generated=await generateGeminiOriginalImage(
@@ -1114,6 +1125,7 @@ async function executeFullPipelineTest(reference,testId=null){
       render=await renderAutotubeVideo({
         scenes:plan.scenes,
         mediaResults,
+        aiClips,
         narrationAudio,
         musicBuffer:music?.buffer||null,
         onProgress:()=>{},
