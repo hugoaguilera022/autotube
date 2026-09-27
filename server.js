@@ -2150,6 +2150,14 @@ async function executeUrlToVideo(reference,jobId,options={}){
         video=await getReferenceVideo(reference);
       }
     }
+    if(!video?.thumbnail){
+      const fallbackVideoId=extractYoutubeVideoId(reference);
+      if(fallbackVideoId){
+        const fallbackThumb='https://i.ytimg.com/vi/'+fallbackVideoId+'/hqdefault.jpg';
+        video={...video,thumbnail:fallbackThumb,thumbnails:[...(Array.isArray(video?.thumbnails)?video.thumbnails:[]),fallbackThumb]};
+        console.log('AUTOTUBE PUBLIC THUMBNAIL FALLBACK',fallbackThumb);
+      }
+    }
     if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
     const referenceProbe=referenceDownloaded.probe||{};
     if(!options.forceAi && !referenceDownloaded?.bytes)throw new Error('No se obtuvo una referencia MP4 validada.');
