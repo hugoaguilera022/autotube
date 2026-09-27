@@ -2125,6 +2125,31 @@ async function downloadReferenceDirectForAiE2E(url,dir){
   return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'validated-exact'};
 }
 
+async function generateWanFastI2VClip(imagePath,dir,options={}){
+  const {Client,handle_file}=require('@gradio/client');
+  const app=await Client.connect('zerogpu-aoti/wan2-2-fp8da-aoti-faster');
+  const prompt=String(options.prompt||'Generate original cinematic motion from this reference image, preserve the main subject and setting.').trim();
+  const negative=String(options.negativePrompt||'worst quality, blurry, jittery, distorted, text, logos, watermark, static frame').trim();
+  const duration=Math.max(0.5,Math.min(5,Number(options.durationSeconds)||3.5));
+  const steps=Math.max(1,Math.min(8,Number(options.steps)||4));
+  const seed=Math.floor(Math.random()*2147483647);
+  const result=await app.predict('/generate_video',[
+    await handle_file(imagePath),prompt,steps,negative,duration,1,1,seed,true
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!url)throw new Error('Wan2.2 Fast I2V no devolvió un vídeo.');
+  const response=await fetch(String(url));
+  if(!response.ok)throw new Error('Wan2.2 Fast I2V no pudo descargar el vídeo ('+response.status+').');
+  const outputPath=path.join(dir,'wan2-2-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  const dataBuf=Buffer.from(await response.arrayBuffer());
+  if(dataBuf.length<20000)throw new Error('Wan2.2 Fast I2V devolvió un vídeo vacío o inválido.');
+  await fs.writeFile(outputPath,dataBuf);
+  const stat=await fs.stat(outputPath);
+  return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · Wan2.2 Fast I2V',model:'zerogpu-aoti/wan2-2-fp8da-aoti-faster',durationSeconds:duration,referenceDriven:true,status:'complete'};
+}
+
 async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('Jiny34/Image-to-video');
@@ -2282,10 +2307,19 @@ async function executeUrlToVideo(reference,jobId,options={}){
           if(!imageResponse.ok||imageBytes.length<5000)throw new Error('No se pudo descargar la miniatura pública: HTTP '+imageResponse.status);
           await fs.writeFile(publicReferenceImage,imageBytes);
         }
-        generatedVideo=await Promise.race([
-          generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),600000))
-        ]);
+        for(const conditionedProvider of ['wan-fast-i2v','svd-space']){
+        try{
+          const fn=conditionedProvider==='wan-fast-i2v'?generateWanFastI2VClip:generatePublicSvdImageToVideoClip;
+          generatedVideo=await Promise.race([
+            fn(publicReferenceImage,dir,{prompt,durationSeconds:3.5,width:704,height:400}),
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error(conditionedProvider+' timeout')),conditionedProvider==='wan-fast-i2v'?300000:600000))
+          ]);
+          if(generatedVideo?.outputPath)break;
+        }catch(err){
+          videoProviderErrors.push(conditionedProvider+': '+String(err?.message||err));
+          console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',conditionedProvider,err?.message||String(err));
+        }
+      }
       }catch(err){
         videoProviderErrors.push('svd-space: '+String(err?.message||err));
         console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
