@@ -2109,6 +2109,29 @@ async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   return{outputPath,bytes:stat.size,provider:'Hugging Face public SVD Space',model:'stabilityai/stable-video-diffusion-img2vid',referenceDriven:true,status:'complete'};
 }
 
+async function getPublicYoutubeReferenceFallback(reference){
+  const videoId=extractYoutubeVideoId(reference);
+  if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
+  let title='YouTube AI reference '+videoId;
+  try{
+    const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(reference)+'&format=json',{headers:{'User-Agent':'AutoTube/1.0'},signal:AbortSignal.timeout(15000)});
+    if(oembed.ok){const data=await oembed.json();if(data?.title)title=String(data.title);}
+  }catch(err){console.warn('AUTOTUBE OEMBED FALLBACK FAILED',err?.message||String(err));}
+  const thumbnails=[
+    'https://i.ytimg.com/vi/'+videoId+'/maxresdefault.jpg',
+    'https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'
+  ];
+  let thumbnail='';
+  for(const url of thumbnails){
+    try{
+      const r=await fetch(url,{headers:{'User-Agent':'AutoTube/1.0'},signal:AbortSignal.timeout(15000)});
+      if(r.ok){const b=Buffer.from(await r.arrayBuffer());if(b.length>5000){const p=path.join(os.tmpdir(),'autotube-public-thumb-'+videoId+'.jpg');await fs.writeFile(p,b);thumbnail=p;break;}}
+    }catch{}
+  }
+  if(!thumbnail)throw new Error('No se pudo obtener una miniatura pública de YouTube para la referencia.');
+  return {videoId,title,description:'',channelTitle:'',duration:'',thumbnail,thumbnails:[thumbnail],publicReference:true};
+}
+
 async function executeUrlToVideo(reference,jobId,options={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-alternative-'));
   const job=urlVideoJobs.get(jobId);
