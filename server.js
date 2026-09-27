@@ -50,12 +50,16 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
 });app.get('/api/verify-ai-e2e',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'reference requerida'});
-  const existing=[...fullPipelineTestJobs.values()].find(j=>j.status==='running');
-  if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/full-pipeline-test/'+encodeURIComponent(existing.id),reused:true});
-  const jobId='fulltest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
-  fullPipelineTestJobs.set(jobId,{id:jobId,reference,status:'running',startedAt:Date.now(),result:null});
-  res.status(202).json({ok:false,status:'running',jobId,statusUrl:'/api/full-pipeline-test/'+encodeURIComponent(jobId)});
-  executeFullPipelineTest(reference).then(result=>{const j=fullPipelineTestJobs.get(jobId);if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}}).catch(err=>{const j=fullPipelineTestJobs.get(jobId);if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}});
+  const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
+  if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id),reused:true});
+  const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  urlVideoJobs.set(jobId,{id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null});
+  res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
+  executeUrlToVideo(reference,jobId,{forceAi:true}).catch(err=>{
+    const job=urlVideoJobs.get(jobId);
+    if(job){job.status='error';job.error=err?.message||String(err);job.progress=100;}
+    console.error('AUTOTUBE AI E2E FAILED',err?.stack||err);
+  });
 });
 
 
