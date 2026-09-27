@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 concurrency:
   group: autotube-ai-e2e
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   proof:
     runs-on: ubuntu-latest
