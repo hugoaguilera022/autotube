@@ -2245,6 +2245,15 @@ if(String(process.env.AUTOTUBE_REFERENCE_AI_PROOF_ONCE||'')==='1'&&String(proces
 
 
 
+const startupReferenceAiProof=String(process.env.AUTOTUBE_RUN_REFERENCE_AI_PROOF||'').trim();
+if(startupReferenceAiProof){
+  setTimeout(async()=>{
+    const jobId='startup-reference-proof_'+Date.now();
+    referenceAiProofJobs.set(jobId,{id:jobId,reference:startupReferenceAiProof,status:'running',progress:0,startedAt:Date.now()});
+    await executeReferenceAiProof(startupReferenceAiProof,jobId);
+    console.log('AUTOTUBE REFERENCE AI PROOF RESULT',JSON.stringify(referenceAiProofJobs.get(jobId)));
+  },7000);
+}
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
