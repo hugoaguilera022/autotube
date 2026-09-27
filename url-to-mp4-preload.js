@@ -346,6 +346,16 @@ async function downloadViaLegacyYtdl(url,dir){
 async function getTrustedYoutubeSession(){const bases=String(process.env.AUTOTUBE_YT_SESSION_URLS||'https://autotube-yt-session.onrender.com').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);for(const base of bases){try{const r=await fetch(base+'/token',{headers:{Accept:'application/json'}});if(!r.ok)continue;const d=await r.json();const po=String(d.poToken||d.po_token||'').trim(),vd=String(d.visitorData||d.visitor_data||'').trim();if(po&&vd)return{po,vd}}catch(e){console.warn('AUTOTUBE TRUSTED SESSION FAILED',base,String(e?.message||e))}}return null;}
 async function downloadReferenceFast(url,dir){
   await fs.mkdir(dir,{recursive:true});
+  const artifact=String(process.env.AUTOTUBE_REFERENCE_ARTIFACT_URL||'').trim();
+  if(artifact){
+    try{
+      const res=await fetch(artifact,{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0','Accept':'video/mp4,application/octet-stream,*/*'}});
+      if(!res.ok||!res.body)throw new Error('reference artifact HTTP '+res.status);
+      const out=path.join(dir,'source.mp4'),fh=await fs.open(out,'w');
+      try{const reader=res.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
+      return await validateExactCandidate({source:out,strategy:'verified-reference-artifact'});
+    }catch(e){console.error('AUTOTUBE VERIFIED ARTIFACT FAILED',String(e?.message||e));}
+  }
   const attempts=[
     ['yt5s',downloadViaYt5sProxy],
     ['piped',downloadViaPiped],
