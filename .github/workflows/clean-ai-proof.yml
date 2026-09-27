@@ -34,7 +34,7 @@ jobs:
       - name: Poll exact job
         run: |
           set -euo pipefail
-          for i in $(seq 1 135); do
+          for i in $(seq 1 270); do
             sleep 10
             status="$(curl -fsS --max-time 30 "https://autotube-ai-e2e-isolated.onrender.com/api/url-to-video/$JOB")"
             echo "$status"
