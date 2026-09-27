@@ -685,6 +685,19 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
     sceneCount:scenes.length
   });
 }catch(err){
+  if(!String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim()){
+    const body=req.body||{};
+    const fallbackTopic=String(body.topic||body.referenceTopic||body.referenceData?.title||'contenido original').trim();
+    const refProfile=body.referenceStyle?.visualAnalysis||body.visualReferenceAnalysis||{};
+    const durationSeconds=Math.max(1,Number(refProfile?.videoProfile?.durationSeconds)||Math.max(30,Number(body.duration||1)*60));
+    const segments=Array.isArray(refProfile?.structureProfile?.sceneSegments)?refProfile.structureProfile.sceneSegments:[];
+    const count=Math.max(1,Math.min(12,Number(refProfile?.generationDirectives?.preferredSceneCount||refProfile?.videoProfile?.estimatedSceneCount||segments.length||6)));
+    const scenes=Array.from({length:count},(_,i)=>{
+      const seg=segments.length?segments[Math.min(segments.length-1,Math.floor(i*segments.length/count))]:{};
+      return {number:i+1,title:String(seg.summary||seg.subject||fallbackTopic).slice(0,180),narration:'Contenido original sobre '+fallbackTopic+'.',visualPrompt:String(seg.generationPrompt||seg.subject||fallbackTopic)+'; '+String(seg.composition||'16:9 cinematic')+'; original AI visual, high quality, no logos, no copied footage.',animationNotes:String(seg.cameraMovement||'subtle cinematic movement'),duration:durationSeconds/count,mediaType:'image',constantImage:Boolean(refProfile?.videoProfile?.constantImage),referenceSegment:seg};
+    });
+    return res.json({title:fallbackTopic,scenes,referenceContext:Boolean(body.reference),reference:body.reference||'',referenceData:body.referenceData||null,referenceStyle:body.referenceStyle||null,visualReferenceAnalysis:refProfile,sceneCount:scenes.length});
+  }
   console.error('Production plan error:',err);
   const body=req.body||{};
   const fallbackTopic=String(body.topic||body.referenceTopic||body.referenceData?.title||'el tema del vídeo').trim();
