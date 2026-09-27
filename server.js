@@ -2821,15 +2821,9 @@ app.get('/api/url-to-video/:jobId',async(req,res)=>{
     if(!reference)return res.status(410).json({ok:false,status:'restart',error:'El trabajo se perdió porque Render reinició la instancia. Reintenta con la referencia de YouTube.'});
     const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
     if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,progress:existing.progress||1,resurrected:true,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)});
-    const resurrectedId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
-    job={id:resurrectedId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null,resurrected:true};
-    urlVideoJobs.set(resurrectedId,job);
-    executeUrlToVideo(reference,resurrectedId,{forceAi:true}).catch(err=>{
-      const current=urlVideoJobs.get(resurrectedId);
-      if(current){current.status='error';current.error=err?.message||String(err);current.progress=100;current.finishedAt=Date.now();}
-      console.error('AUTOTUBE URL-TO-VIDEO RESURRECT FAILED',resurrectedId,err);
-    });
-    return res.status(202).json({ok:false,status:'processing',jobId:resurrectedId,progress:1,resurrected:true,statusUrl:'/api/url-to-video/'+encodeURIComponent(resurrectedId)});
+    const result=enqueueUrlVideoJob(reference,{forceAi:true,resurrected:true});
+    job=result.job;
+    return res.status(202).json({ok:false,status:job.status,jobId:job.id,progress:job.progress||0,resurrected:true,statusUrl:'/api/url-to-video/'+encodeURIComponent(job.id),queuePosition:job.status==='queued'?queuedUrlVideoJobs.indexOf(job.id)+1:0});
   }
   if(job.status==='processing')return res.status(202).json({ok:false,status:'processing',jobId:job.id,progress:job.progress});
   if(job.status==='error')return res.status(500).json({ok:false,status:'error',jobId:job.id,error:job.error});
