@@ -2109,6 +2109,24 @@ async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   return{outputPath,bytes:stat.size,provider:'Hugging Face public SVD Space',model:'stabilityai/stable-video-diffusion-img2vid',referenceDriven:true,status:'complete'};
 }
 
+async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
+  const {Client,handle_file}=require('@gradio/client');
+  const app=await Client.connect('wavespeed/wan-2-1-i2v-480p-ultra-fast');
+  const prompt=String(options.prompt||'Generate original natural cinematic motion while preserving the main subject, setting and visual identity of the reference image.').slice(0,4000);
+  const result=await app.predict('/generate',[handle_file(imagePath),prompt,5,42]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!url)throw new Error('Wan 2.1 public Space no devolvió un vídeo.');
+  const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
+  if(!response.ok)throw new Error('Wan 2.1 public Space no pudo descargar el vídeo ('+response.status+').');
+  const outputPath=path.join(dir,'wan21-public-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+  const stat=await fs.stat(outputPath);
+  if(!stat.size)throw new Error('Wan 2.1 public Space devolvió un vídeo vacío.');
+  return{outputPath,bytes:stat.size,provider:'Hugging Face public Wan 2.1 I2V',model:'Wan2.1-I2V-480p',referenceDriven:true,status:'complete'};
+}
+
 async function getPublicYoutubeReferenceFallback(reference){
   const videoId=extractYoutubeVideoId(reference);
   if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
@@ -2256,7 +2274,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
         videoProviderErrors.push('svd-space: '+String(err?.message||err));
         console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
       }
-      if(!generatedVideo?.outputPath) for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
+      if(!generatedVideo?.outputPath) try{        generatedVideo=await Promise.race([generateWaveSpeedWanVideoClip(publicReferenceImage,dir,{prompt}),new Promise((_,reject)=>setTimeout(()=>reject(new Error('wan21-space timeout')),240000))]);      }catch(err){videoProviderErrors.push('wan21-space: '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','wan21-space',err?.message||String(err));}      if(!generatedVideo?.outputPath) for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
         try{
           const fn=provider==='chopperblu'?generateChopperBluLtxVideoClip:(provider==='goalsave'?generateGoalsaveLtxVideoClip:(provider==='ltx'?generateFreeLtxVideoClip:generatePollinationsVideoClip));
           generatedVideo=await Promise.race([fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false}),new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))]);
