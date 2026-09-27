@@ -1,12 +1,12 @@
 name: Clean AI reference audiovisual proof
-# Generic fallback verification refresh: 2026-09-27T15:58:47.446Z
+# Generic fallback verification refresh v2: 2026-09-27T15:58:47.446Z
 on:
   push:
     branches: [e2e-stable]
     paths: ['.github/workflows/clean-ai-proof.yml']
   workflow_dispatch:
 concurrency:
-  group: autotube-ai-e2e
+  group: autotube-ai-e2e-v2
   cancel-in-progress: true
   # proof uses the live generic URL-to-video AI path
 jobs:
