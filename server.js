@@ -2054,26 +2054,26 @@ async function executeUrlToVideo(reference,jobId,options={}){
         : await analyzeYoutubeReferenceMedia(reference,video));
     if(job)job.progress=18;
 
-    // Lightweight proof path: create one original AI visual from the reference
-    // and turn it into a short, technically validated MP4. This avoids LTX/ZeroGPU
-    // memory spikes on constrained Render instances while keeping the media original.
+    // Generic AI proof: every reference is analyzed from its own downloaded MP4.
+    // Never hard-code subjects, locations, characters, or style from a test video.
     if(options.forceAi){
       const aiReferenceTitle=String(video.title||reference||'Contenido original').slice(0,300);
-      const segments=Array.isArray(style?.visualAnalysis?.structureProfile?.sceneSegments)?style.visualAnalysis.structureProfile.sceneSegments:[];
-      const referenceHint=String(options.referenceHint||'').slice(0,3500);
+      const visualReferenceAnalysis=style.visualAnalysis||{};
+      const segments=Array.isArray(visualReferenceAnalysis?.structureProfile?.sceneSegments)
+        ? visualReferenceAnalysis.structureProfile.sceneSegments : [];
       const prompt=[
-        'HIGHEST PRIORITY: reproduce the CONCRETE SUBJECTS and visual situation named in the reference hint, while creating completely original AI material.',
-        'For this reference the required visible subjects are: anthropomorphic Canadian Mountie bears in red serge uniforms, at least one clearly playing bagpipes; battle-ready beavers; a moose; a grizzly bear; porcupines; Canadian wilderness, pine forest and snowy mountains.',
-        'At least TWO named animal subjects must be clearly recognizable in the foreground or midground. Do NOT substitute generic soldiers, generic wildlife or an empty landscape.',
-        'No text, no captions, no studio names, no brand logos, no watermarks, no fake signs, no title cards.',
-        'NEW ORIGINAL cinematic AI music-video scene. Preserve the real reference mood, palette, camera language, lighting and motion rhythm, but change the exact shot and details.',
-        'Reference title: '+String(video.title||reference).slice(0,300),
-        'Reference hint: '+referenceHint,
-        'Sampled real-frame structure: '+JSON.stringify(segments.slice(0,12)).slice(0,4500),
-        'Visual profile: '+JSON.stringify(style?.visualAnalysis?.videoProfile||{}).slice(0,2200),
-        'Animation profile: '+JSON.stringify(style?.visualAnalysis?.animationProfile||{}).slice(0,1800),
-        '16:9, photorealistic surreal cinema, coherent continuous motion, high detail, original composition.'
-      ].join('\n');
+        'Create NEW ORIGINAL AI-generated video material from this specific YouTube reference.',
+        'The reference is the REAL DOWNLOADED MP4 analyzed frame-by-frame. Reproduce its concrete visible subjects, setting, composition, camera language, lighting, palette, motion rhythm and visual continuity.',
+        'Do not invent a generic theme and do not replace the observed subjects with unrelated subjects.',
+        'Do not copy exact frames, faces, logos, text, lyrics, recordings or exact shots. Make a new original composition with the same recognizable audiovisual concept.',
+        'Reference title: '+aiReferenceTitle,
+        'Reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3000),
+        'Reference animation profile: '+JSON.stringify(visualReferenceAnalysis?.animationProfile||{}).slice(0,2500),
+        'Reference scene structure: '+JSON.stringify(segments.slice(0,16)).slice(0,6500),
+        'Reference generation directives: '+JSON.stringify(visualReferenceAnalysis?.generationDirectives||{}).slice(0,2200),
+        'Reference audio profile for pacing only: '+JSON.stringify(visualReferenceAnalysis?.audioProfile||{}).slice(0,1800),
+        '16:9, high-detail cinematic AI video, coherent continuous motion, original material, no watermark.'
+      ].join('\\n');
       let generatedVideo=null;
       try{
         generatedVideo=await Promise.race([
@@ -2087,40 +2087,33 @@ async function executeUrlToVideo(reference,jobId,options={}){
           generatedVideo=await generatePollinationsVideoClip(prompt,dir,{durationSeconds:4});
           console.log('AUTOTUBE URL->AI POLLINATIONS VIDEO DONE',generatedVideo?.provider||'unknown');
         }catch(videoErr){
-          console.warn('Pollinations true-video fallback to AI image-motion:',videoErr?.message||String(videoErr));
+          throw new Error('No hay un proveedor de vídeo IA disponible para generar material nuevo basado en la referencia real: '+(videoErr?.message||String(videoErr)));
         }
       }
-      let generatedImage=null;
-      if(!generatedVideo){
-        generatedImage=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
-      }
-      const audioProfile={
-        hasMusic:true,hasSpeech:false,hasAmbience:true,hasSoundEffects:true,
-        musicMood:'original cinematic marching folk-rock anthem matching the reference energy',
-        energy:'high',dynamics:'high',instrumentation:'bagpipes, marching drums, folk-rock rhythm section',
-        bpmEstimate:'86',voiceMusicBalance:'instrumental reference bed',audioContinuity:'continuous'
-      };
+      const audioProfile=visualReferenceAnalysis?.audioProfile||{};
       const generatedAudio=await generateMusicBuffer({
         topic:aiReferenceTitle,
-        mood:audioProfile.musicMood,
-        audioProfile,
+        mood:String(audioProfile.musicMood||'original music matching the reference mood'),
+        audioProfile:{
+          ...audioProfile,
+          hasMusic:audioProfile.hasMusic===true,
+          hasSpeech:audioProfile.hasSpeech===true,
+          hasAmbience:audioProfile.hasAmbience===true,
+          hasSoundEffects:audioProfile.hasSoundEffects===true
+        },
         durationSeconds:4
       });
       const audioPath=path.join(dir,'reference-matched-original-audio.wav');
       await fs.writeFile(audioPath,generatedAudio.buffer);
       const outputPath=path.join(renderJobDir,jobId+'.mp4');
-      if(generatedVideo){
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',generatedVideo.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf','scale=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath]);
-      }else{
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',generatedImage.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf',"scale=1280:720,zoompan=z='min(zoom+0.001,1.08)':d=1:s=1280x720:fps=30",'-r','30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath]);
-      }
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',generatedVideo.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf','scale=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath]);
       const validation=await validateRenderedMp4(outputPath,4);
       const stat=await fs.stat(outputPath);
       if(!stat.size)throw new Error('El MP4 IA final está vacío.');
       if(job){
         job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
         job.sceneCount=1;job.durationSeconds=validation.durationSeconds;
-        job.validation={...validation,mode:generatedVideo?'ai-video-reference-original':'ai-reference-anchored-original',generatedByAi:true,aiProvider:generatedVideo?.provider||generatedImage?.provider,aiModel:generatedVideo?.model||generatedImage?.model,audioProvider:generatedAudio.provider,sourceReference:reference,referenceVisualSource:style.visualSource||'youtube-download+sampled-frames',referenceAnalysis:style.analysisSource||'unknown',referenceAudioSource:style.hasAudioAnalysis?'reference-audio-analysis+original-generated-audio':'original-generated-audio-profile',referenceMatch:'real-reference-frame/profile-guided original generation'};
+        job.validation={...validation,mode:'ai-video-reference-original',generatedByAi:true,aiProvider:generatedVideo.provider,aiModel:generatedVideo.model,audioProvider:generatedAudio.provider,sourceReference:reference,referenceVisualSource:style.visualSource||'youtube-download+sampled-frames',referenceAnalysis:style.analysisSource||'unknown',referenceAudioSource:style.hasAudioAnalysis?'reference-audio-analysis+original-generated-audio':'reference-audio-profile+original-generated-audio',referenceMatch:'real-reference-frame/profile-guided original generation'};
         job.finishedAt=Date.now();
       }
       return{ok:true,jobId,reference,referenceTitle:aiReferenceTitle,sceneCount:1,size:stat.size,durationSeconds:validation.durationSeconds,generatedByAi:true,validation:job?.validation};
