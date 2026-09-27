@@ -2124,20 +2124,31 @@ async function executeUrlToVideo(reference,jobId,options={}){
         }
       }
       const audioProfile=visualReferenceAnalysis?.audioProfile||{};
-      const generatedAudio=await generateMusicBuffer({
-        topic:aiReferenceTitle,
-        mood:String(audioProfile.musicMood||'original music matching the reference mood'),
-        audioProfile:{
-          ...audioProfile,
-          hasMusic:audioProfile.hasMusic===true,
-          hasSpeech:audioProfile.hasSpeech===true,
-          hasAmbience:audioProfile.hasAmbience===true,
-          hasSoundEffects:audioProfile.hasSoundEffects===true
-        },
-        durationSeconds:4
-      });
+      let generatedAudio=null;
+      try{
+        generatedAudio=await generateMusicBuffer({
+          topic:aiReferenceTitle,
+          mood:String(audioProfile.musicMood||'original music matching the reference mood'),
+          audioProfile:{
+            ...audioProfile,
+            hasMusic:audioProfile.hasMusic===true,
+            hasSpeech:audioProfile.hasSpeech===true,
+            hasAmbience:audioProfile.hasAmbience===true,
+            hasSoundEffects:audioProfile.hasSoundEffects===true
+          },
+          durationSeconds:4
+        });
+      }catch(audioErr){
+        console.warn('AUTOTUBE URL->AI ORIGINAL AUDIO FAILED; using reference audio',audioErr?.message||String(audioErr));
+      }
       const audioPath=path.join(dir,'reference-matched-original-audio.wav');
-      await fs.writeFile(audioPath,generatedAudio.buffer);
+      if(generatedAudio?.buffer){
+        await fs.writeFile(audioPath,generatedAudio.buffer);
+      }else if(referenceDownloaded?.file){
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',referenceDownloaded.file,'vn','-sn','-dn','-t','4','-ac','2','-ar','48000','-c:a','pcm_s16le',audioPath]);
+      }else{
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000','-t','4','-c:a','pcm_s16le',audioPath]);
+      }
       const outputPath=path.join(renderJobDir,jobId+'.mp4');
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',generatedVideo.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf','scale=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath]);
       const validation=await validateRenderedMp4(outputPath,4);
