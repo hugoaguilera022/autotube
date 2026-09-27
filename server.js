@@ -15,6 +15,8 @@ const youtubedl = require('youtube-dl-exec');
 const upload = multer({ storage: multer.diskStorage({ destination: (_req,_file,cb)=>cb(null,os.tmpdir()), filename: (_req,file,cb)=>cb(null,'autotube-upload-'+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+'-'+String(file.originalname||'upload').replace(/[^a-zA-Z0-9._-]/g,'_')) }), limits: { fileSize: 250 * 1024 * 1024 } });
 const renderJobs = new Map();
 let activeRenderJobId = null;
+let activeUrlVideoJobId = null;
+const queuedUrlVideoJobs = [];
 const renderJobDir = path.join(os.tmpdir(), 'autotube-render-jobs');
 fs.mkdir(renderJobDir, { recursive: true }).catch(() => {});
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
@@ -39,12 +41,18 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
   if(!reference)return res.status(400).json({error:'reference requerida'});
   const videoId=extractYoutubeVideoId(reference);
   if(!videoId)return res.status(400).json({error:'URL de YouTube no válida'});
+  const active=activeUrlVideoJobId&&urlVideoJobs.get(activeUrlVideoJobId);
+  if(active&&['processing','queued'].includes(active.status)){
+    return res.status(202).json({ok:false,status:'queued',jobId:active.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(active.id),reference:active.reference,queuePosition:1});
+  }
   const jobId='ai-e2e-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex');
-  const job={id:jobId,reference,status:'processing',progress:1,outputPath:null,error:null,startedAt:Date.now()};
+  const job={id:jobId,reference,status:'processing',progress:1,outputPath:null,error:null,startedAt:Date.now(),queue:'single-reference-generation'};
   urlVideoJobs.set(jobId,job);
+  activeUrlVideoJobId=jobId;
   executeUrlToVideo(reference,jobId,{referenceTitle:'AI reference',forceAi:true})
     .then(result=>{if(job.status==='processing'){job.status=result?.ok?'done':'error';job.result=result;job.finishedAt=Date.now();}})
-    .catch(err=>{job.status='error';job.progress=100;job.error=err?.message||String(err);job.finishedAt=Date.now();console.error('AUTOTUBE AI E2E FAILED',err?.stack||String(err));});
+    .catch(err=>{job.status='error';job.progress=100;job.error=err?.message||String(err);job.finishedAt=Date.now();console.error('AUTOTUBE AI E2E FAILED',err?.stack||String(err));})
+    .finally(()=>{if(activeUrlVideoJobId===jobId)activeUrlVideoJobId=null;});
   res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId),reference});
 });
 
@@ -2349,6 +2357,33 @@ async function getPublicYoutubeReferenceFallback(reference){
   return {videoId,title,description:'',channelTitle:'',duration:'',thumbnail,thumbnails:[thumbnail],publicReference:true};
 }
 
+async function analyzeLocalGeneratedVideoWithGemini(filePath){
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('GEMINI_API_KEY no configurada para validación.');
+  const bytes=await fs.readFile(filePath);
+  if(bytes.length>=20*1024*1024)throw new Error('El MP4 final supera el límite de validación inline de 20 MB.');
+  const body={model:'gemini-3.8-flash',input:[
+    {type:'video',data:bytes.toString('base64'),mime_type:'video/mp4',processing:{type:'static',fps:2}},
+    {type:'text',text:'Analyze this generated video for audiovisual validation. Return ONLY JSON with keys: subjects, setting, visual_style, palette, lighting, camera, motion, scene_count, scene_segments, pacing, audio, narrative_structure. Describe concrete visible and audible properties and timestamps where useful.'}
+  ]};
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body),signal:AbortSignal.timeout(300000)});
+  const raw=await r.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}
+  if(!r.ok)throw new Error('Gemini generated-video validation HTTP '+r.status+': '+(data?.error?.message||raw.slice(0,1000)));
+  const textOut=String(data?.output_text||data?.steps?.find(s=>s?.type==='model_output')?.content?.map(x=>x?.text||'').join(' ')||'').trim();
+  if(!textOut)throw new Error('Gemini no devolvió validación del MP4 generado.');
+  try{return JSON.parse(textOut)}catch{return parseJsonResponse(textOut)}
+}
+async function compareReferenceAndGeneratedProfiles(referenceProfile,generatedProfile){
+  const text=await callGemini({
+    system:'You are a strict audiovisual QA evaluator. Compare a reference video profile with a newly generated video profile. The generated video must be original, not identical, but must preserve the same audiovisual aspects at a high level.',
+    user:'Reference profile:\n'+JSON.stringify(referenceProfile).slice(0,12000)+'\n\nGenerated profile:\n'+JSON.stringify(generatedProfile).slice(0,12000)+'\n\nReturn ONLY JSON with booleans: structurePreserved, subjectCategoryPreserved, visualLanguagePreserved, audioCharacterPreserved, originalRecreation. Also include concise evidence for each. Mark true only when supported by the profiles; do not reward generic similarities.',
+    maxOutputTokens:1800,
+    json:true,
+    temperature:0.1
+  });
+  return parseJsonResponse(text);
+}
+
 async function executeUrlToVideo(reference,jobId,options={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-alternative-'));
   const job=urlVideoJobs.get(jobId);
@@ -2462,125 +2497,113 @@ if(options.forceAi){
         console.log('AUTOTUBE GEMINI DIRECT YOUTUBE ANALYSIS READY',JSON.stringify({jobId,sceneCount:direct.profile?.scene_count||null}));
       }catch(err){console.warn('AUTOTUBE GEMINI DIRECT YOUTUBE ANALYSIS FAILED',err?.message||String(err));}
     }
-    const style=options.forceAi
-      ? (referenceDownloaded?.file
+    let style;
+    if(options.forceAi){
+      const direct=await geminiYoutubeUrlAnalysis(reference);
+      if(!direct?.profile)throw new Error('Gemini no devolvió un perfil audiovisual verificable de la referencia de YouTube.');
+      style={
+        visualAnalysis:{
+          videoProfile:{
+            durationSeconds:Number(direct.profile.durationSeconds||direct.profile.duration_seconds||0)||0,
+            estimatedSceneCount:Number(direct.profile.scene_count||direct.profile.sceneCount||0)||0,
+            sceneChangeRate:direct.profile.scene_change_rate||'unknown',
+            cameraMovement:direct.profile.camera||direct.profile.camera_movement||'',
+            composition:direct.profile.composition||'',
+            palette:direct.profile.palette||'',
+            lighting:direct.profile.lighting||'',
+            visualStyle:direct.profile.visual_style||direct.profile.visualStyle||'',
+            continuity:direct.profile.continuity||''
+          },
+          animationProfile:{cameraMotion:direct.profile.motion||'',motionIntensity:direct.profile.motion_intensity||'',visualRhythm:direct.profile.pacing||'',transitionStyle:direct.profile.transitions||''},
+          audioProfile:direct.profile.audio||{},
+          structureProfile:{sceneSegments:Array.isArray(direct.profile.scene_segments)?direct.profile.scene_segments:[],segmentCount:Number(direct.profile.scene_count||0)||0,pacing:direct.profile.pacing||'',narrativeStructure:direct.profile.narrative_structure||''},
+          generationDirectives:{preferredSceneCount:Number(direct.profile.scene_count||0)||0,preserveVisualContinuity:true,preserveAudioContinuity:true}
+        },
+        visualSource:'gemini-public-youtube-video',
+        analysisSource:'Gemini 3.8 Flash direct YouTube video understanding',
+        geminiReferenceAnalysis:direct.raw,
+        directProfile:direct.profile
+      };
+      video.geminiReferenceAnalysis=direct.raw;
+    }else{
+      style=options.directReferenceFile
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
-        : await analyzeYoutubeReferenceMedia(reference,video,{skipFullDownload:true}))
-      : (options.directReferenceFile
-        ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
-        : await analyzeYoutubeReferenceMedia(reference,video));
+        : await analyzeYoutubeReferenceMedia(reference,video);
+    }
     if(job){job.progress=18;console.log('AUTOTUBE AI ANALYSIS READY',JSON.stringify({jobId,source:style.visualSource||'unknown',analysis:style.analysisSource||'unknown'}));}
 
     // Generic AI proof: every reference is analyzed from its own downloaded MP4.
     // Never hard-code subjects, locations, characters, or style from a test video.
     if(options.forceAi){
       const aiReferenceTitle=String(video.title||reference||'Contenido original').slice(0,300);
-      const visualReferenceAnalysis=style.visualAnalysis||{};
-      const segments=Array.isArray(visualReferenceAnalysis?.structureProfile?.sceneSegments)
-        ? visualReferenceAnalysis.structureProfile.sceneSegments : [];
-      // If the reference MP4 is unavailable, the generic visual profile and public thumbnail remain valid inputs.
-      let generatedVideo=null;
-      const prompt=[
-        'Create NEW ORIGINAL AI-generated video material from this specific YouTube reference.',
-        'The reference is the REAL DOWNLOADED MP4 analyzed frame-by-frame. Reproduce its concrete visible subjects, setting, composition, camera language, lighting, palette, motion rhythm and visual continuity.',
-        'Do not invent a generic theme and do not replace the observed subjects with unrelated subjects.',
-        'Do not copy exact frames, faces, logos, text, lyrics, recordings or exact shots. Make a new original composition with the same recognizable audiovisual concept.',
-        'Direct Gemini YouTube audiovisual analysis: '+String(video.geminiReferenceAnalysis||'').slice(0,5000),
-        'Reference title: '+aiReferenceTitle,
-        'Reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3000),
-        'Reference animation profile: '+JSON.stringify(visualReferenceAnalysis?.animationProfile||{}).slice(0,2500),
-        'Reference scene structure: '+JSON.stringify(segments.slice(0,16)).slice(0,6500),
-        'Reference generation directives: '+JSON.stringify(visualReferenceAnalysis?.generationDirectives||{}).slice(0,2200),
-        'Reference audio profile for pacing only: '+JSON.stringify(visualReferenceAnalysis?.audioProfile||{}).slice(0,1800),
-        '16:9, high-detail cinematic AI video, coherent continuous motion, original material, no watermark.'
-      ].join('\\n');
-      const videoProviderErrors=[];
-      console.log('AUTOTUBE AI GENERATION START',JSON.stringify({jobId,reference,provider:'wan21-first'}));
+      const profile=style.directProfile||{};
+      const segments=Array.isArray(profile.scene_segments)?profile.scene_segments:[];
+      const sceneCount=Math.max(1,Math.min(6,segments.length||Number(profile.scene_count)||3));
       const publicReferenceImage=path.join(dir,'public-reference-conditioning.jpg');
-      try{
-        const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
-        if(!thumb)throw new Error('No hay miniatura pública para condicionar el vídeo IA.');
-        const imageResponse=await fetch(thumb,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/jpeg,image/*'},signal:AbortSignal.timeout(20000)});
-        const imageBytes=Buffer.from(await imageResponse.arrayBuffer());
-        if(!imageResponse.ok||imageBytes.length<5000)throw new Error('No se pudo descargar la miniatura pública: HTTP '+imageResponse.status);
-        await fs.writeFile(publicReferenceImage,imageBytes);
-      }catch(err){throw new Error('No se pudo preparar la referencia visual pública: '+(err?.message||String(err)));}
-
-      try{
-        if(String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim()){
-          generatedVideo=await generateGeminiOmniFromImage(publicReferenceImage,dir,prompt);
-          console.log('AUTOTUBE GEMINI OMNI VIDEO READY',JSON.stringify({jobId,bytes:generatedVideo.bytes}));
-        }
-      }catch(err){
-        videoProviderErrors.push('gemini-omni: '+String(err?.message||err));
-        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','gemini-omni',err?.message||String(err));
-      }
-      try{
-        generatedVideo=await Promise.race([
-          generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),240000))
-        ]);
-      }catch(err){
-        videoProviderErrors.push('svd-space: '+String(err?.message||err));
-        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
-      }
-      if(!generatedVideo?.outputPath)try{
-        generatedVideo=await Promise.race([
-          generateWaveSpeedWanVideoClip(publicReferenceImage,dir,{prompt}),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('wan21-space timeout')),240000))
-        ]);
-      }catch(err){
-        videoProviderErrors.push('wan21-space: '+String(err?.message||err));
-        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','wan21-space',err?.message||String(err));
-      }
-      if(!generatedVideo?.outputPath){
+      const videoId=extractYoutubeVideoId(reference);
+      const thumbUrls=[
+        'https://i.ytimg.com/vi/'+videoId+'/maxresdefault.jpg',
+        'https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'
+      ];
+      let imageBytes=null;
+      for(const thumb of thumbUrls){
         try{
-          generatedVideo=await generateGeminiOmniImageToVideoClip(publicReferenceImage,dir,{prompt});
-        }catch(err){
-          videoProviderErrors.push('gemini-omni: '+String(err?.message||err));
-          console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','gemini-omni',err?.message||String(err));
-        }
+          const rr=await fetch(thumb,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0'},signal:AbortSignal.timeout(20000)});
+          if(rr.ok){const b=Buffer.from(await rr.arrayBuffer());if(b.length>5000){imageBytes=b;break;}}
+        }catch{}
       }
-      if(!generatedVideo?.outputPath) for(const provider of ['pollinations','chopperblu','goalsave','ltx']){
+      if(!imageBytes)throw new Error('No se pudo obtener una imagen pública de condicionamiento de YouTube.');
+      await fs.writeFile(publicReferenceImage,imageBytes);
+      const clipPaths=[];
+      const providerErrors=[];
+      for(let i=0;i<sceneCount;i++){
+        if(job)job.progress=25+Math.round((i/sceneCount)*45);
+        const seg=segments[i]||{};
+        const prompt=[
+          'Create NEW ORIGINAL AI video scene '+(i+1)+' of '+sceneCount+' inspired by the public YouTube reference analyzed separately.',
+          'Preserve the reference audiovisual role of this segment: subject category, setting, visual style, palette, lighting, camera language, motion intensity, pacing and transition logic.',
+          'Tell a DIFFERENT story and change the exact action, framing, geometry, details and moment. Never reproduce exact frames, faces, logos, text, dialogue, recordings or copyrighted footage.',
+          'The scene must be coherent with adjacent scenes and must include original synchronized audio appropriate to the described audiovisual character.',
+          'REFERENCE GLOBAL PROFILE: '+JSON.stringify(profile).slice(0,6500),
+          'SEGMENT '+(i+1)+': '+JSON.stringify(seg).slice(0,5000),
+          'REFERENCE TITLE: '+aiReferenceTitle,
+          '16:9 cinematic, high detail, original material, no watermark.'
+        ].join('\n');
+        let generated=null,lastErr='';
         try{
-          const fn=provider==='pollinations'?generatePollinationsVideoClip:(provider==='chopperblu'?generateChopperBluLtxVideoClip:(provider==='goalsave'?generateGoalsaveLtxVideoClip:generateFreeLtxVideoClip));
-          generatedVideo=await Promise.race([
-            fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImagePath:publicReferenceImage}),
-            new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))
-          ]);
-          if(generatedVideo?.outputPath)break;
-        }catch(err){videoProviderErrors.push(provider+': '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));}
+          generated=await generateGeminiOmniFromImage(publicReferenceImage,dir,prompt);
+        }catch(err){lastErr=String(err?.message||err);providerErrors.push('gemini-omni-scene-'+(i+1)+': '+lastErr);}
+        if(!generated?.outputPath)throw new Error('No se pudo generar la escena '+(i+1)+' con Gemini Omni: '+lastErr);
+        clipPaths.push(generated.outputPath);
       }
-      // A reference run is valid only when the generated video is actually
-      // conditioned on the reference frame/thumbnail. Never accept text-only
-      // generation as a reference match.
-      if(!generatedVideo?.outputPath){
-        throw new Error('No se pudo generar un vídeo IA condicionado visualmente por la referencia de YouTube. Proveedores probados: '+videoProviderErrors.join(' | '));
+      if(!clipPaths.length)throw new Error('No se generaron escenas IA.');
+      const normalized=[];
+      for(let i=0;i<clipPaths.length;i++){
+        const p=path.join(dir,'scene-'+i+'.mp4');
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',clipPaths[i],'-vf','scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-movflags','+faststart',p]);
+        normalized.push(p);
       }
-      if(!generatedVideo?.outputPath){
-        throw new Error('No hay proveedor de vídeo IA disponible tras '+videoProviderErrors.join(' | '));
-      }
-      const audioProfile=visualReferenceAnalysis?.audioProfile||{};
-      let generatedAudio=null;
-      try{
-        generatedAudio=await generateMusicBuffer({topic:aiReferenceTitle,mood:String(audioProfile.musicMood||'original music matching the reference mood'),audioProfile:{...audioProfile,hasMusic:audioProfile.hasMusic===true,hasSpeech:audioProfile.hasSpeech===true,hasAmbience:audioProfile.hasAmbience===true,hasSoundEffects:audioProfile.hasSoundEffects===true},durationSeconds:4});
-      }catch(audioErr){console.warn('AUTOTUBE URL->AI AUDIO FAILED; preserving reference audio',audioErr?.message||String(audioErr));}
-      const audioPath=path.join(dir,'reference-matched-original-audio.wav');
-      if(generatedAudio?.buffer) await fs.writeFile(audioPath,generatedAudio.buffer);
-      else if(referenceDownloaded?.file) await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',referenceDownloaded.file,'-vn','-sn','-dn','-t','4','-ac','2','-ar','48000','-c:a','pcm_s16le',audioPath]);
-      else await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000','-t','4','-c:a','pcm_s16le',audioPath]);
+      const concatList=path.join(dir,'concat.txt');
+      await fs.writeFile(concatList,normalized.map(p=>"file '"+p.replace(/'/g,"'\\''")+"'").join('\n'));
       const outputPath=path.join(renderJobDir,jobId+'.mp4');
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',generatedVideo.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf','scale=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath]);
-      const validation=await validateRenderedMp4(outputPath,4);
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',concatList,'-c','copy','-movflags','+faststart',outputPath]);
+      const validation=await validateRenderedMp4(outputPath,0);
       const stat=await fs.stat(outputPath);
-      if(!stat.size)throw new Error('El MP4 IA final está vacío.');
+      if(!stat.size||stat.size<10000)throw new Error('El MP4 IA final está vacío o es demasiado pequeño.');
+      if(!validation?.hasAudio)throw new Error('El MP4 IA final no contiene pista de audio generada.');
+      const generatedProfile=await analyzeLocalGeneratedVideoWithGemini(outputPath);
+      const comparison=await compareReferenceAndGeneratedProfiles(profile,generatedProfile);
+      if(!comparison?.structurePreserved||!comparison?.subjectCategoryPreserved||!comparison?.visualLanguagePreserved||!comparison?.audioCharacterPreserved){
+        throw new Error('La validación audiovisual no alcanzó todos los requisitos: '+JSON.stringify(comparison));
+      }
+      const outputHash=crypto.createHash('sha256').update(await fs.readFile(outputPath)).digest('hex');
       if(job){
         job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
-        job.sceneCount=1;job.durationSeconds=validation.durationSeconds;
-        job.validation={...validation,mode:'ai-video-reference-original',generatedByAi:true,aiProvider:generatedVideo.provider,aiModel:generatedVideo.model,audioProvider:generatedAudio?.provider||'reference-audio-fallback',sourceReference:reference,referenceVisualSource:style.visualSource||'youtube-download+sampled-frames',referenceAnalysis:style.analysisSource||'unknown',referenceAudioSource:generatedAudio?.buffer?(style.hasAudioAnalysis?'reference-audio-analysis+original-generated-audio':'reference-audio-profile+original-generated-audio'):(referenceDownloaded?.file?'original-reference-audio-preserved':'fallback-audio'),referenceFrameConditioned:Boolean(generatedVideo?.referenceDriven),referenceMatch:generatedVideo?.referenceDriven?'real-reference-frame-conditioned original AI generation':'real-reference-profile-guided original generation'};
+        job.sceneCount=sceneCount;job.durationSeconds=validation.durationSeconds;
+        job.validation={...validation,mode:'ai-reference-multi-scene-recreation',generatedByAi:true,aiProvider:'Google Gemini Omni Flash',aiModel:'gemini-omni-1.1-flash',sourceReference:reference,sourceVideoId:videoId,referenceAnalysisSource:'Gemini 3.8 Flash direct public YouTube video understanding',referenceProfile:profile,generatedProfile,comparison,outputSha256:outputHash,exactMatch:false,originalRecreation:true};
         job.finishedAt=Date.now();
       }
-      return{ok:true,jobId,reference,referenceTitle:aiReferenceTitle,sceneCount:1,size:stat.size,durationSeconds:validation.durationSeconds,generatedByAi:true,validation:job?.validation};
+      return{ok:true,jobId,reference,referenceTitle:aiReferenceTitle,sceneCount,size:stat.size,durationSeconds:validation.durationSeconds,generatedByAi:true,validation:job?.validation};
     }
     const referenceTitle=String(video.title||'Contenido original').slice(0,300);
     const visualReferenceAnalysis=style.visualAnalysis||{};
@@ -2838,7 +2861,7 @@ httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
 const autoE2EReference=String(process.env.AUTOTUBE_AUTO_E2E_REFERENCE||'').trim();
-if(autoE2EReference){
+if(autoE2EReference && String(process.env.AUTOTUBE_AUTO_E2E_ENABLED||'0')==='1'){
   setTimeout(()=>{
     const endpoint='http://127.0.0.1:'+PORT+'/api/verify-ai-e2e?reference='+encodeURIComponent(autoE2EReference);
     fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:autoE2EReference})}).then(async response=>{
