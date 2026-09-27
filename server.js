@@ -598,7 +598,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
   const refAudio=refProfile?.audioProfile||{};
   const refStructure=refProfile?.structureProfile||{};
   const singleVisual=Boolean(refDirectives.useSingleContinuousVisual||refVideo.constantImage);
-  const requestedSceneCount=singleVisual?1:Math.max(4,Math.ceil((Number(duration)*60)/8.5));
+  const requestedSceneCount=singleVisual?1:Math.min(240,Math.max(4,Math.ceil(Number(duration)/8.5)));
 
   const referenceContext={
     sourceUrl:reference||'',
@@ -696,7 +696,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
     const refProfile=body.referenceStyle?.visualAnalysis||body.visualReferenceAnalysis||{};
     const durationSeconds=Math.max(1,Number(refProfile?.videoProfile?.durationSeconds)||Math.max(30,Number(body.duration||1)*60));
     const segments=Array.isArray(refProfile?.structureProfile?.sceneSegments)?refProfile.structureProfile.sceneSegments:[];
-    const count=Math.max(1,Math.min(12,Number(refProfile?.generationDirectives?.preferredSceneCount||refProfile?.videoProfile?.estimatedSceneCount||segments.length||6)));
+    const count=Math.max(1,Math.min(240,Number(refProfile?.generationDirectives?.preferredSceneCount||refProfile?.videoProfile?.estimatedSceneCount||segments.length||Math.ceil(durationSeconds/8.5))));
     const scenes=Array.from({length:count},(_,i)=>{
       const seg=segments.length?segments[Math.min(segments.length-1,Math.floor(i*segments.length/count))]:{};
       return {number:i+1,title:String(seg.summary||seg.subject||fallbackTopic).slice(0,180),narration:'Contenido original sobre '+fallbackTopic+'.',visualPrompt:String(seg.generationPrompt||seg.subject||fallbackTopic)+'; '+String(seg.composition||'16:9 cinematic')+'; original AI visual, high quality, no logos, no copied footage.',animationNotes:String(seg.cameraMovement||'subtle cinematic movement'),duration:durationSeconds/count,mediaType:'image',constantImage:Boolean(refProfile?.videoProfile?.constantImage),referenceSegment:seg};
@@ -2330,7 +2330,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
           topic:referenceTitle,reference,referenceTopic:referenceTitle,
           referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
           visualReferenceAnalysis,referenceStyle:style,language:'es',
-          duration:String(Math.max(1,Math.round(durationSeconds/60)))
+          duration:String(durationSeconds)
         })
       });
       outline=await outlineResponse.json();
@@ -2342,7 +2342,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
           topic:referenceTitle,reference,referenceTopic:referenceTitle,
           referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
           visualReferenceAnalysis,referenceStyle:style,language:'es',
-          duration:String(Math.max(1,Math.round(durationSeconds/60))),
+          duration:String(durationSeconds),
           title:outline?.title||referenceTitle,
           outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
         })
@@ -2376,7 +2376,15 @@ async function executeUrlToVideo(reference,jobId,options={}){
     }
     if(!scenes.length)throw new Error('La estructura de escenas quedó vacía.');
 
-    scenes=scenes.map((scene,i)=>({...scene,number:i+1,duration:Number(scene.duration)>0?Number(scene.duration):durationSeconds/scenes.length}));
+    if(!singleVisual && scenes.length<2)throw new Error('La recreación IA debe contener al menos 2 escenas distintas cuando la referencia no es una imagen constante.');
+  if(!singleVisual && scenes.length<requestedSceneCount){
+    const source=[...scenes];
+    while(scenes.length<requestedSceneCount && scenes.length<240){
+      const base=source[(scenes.length-source.length)%source.length];
+      scenes.push({...base,number:scenes.length+1,title:String(base.title||referenceTitle)+' — variación original '+(scenes.length+1),visualPrompt:String(base.visualPrompt||'')+'; nueva variación original, no repetir el plano anterior'});
+    }
+  }
+  scenes=scenes.map((scene,i)=>({...scene,number:i+1,duration:Number(scene.duration)>0?Number(scene.duration):durationSeconds/scenes.length}));
     const sceneTotal=scenes.reduce((n,x)=>n+Number(x.duration||0),0);
     if(sceneTotal>0){
       const scale=durationSeconds/sceneTotal;
