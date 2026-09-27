@@ -2226,7 +2226,7 @@ app.get('/api/url-to-video',async(req,res)=>{
   const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
   urlVideoJobs.set(jobId,job);
   res.status(202).json({ok:true,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
-  executeUrlToVideo(reference,jobId).catch(err=>console.error('URL-to-video error:',jobId,err));
+  executeUrlToVideo(reference,jobId,{forceAi:true}).catch(err=>console.error('URL-to-video error:',jobId,err));
 });
 app.get('/api/url-to-video/:jobId',async(req,res)=>{
   const job=urlVideoJobs.get(String(req.params.jobId||''));
