@@ -1,0 +1,1 @@
+rerun isolated AI proof after JSON middleware fix
