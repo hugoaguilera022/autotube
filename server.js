@@ -113,7 +113,21 @@ async function loadYoutubeConnection(){if(youtubeLoaded)return;youtubeLoaded=tru
 async function saveYoutubeConnection(){if(!supabaseConfigured()||!youtubeTokens)return;await supabaseRequest('youtube_connections?on_conflict=id',{method:'POST',body:JSON.stringify({id:'default',tokens_encrypted:encryptTokens(youtubeTokens),profile:youtubeProfileCache,updated_at:new Date().toISOString()})})}
 const PORT=process.env.PORT||3000;function youtubeClient(){return new google.auth.OAuth2(process.env.YOUTUBE_CLIENT_ID,process.env.YOUTUBE_CLIENT_SECRET,process.env.YOUTUBE_REDIRECT_URI||`${process.env.APP_URL||`http://localhost:${PORT}`}/api/youtube/callback`)}
 async function getYoutubeProfile(){await loadYoutubeConnection();if(!youtubeTokens)return youtubeProfileCache;const auth=youtubeClient();auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.channels.list({part:'snippet,contentDetails,statistics',mine:true});youtubeProfileCache=response.data.items?.[0]||null;return youtubeProfileCache}
-app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true}));app.use(express.static(path.join(__dirname,'public')));
+app.use(express.json({limit:'2mb'}));
+app.all('/get_pot',async(req,res)=>{
+  try{
+    const body=req.method==='GET'?undefined:JSON.stringify(req.body||{});
+    const headers={'Accept':'application/json'};
+    if(body)headers['Content-Type']='application/json';
+    const r=await fetch('http://127.0.0.1:4416/get_pot',{method:req.method==='GET'?'GET':'POST',headers,body,signal:AbortSignal.timeout(15000)});
+    const raw=await r.text();
+    res.status(r.status).type('application/json').send(raw);
+    console.log('AUTOTUBE POT PROXY',r.status,raw.slice(0,240));
+  }catch(e){
+    console.error('AUTOTUBE POT PROXY FAILED',e?.message||String(e));
+    res.status(502).json({error:'poToken provider unavailable'});
+  }
+});app.use(express.urlencoded({extended:true}));app.use(express.static(path.join(__dirname,'public')));
 app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',commit:process.env.RENDER_GIT_COMMIT||'',configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
 function extractYoutubeVideoId(input){
   let value=String(input||'').trim();
