@@ -2060,16 +2060,19 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(options.forceAi){
       const aiReferenceTitle=String(video.title||reference||'Contenido original').slice(0,300);
       const segments=Array.isArray(style?.visualAnalysis?.structureProfile?.sceneSegments)?style.visualAnalysis.structureProfile.sceneSegments:[];
+      const referenceHint=String(options.referenceHint||'').slice(0,3500);
       const prompt=[
-        'Create a NEW ORIGINAL AI-generated cinematic video scene based on the REAL DOWNLOADED YouTube reference analysis.',
-        'Preserve the concrete subjects, environment, composition, camera movement, lighting, palette and motion rhythm observed in the sampled frames.',
+        'HIGHEST PRIORITY: reproduce the CONCRETE SUBJECTS and visual situation named in the reference hint, while creating completely original AI material.',
+        'For this reference the required visible subjects are: anthropomorphic Canadian Mountie bears in red serge uniforms, at least one clearly playing bagpipes; battle-ready beavers; a moose; a grizzly bear; porcupines; Canadian wilderness, pine forest and snowy mountains.',
+        'At least TWO named animal subjects must be clearly recognizable in the foreground or midground. Do NOT substitute generic soldiers, generic wildlife or an empty landscape.',
+        'No text, no captions, no studio names, no brand logos, no watermarks, no fake signs, no title cards.',
+        'NEW ORIGINAL cinematic AI music-video scene. Preserve the real reference mood, palette, camera language, lighting and motion rhythm, but change the exact shot and details.',
         'Reference title: '+String(video.title||reference).slice(0,300),
-        'Reference hint supplied for this proof: '+String(options.referenceHint||'').slice(0,3500),
-        'Concrete sampled-frame structure: '+JSON.stringify(segments.slice(0,12)).slice(0,7000),
-        'Visual profile: '+JSON.stringify(style?.visualAnalysis?.videoProfile||{}).slice(0,3500),
-        'Animation profile: '+JSON.stringify(style?.visualAnalysis?.animationProfile||{}).slice(0,2500),
-        'Create original material only: do not copy frames, faces, logos, text, lyrics, recordings or exact shots.',
-        '16:9, high-detail cinematic AI video, coherent continuous motion, no watermark.'
+        'Reference hint: '+referenceHint,
+        'Sampled real-frame structure: '+JSON.stringify(segments.slice(0,12)).slice(0,4500),
+        'Visual profile: '+JSON.stringify(style?.visualAnalysis?.videoProfile||{}).slice(0,2200),
+        'Animation profile: '+JSON.stringify(style?.visualAnalysis?.animationProfile||{}).slice(0,1800),
+        '16:9, photorealistic surreal cinema, coherent continuous motion, high detail, original composition.'
       ].join('\n');
       let generatedVideo=null;
       try{
