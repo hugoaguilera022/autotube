@@ -18,7 +18,19 @@ if(process.env.AUTOTUBE_E2E_ON_START==='1' || process.env.AUTOTUBE_FORCE_ONE_SHO
     const reference='https://youtu.be/iKD1uyZVMFw';
     try{
       const res=await fetch(base+'/api/full-pipeline-test?reference='+encodeURIComponent(reference));
-      console.log('AUTOTUBE ONE-SHOT E2E',res.status,await res.text());
+      const started=await res.json().catch(()=>null);
+      console.log('AUTOTUBE ONE-SHOT E2E START',res.status,JSON.stringify(started));
+      const jobId=started?.jobId;
+      if(jobId){
+        const deadline=Date.now()+25*60*1000;
+        while(Date.now()<deadline){
+          await new Promise(r=>originalSetTimeout(r,5000));
+          const sr=await fetch(base+'/api/full-pipeline-test/'+encodeURIComponent(jobId));
+          const data=await sr.json().catch(()=>null);
+          console.log('AUTOTUBE ONE-SHOT E2E STATUS',sr.status,JSON.stringify(data).slice(0,5000));
+          if(data?.status==='done'||data?.status==='failed'||data?.status==='restart')break;
+        }
+      }
     }catch(e){console.error('AUTOTUBE ONE-SHOT E2E trigger failed',e?.message||String(e))}
   },30000);
 }
