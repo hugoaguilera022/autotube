@@ -2007,15 +2007,35 @@ function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
 
 async function downloadReferenceDirectForAiE2E(url,dir){
   await fs.mkdir(dir,{recursive:true});
-  const downloader=global.__autotubeDownloadExactYoutube||global.__autotubeDownloadReferenceFast;
-  if(typeof downloader!=='function')throw new Error('El descargador de referencia no está disponible.');
-  const downloaded=await downloader(url,dir);
-  const sourcePath=String(downloaded?.source||'');
-  if(!sourcePath)throw new Error('El descargador exacto no devolvió el archivo.');
-  const stat=await fs.stat(sourcePath);if(!stat.size)throw new Error('La referencia descargada está vacía.');
-  const probe=await probeReferenceTechnical(sourcePath);
-  if(!probe.durationSeconds||!probe.width||!probe.height)throw new Error('La referencia descargada no superó la validación FFmpeg.');
-  return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'direct-exact'};
+  // Reuse the already-validated URL->MP4 downloader/job instead of a second
+  // independent YouTube fetch path. This is the path proven against this exact URL.
+  const base='http://127.0.0.1:'+String(process.env.PORT||10000);
+  const response=await fetch(base+'/api/url-to-mp4',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({reference:String(url||'').trim()})
+  });
+  const data=await response.json().catch(()=>null);
+  if(!response.ok&&!data?.reused)throw new Error(data?.error||('URL->MP4 E2E HTTP '+response.status));
+  const jobId=String(data?.jobId||'');
+  if(!jobId)throw new Error('URL->MP4 E2E no devolvió jobId.');
+  const deadline=Date.now()+150000;
+  while(Date.now()<deadline){
+    await new Promise(r=>setTimeout(r,1500));
+    const statusResponse=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId));
+    const status=await statusResponse.json().catch(()=>null);
+    if(status?.status==='done'){
+      const internal=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId)+'/internal-path');
+      const internalData=await internal.json().catch(()=>null);
+      const sourcePath=String(internalData?.path||'');
+      if(!sourcePath)throw new Error('URL->MP4 E2E terminó sin ruta interna.');
+      const stat=await fs.stat(sourcePath);if(!stat.size)throw new Error('La referencia MP4 está vacía.');
+      const probe=await probeReferenceTechnical(sourcePath);
+      if(!probe.durationSeconds||!probe.width||!probe.height)throw new Error('La referencia MP4 no superó FFmpeg.');
+      return{file:sourcePath,bytes:stat.size,probe,strategy:'url-to-mp4-validated'};
+    }
+    if(status?.status==='error')throw new Error(status.error||'URL->MP4 E2E falló.');
+  }
+  throw new Error('URL->MP4 E2E agotó el tiempo de espera.');
 }
 
 async function executeUrlToVideo(reference,jobId,options={}){
