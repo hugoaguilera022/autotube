@@ -1051,7 +1051,7 @@ async function executeFullPipelineTest(reference,testId=null){
       mediaResults=plan.scenes.map(scene=>({number:scene.number,query:scene.searchQuery||scene.title||referenceTitle,media:[]}));
       // Generate original motion clips sequentially when LTX is available. Never run
       // scene generations concurrently on Render Free; that would spike memory/CPU.
-      if(!style.constantImage){
+      {
         for(let i=0;i<plan.scenes.length;i++){
           const scene=plan.scenes[i];
           try{
