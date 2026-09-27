@@ -1429,6 +1429,30 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
   }finally{clearTimeout(timer)}
 }
 
+async function generateChopperBluLtxVideoClip(prompt,dir,options={}) {
+  const {Client}=require('@gradio/client');
+  const app=await Client.connect('ChopperBlu/ltx-2-5-demo');
+  const duration=Math.max(1,Math.min(5,Number(options.durationSeconds)||2));
+  const width=832;
+  const height=512;
+  const seed=Math.floor(Math.random()*2147483647);
+  const result=await app.predict('/generate_video',[
+    String(prompt||'').trim(),null,width,height,duration,false,seed,true,'conv'
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!url)throw new Error('ChopperBlu LTX-2.5 no devolvió el vídeo.');
+  const response=await fetch(String(url));
+  if(!response.ok)throw new Error('ChopperBlu LTX-2.5 no pudo descargar el vídeo ('+response.status+').');
+  const dataBuf=Buffer.from(await response.arrayBuffer());
+  if(dataBuf.length<20000)throw new Error('ChopperBlu LTX-2.5 devolvió un vídeo vacío o inválido.');
+  const outputPath=path.join(dir,'chopperblu-ltx-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  await fs.writeFile(outputPath,dataBuf);
+  const stat=await fs.stat(outputPath);
+  return{outputPath,bytes:stat.size,provider:'Hugging Face · ChopperBlu LTX-2.5',model:'ChopperBlu/ltx-2-5-demo',durationSeconds:duration,status:'complete'};
+}
+
 async function generatePollinationsVideoClip(prompt,dir,options={}){
   const duration=Math.max(3,Math.min(8,Number(options.durationSeconds)||4));
   const width=Math.max(256,Math.min(1280,Math.round((Number(options.width)||704)/32)*32));
@@ -2119,9 +2143,9 @@ async function executeUrlToVideo(reference,jobId,options={}){
       ].join('\\n');
       let generatedVideo=null;
       const videoProviderErrors=[];
-      for(const provider of ['goalsave','ltx','pollinations']){
+      for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
         try{
-          const fn=provider==='goalsave'?generateGoalsaveLtxVideoClip:(provider==='ltx'?generateFreeLtxVideoClip:generatePollinationsVideoClip);
+          const fn=provider==='chopperblu'?generateChopperBluLtxVideoClip:(provider==='goalsave'?generateGoalsaveLtxVideoClip:(provider==='ltx'?generateFreeLtxVideoClip:generatePollinationsVideoClip));
           generatedVideo=await Promise.race([fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false}),new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))]);
           if(generatedVideo?.outputPath)break;
         }catch(err){videoProviderErrors.push(provider+': '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));}
