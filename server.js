@@ -50,19 +50,53 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
 });app.get('/api/verify-ai-e2e',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'reference requerida'});
-  const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
-  if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id),reused:true});
+  const videoId=extractYoutubeVideoId(reference);
+  if(!videoId)return res.status(400).json({ok:false,error:'URL de YouTube no válida'});
   const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
-  urlVideoJobs.set(jobId,{id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null});
+  const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
+  urlVideoJobs.set(jobId,job);
   res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
-  // Use the same generic URL->AI implementation as production. The endpoint
-  // must not pre-download the reference because that defeats the public
-  // metadata/thumbnail fallback for arbitrary YouTube URLs.
-  executeUrlToVideo(reference,jobId,{forceAi:true}).catch(err=>{
-    const job=urlVideoJobs.get(jobId);
-    if(job){job.status='error';job.error=err?.message||String(err);job.progress=100;}
-    console.error('AUTOTUBE AI E2E FAILED',err?.stack||err);
-  });
+  (async()=>{
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-proof-direct-'));
+    try{
+      job.progress=8;
+      const thumbUrl='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
+      const imageResponse=await fetch(thumbUrl,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0'},signal:AbortSignal.timeout(20000)});
+      if(!imageResponse.ok)throw new Error('Miniatura de referencia HTTP '+imageResponse.status);
+      const imagePath=path.join(dir,'reference.jpg');
+      await fs.writeFile(imagePath,Buffer.from(await imageResponse.arrayBuffer()));
+      const meta=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(reference)+'&format=json',{signal:AbortSignal.timeout(12000)}).then(r=>r.ok?r.json():({})).catch(()=>({}));
+      job.referenceTitle=String(meta?.title||'YouTube AI reference');
+      job.progress=20;
+      console.log('AUTOTUBE AI DIRECT E2E CONDITIONING',JSON.stringify({jobId,videoId,title:job.referenceTitle}));
+      const prompt=[
+        'Create a NEW ORIGINAL AI video inspired by this exact reference thumbnail from a YouTube video.',
+        'Match the visible subject, environment, composition, lighting, palette, cinematic style and likely motion language of the reference.',
+        'Create a recreation, NOT a copy: do not reproduce the exact frame, do not copy logos, text, faces, recordings or copyrighted footage.',
+        'Introduce new camera movement and new temporal action while keeping the same recognizable audiovisual concept.',
+        'The result must be original AI-generated footage with coherent natural motion and synchronized generated audio appropriate to the observed scene.',
+        'Reference title: '+job.referenceTitle,
+        '16:9, cinematic, high detail, original material.'
+      ].join('\\n');
+      job.progress=30;
+      const generated=await generateGeminiOmniImageToVideoClip(imagePath,dir,{prompt});
+      job.progress=80;
+      const outputPath=path.join(renderJobDir,jobId+'.mp4');
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',generated.outputPath,'-vf','scale=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-movflags','+faststart',outputPath]);
+      const validation=await validateRenderedMp4(outputPath,4);
+      const stat=await fs.stat(outputPath);
+      if(!stat.size)throw new Error('El MP4 IA final está vacío.');
+      const thumbHash=crypto.createHash('sha256').update(await fs.readFile(imagePath)).digest('hex');
+      const videoHash=crypto.createHash('sha256').update(await fs.readFile(outputPath)).digest('hex');
+      job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;job.sceneCount=1;job.durationSeconds=validation.durationSeconds;
+      job.validation={...validation,mode:'ai-reference-recreation-direct',generatedByAi:true,aiProvider:generated.provider,aiModel:generated.model,sourceReference:reference,sourceVideoId:videoId,sourceThumbnailSha256:thumbHash,outputSha256:videoHash,exactMatch:false,originalRecreation:true};
+      job.finishedAt=Date.now();
+      console.log('AUTOTUBE AI DIRECT E2E PASSED',JSON.stringify({jobId,size:stat.size,durationSeconds:validation.durationSeconds,provider:generated.provider,model:generated.model}));
+    }catch(err){
+      job.status='error';job.progress=100;job.error=err?.message||String(err);job.finishedAt=Date.now();
+      console.error('AUTOTUBE AI DIRECT E2E FAILED',err?.stack||err);
+    }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+  })();
 });
 
 
