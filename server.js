@@ -51,10 +51,10 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'reference requerida'});
   const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
-  if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id),reused:true});
+  if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)+'?reference='+encodeURIComponent(reference),reused:true});
   const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
   urlVideoJobs.set(jobId,{id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null});
-  res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)+'?reference='+encodeURIComponent(reference)});
+  res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)+'?reference='+encodeURIComponent(reference)+'?reference='+encodeURIComponent(reference)});
   // Use the same generic URL->AI implementation as production. The endpoint
   // must not pre-download the reference because that defeats the public
   // metadata/thumbnail fallback for arbitrary YouTube URLs.
@@ -2611,7 +2611,7 @@ app.get('/api/url-to-video/:jobId',async(req,res)=>{
     if(reference && /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(reference)){
       job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null,restartedCount:1};
       urlVideoJobs.set(jobId,job);
-      executeUrlToVideo(reference,jobId).catch(err=>console.error('AI URL job resurrection error:',err));
+      executeUrlToVideo(reference,jobId,{forceAi:true}).catch(err=>console.error('AI URL job resurrection error:',err));
       console.warn('AUTOTUBE RESURRECTED URL JOB AFTER INSTANCE RESTART',jobId);
     }else{
       return res.status(410).json({ok:false,status:'restart',error:'El trabajo se perdió porque Render reinició la instancia. Reintenta con la URL de referencia.'});
