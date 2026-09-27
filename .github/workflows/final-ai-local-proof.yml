@@ -2,7 +2,7 @@ name: Final AI reference MP4 proof
 on:
   push:
     branches: [e2e-stable]
-    paths: ['.github/workflows/final-ai-local-proof.yml']
+    paths: ['.github/final-ai-proof-trigger.txt']
   workflow_dispatch:
 concurrency:
   group: autotube-final-local-proof
