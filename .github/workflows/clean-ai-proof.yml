@@ -8,7 +8,7 @@ on:
 concurrency:
   # final-real-mp4-proof
   group: autotube-ai-e2e-v2
-  cancel-in-progress: true
+  cancel-in-progress: false
   # proof uses the live generic URL-to-video AI path
 jobs:
   proof:
