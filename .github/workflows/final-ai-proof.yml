@@ -78,3 +78,5 @@ jobs:
             job.json
 
 # retry against bounded AI path
+
+# retry after reference-download bypass
