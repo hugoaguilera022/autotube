@@ -1,7 +1,7 @@
 // Keep Render Free stable when Hugging Face ZeroGPU has no quota.
 // The main renderer already has a visual fallback; this prevents loading/connecting
 // the Gradio LTX client at all, avoiding a 512 MB memory spike.
-if (false) {
+if (String(process.env.AUTOTUBE_DISABLE_LTX||'0') === '1') {
   const Module = require('module');
   const nativeRequire = Module.prototype.require;
   Module.prototype.require = function autotubeDisableLtx(request) {
