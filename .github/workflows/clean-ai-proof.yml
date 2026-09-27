@@ -2,12 +2,12 @@ name: Clean AI reference audiovisual proof # real MP4 validation
 # Generic fallback verification refresh v3: 2026-09-27T16:06:06.594Z
 on:
   push:
-    branches: [e2e-stable]
+    branches: [ai-proof-runner]
     paths: ['.github/workflows/clean-ai-proof.yml']
   workflow_dispatch:
 concurrency:
   # final-real-mp4-proof
-  group: autotube-ai-e2e-v2
+  group: autotube-ai-e2e-proof-runner
   cancel-in-progress: true
   # proof uses the live generic URL-to-video AI path
 jobs:
