@@ -370,6 +370,21 @@ async function downloadViaRumble(url,dir){
   const st=await fs.stat(out);if(!st.size)throw new Error('Rumble MP4 vacío.');
   return{source:out,bytes:st.size,strategy:'rumble-mirror',external:{title:String(data?.title||''),duration:Number(data?.duration||0),width:selected.width,height:selected.height}};
 }
+async function downloadViaLocalYtdlp(url,dir){
+  await fs.mkdir(dir,{recursive:true});
+  const out=path.join(dir,'source.%(ext)s');
+  const args=['-m','yt_dlp','--no-playlist','--no-warnings','--no-check-certificates','--retries','2','--fragment-retries','2','--socket-timeout','20','--extractor-args','youtube:player_client=web_embedded','--plugin-dirs',path.join(process.cwd(),'yt-dlp-plugins'),'-f','bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best','--merge-output-format','mp4','-o',out,url];
+  await new Promise((resolve,reject)=>{
+    const p=spawn('python3',args,{cwd:process.cwd(),env:process.env,stdio:['ignore','pipe','pipe']});
+    let e='';p.stdout.on('data',d=>{});p.stderr.on('data',d=>{e+=d.toString();if(e.length>12000)e=e.slice(-12000)});
+    const timer=setTimeout(()=>{p.kill('SIGKILL');reject(new Error('yt-dlp local timeout: '+e.slice(-3000)))},180000);
+    p.on('error',x=>{clearTimeout(timer);reject(x)});
+    p.on('close',c=>{clearTimeout(timer);if(c===0)resolve();else reject(new Error('yt-dlp local exit '+c+': '+e.slice(-3500)))});
+  });
+  const files=await fs.readdir(dir);const f=files.find(x=>/^source\.(mp4|mkv|webm|m4a)$/.test(x));
+  if(!f)throw new Error('yt-dlp local no produjo MP4: '+files.join(','));
+  return{source:path.join(dir,f),strategy:'local-ytdlp-po'};
+}
 async function downloadReferenceFast(url,dir){
   await fs.mkdir(dir,{recursive:true});
   const artifact=String(process.env.AUTOTUBE_REFERENCE_ARTIFACT_URL||'').trim();
@@ -382,7 +397,7 @@ async function downloadReferenceFast(url,dir){
       return await validateExactCandidate({source:out,strategy:'verified-reference-artifact'});
     }catch(e){console.error('AUTOTUBE VERIFIED ARTIFACT FAILED',String(e?.message||e));}
   }
-  const attempts=[];
+  const attempts=[['local-ytdlp-po',downloadViaLocalYtdlp,url]];
   const mirror=String(process.env.AUTOTUBE_REFERENCE_MIRROR_URL||'').trim();
   if(mirror)attempts.push(['mirror-rumble',downloadViaRumble,mirror]);
   attempts.push(
