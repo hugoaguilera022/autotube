@@ -430,6 +430,7 @@ async function analyzeYoutubeReferenceMedia(url,video){
       return analyzed;
     }catch(downloadErr){
       throw new Error('REFERENCIA_REAL_OBLIGATORIA: no se obtuvieron los bytes del MP4 de YouTube. '+String(downloadErr?.message||downloadErr));
+    }
   }finally{
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
