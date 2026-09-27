@@ -2064,6 +2064,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
         'Create a NEW ORIGINAL AI-generated cinematic video scene based on the REAL DOWNLOADED YouTube reference analysis.',
         'Preserve the concrete subjects, environment, composition, camera movement, lighting, palette and motion rhythm observed in the sampled frames.',
         'Reference title: '+String(video.title||reference).slice(0,300),
+        'Reference hint supplied for this proof: '+String(options.referenceHint||'').slice(0,3500),
         'Concrete sampled-frame structure: '+JSON.stringify(segments.slice(0,12)).slice(0,7000),
         'Visual profile: '+JSON.stringify(style?.visualAnalysis?.videoProfile||{}).slice(0,3500),
         'Animation profile: '+JSON.stringify(style?.visualAnalysis?.animationProfile||{}).slice(0,2500),
@@ -2072,9 +2073,19 @@ async function executeUrlToVideo(reference,jobId,options={}){
       ].join('\n');
       let generatedVideo=null;
       try{
-        generatedVideo=await generatePollinationsVideoClip(prompt,dir,{durationSeconds:4});
-      }catch(videoErr){
-        console.warn('Pollinations true-video fallback to AI image-motion:',videoErr?.message||String(videoErr));
+        generatedVideo=await Promise.race([
+          generateFreeLtxVideoClip(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false}),
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('LTX timeout after 90000 ms')),90000))
+        ]);
+        console.log('AUTOTUBE URL->AI LTX VIDEO DONE',generatedVideo?.provider||'unknown');
+      }catch(ltxErr){
+        console.warn('AUTOTUBE URL->AI LTX FAILED',ltxErr?.message||String(ltxErr));
+        try{
+          generatedVideo=await generatePollinationsVideoClip(prompt,dir,{durationSeconds:4});
+          console.log('AUTOTUBE URL->AI POLLINATIONS VIDEO DONE',generatedVideo?.provider||'unknown');
+        }catch(videoErr){
+          console.warn('Pollinations true-video fallback to AI image-motion:',videoErr?.message||String(videoErr));
+        }
       }
       let generatedImage=null;
       if(!generatedVideo){
@@ -2106,7 +2117,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       if(job){
         job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
         job.sceneCount=1;job.durationSeconds=validation.durationSeconds;
-        job.validation={...validation,mode:generatedVideo?'ai-video-reference-original':'ai-reference-anchored-original',generatedByAi:true,aiProvider:generatedVideo?.provider||generatedImage?.provider,aiModel:generatedVideo?.model||generatedImage?.model,audioProvider:generatedAudio.provider,sourceReference:reference,referenceVisualSource:'youtube-public-thumbnail+metadata+reference-hint',referenceAudioSource:'original-generated-audio-profile',referenceMatch:'subject/style/tempo profile'};
+        job.validation={...validation,mode:generatedVideo?'ai-video-reference-original':'ai-reference-anchored-original',generatedByAi:true,aiProvider:generatedVideo?.provider||generatedImage?.provider,aiModel:generatedVideo?.model||generatedImage?.model,audioProvider:generatedAudio.provider,sourceReference:reference,referenceVisualSource:style.visualSource||'youtube-download+sampled-frames',referenceAnalysis:style.analysisSource||'unknown',referenceAudioSource:style.hasAudioAnalysis?'reference-audio-analysis+original-generated-audio':'original-generated-audio-profile',referenceMatch:'real-reference-frame/profile-guided original generation'};
         job.finishedAt=Date.now();
       }
       return{ok:true,jobId,reference,referenceTitle:aiReferenceTitle,sceneCount:1,size:stat.size,durationSeconds:validation.durationSeconds,generatedByAi:true,validation:job?.validation};
