@@ -2042,7 +2042,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       const audioPath=path.join(dir,'reference-matched-original-audio.wav');
       await fs.writeFile(audioPath,generatedAudio.buffer);
       const outputPath=path.join(renderJobDir,jobId+'.mp4');
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',generated.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf',"scale=1280:720,zoompan=z='min(zoom+0.001,1.08)':d=1:s=1280x720:fps=30",' -r','30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath].map(String));
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',generated.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf',"scale=1280:720,zoompan=z='min(zoom+0.001,1.08)':d=1:s=1280x720:fps=30",'-r','30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath].map(String));
       const validation=await validateRenderedMp4(outputPath,4);
       const stat=await fs.stat(outputPath);
       if(!stat.size)throw new Error('El MP4 IA ligero está vacío.');
