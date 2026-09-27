@@ -81,7 +81,30 @@ const PORT=process.env.PORT||3000;function youtubeClient(){return new google.aut
 async function getYoutubeProfile(){await loadYoutubeConnection();if(!youtubeTokens)return youtubeProfileCache;const auth=youtubeClient();auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.channels.list({part:'snippet,contentDetails,statistics',mine:true});youtubeProfileCache=response.data.items?.[0]||null;return youtubeProfileCache}
 app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true}));app.use(express.static(path.join(__dirname,'public')));
 app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',commit:process.env.RENDER_GIT_COMMIT||'',configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
-function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
+function extractYoutubeVideoId(input){
+  let value=String(input||'').trim();
+  if(!value)return'';
+  for(let pass=0;pass<2;pass++){
+    try{
+      const decoded=decodeURIComponent(value);
+      if(decoded!==value)value=decoded;else break;
+    }catch{break}
+  }
+  try{
+    if(/^[A-Za-z0-9_-]{11}$/.test(value))return value;
+    const url=new URL(value);
+    const host=url.hostname.toLowerCase().replace(/^www\\./,'');
+    if(host==='youtu.be')return(url.pathname.split('/').filter(Boolean)[0]||'').slice(0,11);
+    if(host==='youtube.com'||host.endsWith('.youtube.com')){
+      if(url.pathname==='/watch')return String(url.searchParams.get('v')||'').slice(0,11);
+      if(url.pathname.startsWith('/shorts/'))return String(url.pathname.split('/')[2]||'').slice(0,11);
+      if(url.pathname.startsWith('/embed/'))return String(url.pathname.split('/')[2]||'').slice(0,11);
+      if(url.pathname.startsWith('/live/'))return String(url.pathname.split('/')[2]||'').slice(0,11);
+    }
+  }catch{}
+  const match=value.match(/(?:v=|youtu\\.be\\/|youtube\\.com\\/(?:shorts|embed|live)\\/)([A-Za-z0-9_-]{11})/i);
+  return match?.[1]||'';
+}
 async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
 async function downloadYoutubeReference(url,dir){
   await fs.mkdir(dir,{recursive:true});
@@ -2174,11 +2197,11 @@ async function executeUrlToVideo(reference,jobId,options={}){
           publicDescription=String(meta?.author_name||'');
         }
       }catch(err){console.warn('YouTube oEmbed unavailable:',err?.message||String(err));}
-      // Prefer the real reference bytes when the URL is downloadable. This is
+      // Prefer the same validated URL-to-MP4 pipeline used by production. This is
       // the strongest generic conditioning source and is not tied to the proof
       // video's ID. If YouTube blocks bytes, fall back to public thumbnail mode.
       try{
-        referenceDownloaded=await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
+        referenceDownloaded=await downloadYoutubeReference(reference,referenceSourceDir);
         video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:String(referenceDownloaded.probe?.durationSeconds||''),thumbnails:['https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'],thumbnail:'https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'};
       }catch(downloadErr){
         console.warn('AUTOTUBE AI DIRECT REFERENCE DOWNLOAD FAILED; PUBLIC FALLBACK',downloadErr?.message||String(downloadErr));
