@@ -2226,8 +2226,7 @@ async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('Jiny34/Image-to-video');
   const prompt=String(options.prompt||'Generate original natural camera motion from this reference image, preserve the main subject and setting.').trim();
-  const job=app.submit('/make_video',[[handle_file(imagePath)],prompt]);
-  const result=await collectGradioJob(job,90);
+  const result=await app.predict('/make_video',[[handle_file(imagePath)],prompt]);
   const data=Array.isArray(result?.data)?result.data:[];
   const output=data[0];
   const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
