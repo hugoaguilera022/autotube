@@ -2479,7 +2479,7 @@ if(options.forceAi){
       const aiReferenceTitle=String(video.title||reference||'Contenido original').slice(0,300);
       const profile=style.directProfile||{};
       const segments=Array.isArray(profile.scene_segments)?profile.scene_segments:[];
-      const sceneCount=Math.max(1,Math.min(6,segments.length||Number(profile.scene_count)||3));
+      const sceneCount=Math.max(1,Math.min(12,segments.length||Number(profile.scene_count)||3));
       const publicReferenceImage=path.join(dir,'public-reference-conditioning.jpg');
       const videoId=extractYoutubeVideoId(reference);
       const thumbUrls=[
@@ -2512,7 +2512,7 @@ if(options.forceAi){
         ].join('\n');
         let generated=null,lastErr='';
         try{
-          generated=await generateGeminiOmniFromImage(publicReferenceImage,dir,prompt);
+          generated=await generateGeminiOmniFromImage(publicReferenceImage,dir,prompt,{durationSeconds:Math.max(3,Math.min(10,Number(seg.end||seg.endSeconds||0)-Number(seg.start||seg.startSeconds||0)||8))});
         }catch(err){lastErr=String(err?.message||err);providerErrors.push('gemini-omni-scene-'+(i+1)+': '+lastErr);}
         if(!generated?.outputPath)throw new Error('No se pudo generar la escena '+(i+1)+' con Gemini Omni: '+lastErr);
         clipPaths.push(generated.outputPath);
@@ -2540,7 +2540,7 @@ if(options.forceAi){
       const outputHash=crypto.createHash('sha256').update(await fs.readFile(outputPath)).digest('hex');
       if(job){
         job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
-        job.sceneCount=sceneCount;job.durationSeconds=validation.durationSeconds;
+        job.sceneCount=sceneCount;job.durationSeconds=validation.durationSeconds;job.validationTargetDuration=Number(profile.durationSeconds||profile.duration_seconds||0)||0;
         job.validation={...validation,mode:'ai-reference-multi-scene-recreation',generatedByAi:true,aiProvider:'Google Gemini Omni Flash',aiModel:'gemini-omni-1.1-flash',sourceReference:reference,sourceVideoId:videoId,referenceAnalysisSource:'Gemini 3.8 Flash direct public YouTube video understanding',referenceProfile:profile,generatedProfile,comparison,outputSha256:outputHash,exactMatch:false,originalRecreation:true};
         job.finishedAt=Date.now();
       }
