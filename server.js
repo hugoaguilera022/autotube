@@ -53,48 +53,38 @@ function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!v
 async function getReferenceVideo(input){const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json');if(!oembed.ok)throw new Error('No se pudo analizar el vídeo de referencia.');const data=await oembed.json();return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}
 async function downloadYoutubeReference(url,dir){
   await fs.mkdir(dir,{recursive:true});
-  // The E2E must acquire the reference exactly once. Calling /api/url-to-mp4
-  // from inside the E2E created a second asynchronous job and could race with
-  // another verifier run, leaving a partial source.mp4 (moov atom not found).
-  // Call the same exact downloader directly and validate before returning.
-  try{
-    const exactDownloader=global.__autotubeDownloadExactYoutube;if(typeof exactDownloader!=='function')throw new Error('El descargador exacto no está disponible en el verificador.');
-    const file=path.join(dir,'reference.mp4');
-    let lastError='';
-    for(let attempt=1;attempt<=4;attempt++){
-      try{
-        await fs.rm(file,{force:true}).catch(()=>{});
-        const downloaded=await exactDownloader(url,dir);
-        const sourcePath=String(downloaded?.source||'');
-        if(!sourcePath)throw new Error('El descargador exacto no devolvió ruta de archivo.');
-        const stat=await fs.stat(sourcePath);
-        if(!stat.size)throw new Error('La referencia descargada está vacía.');
-        if(path.resolve(sourcePath)!==path.resolve(file)){
-          if(path.extname(sourcePath).toLowerCase()==='.mp4')await fs.copyFile(sourcePath,file);
-          else await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',sourcePath,'-map','0:v:0','-map','0:a:0?','-c','copy','-movflags','+faststart',file]);
-        }
-        const copied=await fs.stat(file);
-        if(!copied.size)throw new Error('La copia de referencia está vacía.');
-        // FFmpeg must fully parse the file before it is accepted. This rejects
-        // partial MP4s with a missing moov atom instead of sending them onward.
-        await new Promise((resolve,reject)=>{
-          const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-i',file,'-map','0:v:0','-map','0:a:0?','-c','copy','-f','null','-'],{stdio:['ignore','ignore','pipe']});
-          let err='';p.stderr.on('data',x=>{err+=x.toString();if(err.length>8000)err=err.slice(-8000)});
-          p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('Referencia MP4 inválida en intento '+attempt+': '+err.slice(-1800))));
-        });
-        return{file,bytes:copied.size,ytDlpOutput:'Direct exact downloader with validated retries',strategy:downloaded.strategy,sourceProbe:null,finalProbe:null,attempt};
-      }catch(err){
-        lastError=String(err?.message||err);
-        console.warn('AUTOTUBE E2E REFERENCE RETRY',attempt,lastError);
-        await fs.rm(file,{force:true}).catch(()=>{});
-        await new Promise(r=>setTimeout(r,Math.min(12000,1500*attempt)));
+  const base=String(process.env.APP_URL||`http://127.0.0.1:${PORT}`).replace(/\\/$/,'');
+  let lastError='';
+  for(let attempt=1;attempt<=2;attempt++){
+    try{
+      const start=await fetch(base+'/api/url-to-mp4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:url})});
+      const data=await start.json().catch(()=>({}));
+      if(!start.ok&&start.status!==202)throw new Error('URL→MP4 HTTP '+start.status+': '+String(data.error||''));
+      const jobId=String(data.jobId||'');if(!jobId)throw new Error('URL→MP4 no devolvió jobId.');
+      const deadline=Date.now()+Math.max(180000,Number(process.env.AUTOTUBE_REFERENCE_DOWNLOAD_TIMEOUT_MS||300000));
+      let status=null;
+      while(Date.now()<deadline){
+        await new Promise(r=>setTimeout(r,2500));
+        const r=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId));
+        status=await r.json().catch(()=>({}));
+        if(status.status==='done')break;
+        if(status.status==='error')throw new Error(String(status.error||'La descarga URL→MP4 falló.'));
       }
-    }
-    throw new Error('No se pudo obtener una referencia MP4 íntegra tras 4 intentos. Último error: '+lastError);
-  }catch(err){
-    console.error('AUTOTUBE E2E EXACT REFERENCE DOWNLOAD FAILED',err?.stack||err?.message||String(err));
-    throw err;
+      if(status?.status!=='done')throw new Error('La descarga URL→MP4 agotó el tiempo de espera.');
+      const internal=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId)+'/internal-path');
+      const info=await internal.json().catch(()=>({}));
+      if(!internal.ok||!info.path)throw new Error('URL→MP4 no expuso el MP4 validado.');
+      const sourcePath=String(info.path),sourceStat=await fs.stat(sourcePath);
+      if(!sourceStat.size)throw new Error('El MP4 validado está vacío.');
+      const file=path.join(dir,'reference.mp4');
+      await fs.copyFile(sourcePath,file);
+      const copied=await fs.stat(file);
+      if(!copied.size)throw new Error('La copia de referencia está vacía.');
+      const check=await new Promise((resolve,reject)=>{const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-i',file,'-map','0:v:0','-map','0:a:0?','-c','copy','-f','null','-'],{stdio:['ignore','ignore','pipe']});let e='';p.stderr.on('data',x=>e+=x.toString());p.on('error',reject);p.on('close',code=>code===0?resolve(true):reject(new Error('Referencia MP4 inválida: '+e.slice(-1800))))});
+      return{file,bytes:copied.size,strategy:'validated-url-to-mp4-job',jobId,finalProbe:info.final||null};
+    }catch(err){lastError=String(err?.message||err);console.warn('AUTOTUBE E2E REFERENCE JOB RETRY',attempt,lastError);await fs.rm(path.join(dir,'reference.mp4'),{force:true}).catch(()=>{});if(attempt<2)await new Promise(r=>setTimeout(r,2000));}
   }
+  throw new Error('No se pudo obtener la referencia MP4 validada. Último error: '+lastError);
 }
 
 async function uploadGeminiFile(filePath,mimeType){
