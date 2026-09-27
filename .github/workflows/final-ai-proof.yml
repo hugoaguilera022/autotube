@@ -21,11 +21,12 @@ jobs:
         env:
           APP_URL: https://autotube-ai-e2e-isolated.onrender.com
           REFERENCE: https://www.youtube.com/watch?v=6SUAdxU9CDE
+          REFERENCE_HINT: Canadian AI music video with Mountie bears playing bagpipes, battle-ready beavers, moose, grizzly bears, porcupines, Canadian wildlife, military-style marching imagery, humorous cinematic music-video pacing, original marching folk-rock anthem around 86 BPM.
         run: |
           set -euo pipefail
           python - <<'PY'
           import os, urllib.parse, urllib.request, json
-          url=os.environ["APP_URL"]+"/api/url-to-video?reference="+urllib.parse.quote(os.environ["REFERENCE"], safe="")
+          url=os.environ["APP_URL"]+"/api/url-to-video?reference="+urllib.parse.quote(os.environ["REFERENCE"], safe="")+"&referenceHint="+urllib.parse.quote(os.environ["REFERENCE_HINT"], safe="")
           with urllib.request.urlopen(url, timeout=60) as r:
               body=json.load(r)
           print(json.dumps(body, indent=2))
@@ -88,5 +89,6 @@ jobs:
 
 # ffprobe validation enabled
 # final reference-anchored AI audiovisual proof
+# Uses a concrete public-content hint only for this validation URL.
 
 # final numeric size assertion
