@@ -2444,7 +2444,6 @@ if(options.forceAi){
         '16:9, high-detail cinematic AI video, coherent continuous motion, original material, no watermark.'
       ].join('\\n');
       const videoProviderErrors=[];
-      if(!generatedVideo?.outputPath) try{        generatedVideo=await Promise.race([generateWaveSpeedWanVideoClip(publicReferenceImage,dir,{prompt}),new Promise((_,reject)=>setTimeout(()=>reject(new Error('wan21-space timeout')),240000))]);      }catch(err){videoProviderErrors.push('wan21-space: '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','wan21-space',err?.message||String(err));}
       console.log('AUTOTUBE AI GENERATION START',JSON.stringify({jobId,reference,provider:'wan21-first-gemini-fallback'}));
       const publicReferenceImage=path.join(dir,'public-reference-conditioning.jpg');
       try{
@@ -2465,6 +2464,15 @@ if(options.forceAi){
       }catch(err){
         videoProviderErrors.push('gemini-omni: '+String(err?.message||err));
         console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','gemini-omni',err?.message||String(err));
+      }
+      if(!generatedVideo?.outputPath) try{
+        generatedVideo=await Promise.race([
+          generateWaveSpeedWanVideoClip(publicReferenceImage,dir,{prompt}),
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('wan21-space timeout')),240000))
+        ]);
+      }catch(err){
+        videoProviderErrors.push('wan21-space: '+String(err?.message||err));
+        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','wan21-space',err?.message||String(err));
       }
       if(!generatedVideo?.outputPath) for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
         try{
