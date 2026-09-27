@@ -2467,6 +2467,22 @@ async function executeUrlToVideo(reference,jobId,options={}){
     const validation=await validateRenderedMp4(outputPath,durationSeconds);
     const stat=await fs.stat(outputPath);
     if(!stat.size)throw new Error('El MP4 alternativo está vacío.');
+    if(options.forceAi){
+      const tolerance=Math.max(2,Math.min(10,durationSeconds*0.03));
+      const actualDuration=Number(validation.durationSeconds||0);
+      if(Math.abs(actualDuration-durationSeconds)>tolerance){
+        throw new Error('La duración generada ('+actualDuration.toFixed(2)+'s) no coincide con la referencia ('+durationSeconds.toFixed(2)+'s).');
+      }
+      if(!aiClips.length || scenes.length<2){
+        throw new Error('La recreación IA no contiene un storyboard de múltiples escenas.');
+      }
+      if(referenceDownloaded?.file){
+        const [srcBytes,outBytes]=await Promise.all([fs.readFile(referenceDownloaded.file),fs.readFile(outputPath)]);
+        const srcHash=crypto.createHash('sha256').update(srcBytes).digest('hex');
+        const outHash=crypto.createHash('sha256').update(outBytes).digest('hex');
+        if(srcHash===outHash)throw new Error('El resultado IA es idéntico a la referencia; no se acepta una copia.');
+      }
+    }
 
     if(job){
       job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
