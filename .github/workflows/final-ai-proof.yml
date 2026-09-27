@@ -65,7 +65,7 @@ jobs:
           python - <<'PY'
           import json
           d=json.load(open("mp4-probe.json"))
-          assert d["format"]["size"] > 10000
+          assert int(d["format"]["size"]) > 10000
           v=[s for s in d["streams"] if s["codec_type"]=="video"][0]
           assert v["width"] >= 1280 and v["height"] >= 720
           print("VALIDATED_AI_MP4", json.dumps(d))
@@ -87,3 +87,5 @@ jobs:
 # retry after prompt fix
 
 # ffprobe validation enabled
+
+# final numeric size assertion
