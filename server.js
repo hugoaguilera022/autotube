@@ -2022,11 +2022,11 @@ async function executeUrlToVideo(reference,jobId,options={}){
         'Create a NEW original AI-generated cinematic keyframe anchored to the public YouTube thumbnail and the concrete subject/theme of the reference.',
         'Preserve the recognizable subject category and audiovisual language, but change composition, characters, details and action so the result is original.',
         'Reference topic: '+aiReferenceTitle,
+        'Concrete reference-content hint: '+String(options.referenceHint||'').slice(0,4000),
         'Visual analysis: '+JSON.stringify(style.visualAnalysis||{}).slice(0,7000),
         '16:9, photorealistic, cinematic, high quality, original composition, no copied frames, no logos, no text, no watermark.'
       ].join('\n');
-      const thumbnailUrl=String(video?.thumbnail||video?.thumbnails?.[0]||'').trim();
-      const generated=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image',referenceImageUrl:thumbnailUrl});
+      const generated=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
       const audioProfile={
         hasMusic:true,hasSpeech:false,hasAmbience:true,hasSoundEffects:true,
         musicMood:'original cinematic marching folk-rock anthem matching the reference energy',
@@ -2244,6 +2244,7 @@ app.post('/api/url-to-video',async(req,res)=>{
 app.get('/api/test-ai-e2e',async(_req,res)=>{if(String(process.env.AUTOTUBE_ENABLE_LEGACY_TEST_AI_E2E||'0')!=='1')return res.status(410).json({ok:false,error:'Legacy AI E2E disabled.'});const reference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim();if(!reference)return res.status(400).json({ok:false,error:'No AI E2E reference configured.'});const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)});const jobId='urlvideo_test_'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null});executeUrlToVideo(reference,jobId).catch(err=>console.error('AI E2E endpoint error:',err));res.status(202).json({ok:false,status:'running',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});});
 app.get('/api/url-to-video',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
+  const referenceHint=String(req.query?.referenceHint||'').trim().slice(0,4000);
   if(!reference)return res.status(400).json({ok:false,error:'Añade ?reference=https://www.youtube.com/watch?v=...'});
   const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
   if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)});
@@ -2251,7 +2252,7 @@ app.get('/api/url-to-video',async(req,res)=>{
   const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
   urlVideoJobs.set(jobId,job);
   res.status(202).json({ok:true,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
-  executeUrlToVideo(reference,jobId,{forceAi:true}).catch(err=>console.error('URL-to-video error:',jobId,err));
+  executeUrlToVideo(reference,jobId,{forceAi:true,referenceHint}).catch(err=>console.error('URL-to-video error:',jobId,err));
 });
 app.get('/api/url-to-video/:jobId',async(req,res)=>{
   const job=urlVideoJobs.get(String(req.params.jobId||''));
