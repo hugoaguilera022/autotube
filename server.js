@@ -2091,40 +2091,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
           generatedVideo=await generatePollinationsVideoClip(prompt,dir,{durationSeconds:4});
           console.log('AUTOTUBE URL->AI POLLINATIONS VIDEO DONE',generatedVideo?.provider||'unknown');
         }catch(videoErr){
-          console.warn('AUTOTUBE URL->AI VIDEO PROVIDERS FAILED',videoErr?.message||String(videoErr));
-          const segments=Array.isArray(visualReferenceAnalysis?.structureProfile?.sceneSegments)
-            ? visualReferenceAnalysis.structureProfile.sceneSegments : [];
-          const count=Math.max(2,Math.min(4,segments.length||2));
-          const refImageUrl=String(video?.thumbnails?.[0]?.url||video?.thumbnail||'').trim();
-          const imagePaths=[];
-          for(let n=0;n<count;n++){
-            const seg=segments[Math.min(segments.length-1,Math.floor(n*Math.max(segments.length,1)/count))]||{};
-            const imagePrompt=[
-              'Create an ORIGINAL AI-generated cinematic frame from the actual YouTube reference analysis below.',
-              'Recreate the concrete SUBJECT, setting, shot scale, composition, lighting, palette and visual continuity described for this exact segment.',
-              'Do not replace the subject with a generic theme. Do not copy the source frame or any text/logo/face.',
-              'Segment '+(n+1)+'/'+count+': '+JSON.stringify(seg).slice(0,5000),
-              'Global visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,2200),
-              'Animation profile: '+JSON.stringify(visualReferenceAnalysis?.animationProfile||{}).slice(0,1600),
-              '16:9, high-detail cinematic AI image, original composition, no watermark.'
-            ].join('\\n');
-            const generatedImage=await generateGeminiOriginalImage(imagePrompt,dir,{referenceImageUrl:refImageUrl});
-            imagePaths.push(generatedImage.outputPath);
-          }
-          const montagePath=path.join(dir,'ai-reference-montage.mp4');
-          const concatList=path.join(dir,'ai-reference-images.txt');
-          const durationPer=4/count;
-          const concatLines=[];
-          for(const p of imagePaths){
-            concatLines.push('file '+JSON.stringify(p));
-            concatLines.push('duration '+durationPer);
-          }
-          concatLines.push('file '+JSON.stringify(imagePaths[imagePaths.length-1]));
-          await fs.writeFile(concatList,concatLines.join('\\n')+'\\n');
-          await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',concatList,'-vf','scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p','-r','30','-t','4','-c:v','libx264','-preset','veryfast','-crf','22','-an',montagePath]);
-          const st=await fs.stat(montagePath);
-          generatedVideo={outputPath:montagePath,bytes:st.size,provider:'AI image montage fallback',model:'Pollinations/Gemini image generation + FFmpeg motion',status:'complete',referenceDriven:true};
-          console.log('AUTOTUBE URL->AI IMAGE MONTAGE DONE',JSON.stringify({bytes:st.size,count}));
+          throw new Error('No hay proveedor de vídeo IA disponible para esta referencia: '+(videoErr?.message||String(videoErr)));
         }
       }
       const audioProfile=visualReferenceAnalysis?.audioProfile||{};
