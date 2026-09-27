@@ -283,11 +283,14 @@ async function getYoutubeTranscript(input,preferredLanguage='es'){
 }
 function parseSubtitleText(raw){
   const text=String(raw||'').replace(/^\uFEFF/,'').replace(/\r/g,'');
-  const blocks=text.split(/\n\n+/);
+  const blocks=text.split(/
+
++/);
   const lines=[];
   let previous='';
   for(const block of blocks){
-    const cleaned=block.split('\n')
+    const cleaned=block.split('
+')
       .map(x=>x.trim())
       .filter(Boolean)
       .filter(x=>!/^WEBVTT|^NOTE|^STYLE|^REGION/i.test(x))
@@ -299,7 +302,8 @@ function parseSubtitleText(raw){
     previous=sentence;
     lines.push(sentence);
   }
-  return lines.join('\n').trim();
+  return lines.join('
+').trim();
 }
 
 async function analyzeDownloadedReferenceMedia(file,video){
@@ -337,7 +341,8 @@ async function analyzeDownloadedReferenceMedia(file,video){
 
     let audioAnalysis=null;
     const audioPath=path.join(dir,'reference-audio.wav');
-    const hasAudioStream=/Stream #[^\n]*Audio:/i.test(probeText);
+    const hasAudioStream=/Stream #[^
+]*Audio:/i.test(probeText);
     if(hasAudioStream){
       const starts=[0,Math.max(0,durationSeconds/2-30),Math.max(0,durationSeconds-60)].filter((v,i,a)=>a.indexOf(v)===i);
       const audioFiles=[];
@@ -604,7 +609,9 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
     // En creación directa, el guion escrito por el usuario es la fuente exacta
     // de la narración. Repartimos sus frases entre las escenas sin reescribirlas.
     if(String(customScript||'').trim()){
-      const source=String(customScript).replace(/\r\n?/g,'\n').trim();
+      const source=String(customScript).replace(/\r
+?/g,'
+').trim();
       const sentences=(source.match(/[^.!?]+[.!?]+|[^.!?]+$/g)||[source]).map(x=>x.trim()).filter(Boolean);
       const chunks=Array.from({length:scenes.length},()=>[]);
       sentences.forEach((sentence,i)=>chunks[Math.min(scenes.length-1,Math.floor(i*scenes.length/sentences.length))].push(sentence));
@@ -669,7 +676,8 @@ async function generateElevenLabsTts(text,language='es',style='Natural y cercana
 async function generateLocalFliteTts(text,language='es',style='Natural y cercana',audioProfile={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-flite-'));
   try{
-    const safe=String(text||'').replace(/[\\r\\n]+/g,' ').replace(/[\\\\]/g,' ').trim();
+    const safe=String(text||'').replace(/[\\r\
+]+/g,' ').replace(/[\\\\]/g,' ').trim();
     if(!safe)throw new Error('La narración está vacía.');
     const textFile=path.join(dir,'speech.txt'),output=path.join(dir,'voice.wav');
     await fs.writeFile(textFile,safe,'utf8');
@@ -729,7 +737,9 @@ async function generateGeminiTts(text,language='es',style='Natural y cercana',au
     // Do not fall back to Gemini 2.5 Preview TTS: its legacy audio-format
     // negotiation is rejected by the currently deployed API.
     const body={
-      contents:[{role:'user',parts:[{text:styleGuide+'\n\n'+safeText}]}],
+      contents:[{role:'user',parts:[{text:styleGuide+'
+
+'+safeText}]}],
       generationConfig:{
         responseModalities:['AUDIO'],
         responseFormat:{audio:{mimeType:'AUDIO_WAV',sampleRate:24000}},
@@ -876,8 +886,10 @@ async function generateMusicBuffer({topic,mood,audioProfile,durationSeconds}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-music-'));
   try{
     const duration=Math.max(3,Math.min(300,Number(durationSeconds)||60));
-    const safeMood=String(mood||'instrumental original').replace(/[\r\n"]/g,' ').slice(0,500);
-    const safeTopic=String(topic||'').replace(/[\r\n"]/g,' ').slice(0,300);
+    const safeMood=String(mood||'instrumental original').replace(/[\r
+"]/g,' ').slice(0,500);
+    const safeTopic=String(topic||'').replace(/[\r
+"]/g,' ').slice(0,300);
     const profile=audioProfile&&typeof audioProfile==='object'?audioProfile:{};
     const prompt=[
       'Create ORIGINAL instrumental background music for a YouTube video.',
@@ -896,7 +908,8 @@ async function generateMusicBuffer({topic,mood,audioProfile,durationSeconds}){
       'Sound effects presence: '+String(profile.hasSoundEffects||false),
       'Instrumental only, no vocals.',
       'Maintain a coherent continuous bed suitable for narration and match the detected rhythmic intensity across the whole duration.'
-    ].join('\\n');
+    ].join('\
+');
     // Never let a slow music provider block the whole render. If Lyria does
     // not answer quickly, immediately use the deterministic local music bed.
     let generated=null;
@@ -982,7 +995,12 @@ async function evaluateSelectedVisual(referenceVideo,visualProfile,scene,mediaIt
   const mediaImage=await fetchImageForGemini(mediaItem?.thumbnail||'');
   if(!refImage||!mediaImage)return{ok:false,score:0,reason:'No se pudieron descargar las miniaturas de referencia y del visual seleccionado.'};
   const system='Evalúa únicamente la correspondencia visual. No copies ni reproduzcas contenido protegido. Responde únicamente JSON válido con las claves score, subjectMatch, styleMatch, compositionMatch, reason. score es 0-100. subjectMatch, styleMatch y compositionMatch son booleanos.';
-  const user='Compara la miniatura del vídeo de referencia de YouTube con el visual real seleccionado para esta escena. La escena debe pertenecer al mismo tema y tipo de contenido que la referencia, y conservar características generales compatibles de composición, iluminación, paleta, escala, continuidad y lenguaje audiovisual, pero ser material original.\n\nTema de referencia: '+String(referenceVideo?.title||'')+'\nEscena: '+String(scene?.title||'')+'\nConsulta visual: '+String(scene?.searchQuery||scene?.visualPrompt||'')+'\nPerfil visual detectado: '+JSON.stringify({visualStyle:visualProfile?.videoProfile?.visualStyle,palette:visualProfile?.videoProfile?.palette,lighting:visualProfile?.videoProfile?.lighting,composition:visualProfile?.videoProfile?.composition,cameraMovement:visualProfile?.videoProfile?.cameraMovement,continuity:visualProfile?.videoProfile?.continuity}).slice(0,5000);
+  const user='Compara la miniatura del vídeo de referencia de YouTube con el visual real seleccionado para esta escena. La escena debe pertenecer al mismo tema y tipo de contenido que la referencia, y conservar características generales compatibles de composición, iluminación, paleta, escala, continuidad y lenguaje audiovisual, pero ser material original.
+
+Tema de referencia: '+String(referenceVideo?.title||'')+'
+Escena: '+String(scene?.title||'')+'
+Consulta visual: '+String(scene?.searchQuery||scene?.visualPrompt||'')+'
+Perfil visual detectado: '+JSON.stringify({visualStyle:visualProfile?.videoProfile?.visualStyle,palette:visualProfile?.videoProfile?.palette,lighting:visualProfile?.videoProfile?.lighting,composition:visualProfile?.videoProfile?.composition,cameraMovement:visualProfile?.videoProfile?.cameraMovement,continuity:visualProfile?.videoProfile?.continuity}).slice(0,5000);
   const text=await callGemini({system,user,images:[refImage,mediaImage],temperature:0.1,maxOutputTokens:220,json:true});
   const parsed=parseJsonResponse(text);
   const score=Number(parsed?.score)||0;
@@ -1036,8 +1054,10 @@ async function probeReferenceTechnical(file){
   const t=String(stderr);
   const dm=t.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
   const duration=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
-  const videoLine=t.split(/\r?\n/).find(x=>/Video:/i.test(x))||'';
-  const audioLine=t.split(/\r?\n/).find(x=>/Audio:/i.test(x))||'';
+  const videoLine=t.split(/\r?
+/).find(x=>/Video:/i.test(x))||'';
+  const audioLine=t.split(/\r?
+/).find(x=>/Audio:/i.test(x))||'';
   const size=videoLine.match(/(\d{2,5})x(\d{2,5})/);
   const fps=videoLine.match(/(\d+(?:\.\d+)?)\s*fps/i);
   const videoCodec=(videoLine.match(/Video:\s*([^,\s]+)/i)||[])[1]||'';
@@ -1173,7 +1193,8 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       onProgress(Math.min(78,Math.round(((i+1)/total)*70)+5));
     }
     const list=path.join(dir,'concat.txt');
-    await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('\n'));
+    await fs.writeFile(list,clips.map(f=>"file '"+f.replace(/'/g,"'\\''")+"'").join('
+'));
     const videoOnly=path.join(dir,'video-only.mp4');
     try{
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',list,'-c','copy','-movflags','+faststart',videoOnly]);
@@ -1228,8 +1249,10 @@ async function validateRenderedMp4(file,expectedDuration=0){
     const tolerance=Math.max(2,expectedDuration*0.03);
     if(Math.abs(durationSeconds-expectedDuration)>tolerance)throw new Error('Duración real del MP4: '+durationSeconds.toFixed(2)+' s; esperada '+expectedDuration.toFixed(2)+' s (tolerancia ±'+tolerance.toFixed(2)+' s).');
   }
-  const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
-  const audioLine=(text.split(/\r?\n/).find(line=>/Audio:/i.test(line))||'');
+  const videoLine=(text.split(/\r?
+/).find(line=>/Video:/i.test(line))||'');
+  const audioLine=(text.split(/\r?
+/).find(line=>/Audio:/i.test(line))||'');
   const vm=videoLine.match(/(\d{2,5})x(\d{2,5})/);  const fm=videoLine.match(/(\d+(?:\.\d+)?)\s*fps/);
   const am=audioLine.match(/Audio:\s*([a-z0-9_]+)/i);
   if(!vm)throw new Error('No se pudo verificar la resolución real del MP4.');
@@ -1344,7 +1367,8 @@ async function validateGeneratedVideoClip(file){
   const text=String(result||'');
   const dm=text.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
   const durationSeconds=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
-  const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
+  const videoLine=(text.split(/\r?
+/).find(line=>/Video:/i.test(line))||'');
   const vm=videoLine.match(/Video:\s*([^,]+)/i);
   const dimensions=videoLine.match(/(\d{2,5})x(\d{2,5})/);
   if(!durationSeconds||durationSeconds<3)throw new Error('El clip IA tiene una duración inválida: '+durationSeconds+' s.');
@@ -2095,7 +2119,13 @@ app.get('/api/full-pipeline-test',async(req,res)=>{
   res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/full-pipeline-test/'+encodeURIComponent(id),message:'Prueba completa iniciada: YouTube → IA → vídeo → voz → música → MP4.'});
   executeFullPipelineTest(reference,id).then(result=>{const j=fullPipelineTestJobs.get(id);if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}}).catch(err=>{const j=fullPipelineTestJobs.get(id);if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}});
 });
-app.get('/api/full-pipeline-test/:jobId/download',async(req,res)=>{\n  const j=fullPipelineTestJobs.get(String(req.params.jobId||''));\n  const file=j?.result?.downloadPath;\n  if(!j||j.status!=='done'||!file)return res.status(404).json({ok:false,error:'El MP4 validado todavía no está disponible.'});\n  try{await fs.stat(file);res.download(file,'autotube-verified-final.mp4')}catch{res.status(404).json({ok:false,error:'El MP4 validado ya no está disponible.'})}\n});\napp.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
+app.get('/api/full-pipeline-test/:jobId/download',async(req,res)=>{
+  const j=fullPipelineTestJobs.get(String(req.params.jobId||''));
+  const file=j?.result?.downloadPath;
+  if(!j||j.status!=='done'||!file)return res.status(404).json({ok:false,error:'El MP4 validado todavía no está disponible.'});
+  try{await fs.stat(file);res.download(file,'autotube-verified-final.mp4')}catch{res.status(404).json({ok:false,error:'El MP4 validado ya no está disponible.'})}
+});
+app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
   const j=fullPipelineTestJobs.get(String(req.params.jobId||''));
   if(!j)return res.status(410).json({ok:false,status:'restart',error:'La prueba se perdió porque Render reinició la instancia.'});
   if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt});
