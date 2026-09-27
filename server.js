@@ -2007,15 +2007,24 @@ function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
 
 async function downloadReferenceDirectForAiE2E(url,dir){
   await fs.mkdir(dir,{recursive:true});
-  const downloader=global.__autotubeDownloadExactYoutube||global.__autotubeDownloadReferenceFast;
-  if(typeof downloader!=='function')throw new Error('El descargador de referencia no está disponible.');
-  const downloaded=await downloader(url,dir);
-  const sourcePath=String(downloaded?.source||'');
-  if(!sourcePath)throw new Error('El descargador de referencia no devolvió archivo.');
-  const stat=await fs.stat(sourcePath);if(!stat.size)throw new Error('La referencia descargada está vacía.');
-  const probe=await probeReferenceTechnical(sourcePath);
-  if(!probe.durationSeconds||!probe.width||!probe.height)throw new Error('La referencia descargada no superó la validación FFmpeg.');
-  return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'reference-fast'};
+  const downloaded=await downloadYoutubeReference(url,dir);
+  const sourcePath=String(downloaded?.file||downloaded?.source||'');
+  if(!sourcePath)throw new Error('El descargador exacto validado no devolvió archivo.');
+  const stat=await fs.stat(sourcePath);
+  if(!stat.size)throw new Error('La referencia validada está vacía.');
+  const probe=downloaded.finalProbe
+    ? {
+        durationSeconds:Number(downloaded.finalProbe.duration||0),
+        width:Number(downloaded.finalProbe.width||0),
+        height:Number(downloaded.finalProbe.height||0),
+        fps:Number(downloaded.finalProbe.fps||0),
+        videoCodec:String(downloaded.finalProbe.videoCodec||''),
+        audioCodec:String(downloaded.finalProbe.audioCodec||'')
+      }
+    : await probeReferenceTechnical(sourcePath);
+  if(!probe.durationSeconds||!probe.width||!probe.height)throw new Error('La referencia exacta validada no superó la validación FFmpeg.');
+  console.log('AUTOTUBE AI REFERENCE VERIFIED',JSON.stringify({bytes:stat.size,...probe,strategy:downloaded.strategy||'validated-exact'}));
+  return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'validated-exact'};
 }
 
 async function executeUrlToVideo(reference,jobId,options={}){
