@@ -723,7 +723,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{try{
   const fallbackTopic=String(body.topic||body.referenceTopic||body.referenceData?.title||'el tema del vídeo').trim();
   const refProfile=body.referenceStyle?.visualAnalysis||body.visualReferenceAnalysis||{};
   const singleVisual=Boolean(refProfile?.generationDirectives?.useSingleContinuousVisual||refProfile?.videoProfile?.constantImage);
-  const count=singleVisual?1:Math.max(1,Math.round(Number(body.duration||8)*30));
+  const detectedCount=Number(refProfile?.preferredSceneCount||refProfile?.estimatedSceneCount||refProfile?.structureProfile?.sceneSegments?.length||1); const count=singleVisual?1:Math.min(240,Math.max(1,Math.round(detectedCount)));
   const totalSeconds=Math.max(30,Math.round(Number(body.duration||8)*60));
   const fallbackScenes=singleVisual?[{
     number:1,title:fallbackTopic,narration:'Contenido original centrado en '+fallbackTopic+'.',
