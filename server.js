@@ -114,78 +114,9 @@ async function generateGeminiOmniFromImage(imagePath,dir,prompt){
 app.get('/api/verify-ai-e2e',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'reference requerida'});
-  const videoId=extractYoutubeVideoId(reference);
-  if(!videoId)return res.status(400).json({ok:false,error:'URL de YouTube no válida'});
-  const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
-  const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
-  urlVideoJobs.set(jobId,job);
-  res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
-  (async()=>{
-    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-proof-direct-'));
-    try{
-      job.progress=8;
-      const thumbUrl='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
-      const imageResponse=await fetch(thumbUrl,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0'},signal:AbortSignal.timeout(20000)});
-      if(!imageResponse.ok)throw new Error('Miniatura de referencia HTTP '+imageResponse.status);
-      const imagePath=path.join(dir,'reference.jpg');
-      await fs.writeFile(imagePath,Buffer.from(await imageResponse.arrayBuffer()));
-      const meta=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(reference)+'&format=json',{signal:AbortSignal.timeout(12000)}).then(r=>r.ok?r.json():({})).catch(()=>({}));
-      job.referenceTitle=String(meta?.title||'YouTube AI reference');
-      job.progress=20;
-      console.log('AUTOTUBE AI DIRECT E2E CONDITIONING',JSON.stringify({jobId,videoId,title:job.referenceTitle}));
-      let directReferenceAnalysis='';
-      try{ const direct=await geminiYoutubeUrlAnalysis(reference); directReferenceAnalysis=direct.raw; console.log('AUTOTUBE GEMINI DIRECT YOUTUBE ANALYSIS READY',JSON.stringify({jobId,sceneCount:direct.profile?.scene_count||null})); }catch(err){ console.warn('AUTOTUBE GEMINI DIRECT YOUTUBE ANALYSIS FAILED',err?.message||String(err)); }
-      const prompt=[
-        'Create a NEW ORIGINAL AI video inspired by this exact reference thumbnail from a YouTube video.',
-        'Match the visible subject, environment, composition, lighting, palette, cinematic style and likely motion language of the reference.',
-        'Create a recreation, NOT a copy: do not reproduce the exact frame, do not copy logos, text, faces, recordings or copyrighted footage.',
-        'Introduce new camera movement and new temporal action while keeping the same recognizable audiovisual concept.',
-        'The result must be original AI-generated footage with coherent natural motion and synchronized generated audio appropriate to the observed scene.',
-        'Reference title: '+job.referenceTitle,
-                'Reference visual profile: '+directReferenceAnalysis.slice(0,6000),
-        '16:9, cinematic, high detail, original material.'
-      ].join('\\n');
-      job.progress=30;
-      let generated=null;
-      const providerErrors=[];
-      try{
-        generated=await generatePublicSvdImageToVideoClip(imagePath,dir,{prompt});
-      }catch(err){
-        providerErrors.push('svd-space: '+String(err?.message||err));
-        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','svd-space',err?.message||String(err));
-      }
-      if(!generated?.outputPath)try{
-        generated=await generateWaveSpeedWanVideoClip(imagePath,dir,{prompt});
-      }catch(err){
-        providerErrors.push('wan21-space: '+String(err?.message||err));
-        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','wan21-space',err?.message||String(err));
-      }
-      if(!generated?.outputPath)try{
-        generated=await generateGeminiOmniImageToVideoClip(imagePath,dir,{prompt,referenceUrl:null});
-      }catch(err){
-        providerErrors.push('gemini-omni: '+String(err?.message||err));
-        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','gemini-omni',err?.message||String(err));
-      }
-      if(!generated?.outputPath)throw new Error('No se pudo generar el MP4 IA condicionado por la referencia: '+providerErrors.join(' | '));
-      job.progress=80;
-      const outputPath=path.join(renderJobDir,jobId+'.mp4');
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',generated.outputPath,'-vf','scale=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-movflags','+faststart',outputPath]);
-      const validation=await validateRenderedMp4(outputPath,4);
-      const stat=await fs.stat(outputPath);
-      if(!stat.size)throw new Error('El MP4 IA final está vacío.');
-      const thumbHash=crypto.createHash('sha256').update(await fs.readFile(imagePath)).digest('hex');
-      const videoHash=crypto.createHash('sha256').update(await fs.readFile(outputPath)).digest('hex');
-      job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;job.sceneCount=1;job.durationSeconds=validation.durationSeconds;
-      job.validation={...validation,mode:'ai-reference-recreation-direct',generatedByAi:true,aiProvider:generated.provider,aiModel:generated.model,sourceReference:reference,sourceVideoId:videoId,sourceThumbnailSha256:thumbHash,outputSha256:videoHash,exactMatch:false,originalRecreation:true};
-      job.finishedAt=Date.now();
-      console.log('AUTOTUBE AI DIRECT E2E PASSED',JSON.stringify({jobId,size:stat.size,durationSeconds:validation.durationSeconds,provider:generated.provider,model:generated.model}));
-    }catch(err){
-      job.status='error';job.progress=100;job.error=err?.message||String(err);job.finishedAt=Date.now();
-      console.error('AUTOTUBE AI DIRECT E2E FAILED',err?.stack||err);
-    }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
-  })();
+  const result=enqueueUrlVideoJob(reference,{referenceTitle:'AI reference',forceAi:true}),job=result.job;
+  return res.status(202).json({ok:false,status:job.status,jobId:job.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(job.id),reference,queuePosition:job.status==='queued'?queuedUrlVideoJobs.indexOf(job.id)+1:0,existing:result.existing||false});
 });
-
 
 // Brief creation mode: inputs may include topic, visual references, custom script and optional sample media.
 let youtubeTokens=null,youtubeProfileCache=null,youtubeLoaded=false;
