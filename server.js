@@ -1772,171 +1772,31 @@ app.get('/api/preflight',async(_req,res)=>{
 
 const fullPipelineTestJobs=new Map();
 async function executeFullPipelineTest(reference){
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-full-test-'));
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-reference-test-'));
   const started=Date.now();
-  const checks={};
-  const run=async(name,fn)=>{
-    const t=Date.now();
-    try{
-      const value=await fn();
-      checks[name]={ok:true,ms:Date.now()-t,...(value&&typeof value==='object'?value:{})};
-      return value;
-    }catch(err){
-      checks[name]={ok:false,ms:Date.now()-t,error:err.message||String(err)};
-      throw err;
-    }
-  };
   try{
-    let video=null,style=null,outline=null,plan=null,narrationAudio=[],music=null,render=null,validation=null,mediaResults=[];
-    await run('youtube-source-and-reference-analysis',async()=>{
-      video=await getReferenceVideo(reference);
-      // Download the exact reference ONCE and reuse the verified file for the whole E2E.
-      const referenceDownloadDir=path.join(dir,'reference-source');
-      const downloaded=await downloadYoutubeReference(reference,referenceDownloadDir);
-      const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
-      const referenceDuration=Number(downloaded.finalProbe?.duration||measured.durationSeconds||Number(video?.duration||0));
-      if(referenceDuration>0)video.duration=String(referenceDuration);
-      style=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:referenceDuration>0?String(referenceDuration):String(video?.duration||measured.durationSeconds||'')});
-      style.referenceFileBytes=downloaded.bytes;
-      style.downloadStrategy=downloaded.strategy;
-      style.measuredVisualContinuity={...(style.measuredVisualContinuity||{}),...measured,source:'FFmpeg + Gemini sampled frames'};
-      if(measured.constantImage){
-        style.constantImage=true;
-        style.visualAnalysis.videoProfile.constantImage=true;
-        style.visualAnalysis.generationDirectives.useSingleContinuousVisual=true;
-        style.visualAnalysis.generationDirectives.preferredSceneCount=1;
-      }
-      if(!video?.title||!style?.visualAnalysis)throw new Error('No se obtuvo un perfil audiovisual completo de YouTube.');
-      return{
-        title:video.title,
-        hasFullVideoAnalysis:Boolean(style.hasFullVideoAnalysis),
-        hasAudioProfile:Boolean(style.hasAudioAnalysis),
-        estimatedSceneCount:Number(style.estimatedSceneCount||0),
-        preferredSceneCount:Number(style.preferredSceneCount||0),
-        referenceFileBytes:Number(style.referenceFileBytes||0),
-        downloadStrategy:style.downloadStrategy||''
-      };
-    });
-
-    const referenceTitle=String(video.title||'Contenido original').slice(0,300);
-    const referenceStyle=style;
-    const visualReferenceAnalysis=style.visualAnalysis;
-    const audioProfile={...(visualReferenceAnalysis?.audioProfile||{})};
-    const durationSeconds=Math.max(1,Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis?.videoProfile?.durationSeconds||30));
-
-    await run('outline',async()=>{
-      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          topic:referenceTitle,reference,referenceTopic:referenceTitle,
-          referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
-          visualReferenceAnalysis,referenceStyle,language:'es',duration:String(Math.max(1,Math.round(durationSeconds/60)))
-        })
-      });
-      const d=await r.json();
-      if(!r.ok)throw new Error(d?.error||'Outline '+r.status);
-      outline=d;
-      return{title:d.title||'',blocks:Array.isArray(d.outline)?d.outline.length:0};
-    });
-
-    await run('production-plan',async()=>{
-      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          topic:referenceTitle,reference,referenceTopic:referenceTitle,
-          referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
-          visualReferenceAnalysis,referenceStyle,language:'es',
-          duration:String(Math.max(1,Math.round(durationSeconds/60))),
-          title:outline?.title||referenceTitle,
-          outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
-        })
-      });
-      const d=await r.json();
-      if(!r.ok||!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error(d?.error||'Production plan inválido.');
-      plan=d;
-      return{scenes:d.scenes.length,title:d.title||'',durationSeconds};
-    });
-
-    const preferred=Math.max(1,Number(style.preferredSceneCount||style.estimatedSceneCount||plan.scenes.length||1));
-    if(!style.constantImage && preferred>plan.scenes.length){
-      const blueprint=await run('reference-blueprint',async()=>{
-        const b=await buildReferenceBlueprint({referenceTitle,transcript:'',visualReferenceAnalysis,referenceStyle});
-        return b;
-      });
-      if(blueprint?.sections?.length)plan.scenes=applyReferenceBlueprint(plan.scenes,blueprint,durationSeconds);
-    }
-    if(style.constantImage){
-      plan.scenes=plan.scenes.slice(0,1).map(s=>({...s,duration:durationSeconds,constantImage:true,mediaType:'image'}));
-    }
-    if(!plan.scenes.length)throw new Error('No hay escenas después de ajustar la estructura de referencia.');
-    // Normalize scene numbering and make the durations cover the whole reference.
-    plan.scenes=plan.scenes.map((scene,i)=>({...scene,number:i+1,duration:Number(scene.duration)>0?Number(scene.duration):durationSeconds/plan.scenes.length}));
-    const sceneTotal=plan.scenes.reduce((n,x)=>n+Number(x.duration||0),0);
-    if(sceneTotal>0){
-      const scale=durationSeconds/sceneTotal;
-      plan.scenes=plan.scenes.map(x=>({...x,duration:Math.max(0.5,Number(x.duration||0)*scale)}));
-    }
-
-    await run('visual-sources-all-scenes',async()=>{
-      const r=await fetch('http://127.0.0.1:'+PORT+'/api/media/search',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({scenes:plan.scenes,referenceTopic:referenceTitle})
-      });
-      const d=await r.json();
-      if(!r.ok)throw new Error(d?.error||'Media search '+r.status);
-      mediaResults=Array.isArray(d.results)?d.results:[];
-      const missing=plan.scenes.filter((scene,i)=>{
-        const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
-        return !row?.media?.some(m=>m?.downloadUrl);
-      });
-      if(missing.length)throw new Error('Faltan visuales descargables para '+missing.length+' escenas: '+missing.slice(0,12).map(x=>x.number).join(', '));
-      return{scenes:plan.scenes.length,results:mediaResults.length,missing:0};
-    });
-
-    if(Boolean(audioProfile.hasSpeech)){
-      await run('narration-all-scenes',async()=>{
-        narrationAudio=await Promise.all(plan.scenes.map(async(scene)=>{
-          const text=String(scene.narration||scene.title||referenceTitle).trim();
-          if(!text)return null;
-          return generateNarrationTts(text,audioProfile.language||'es',audioProfile.voiceStyle||'Natural y cercana',audioProfile);
-        }));
-        return{scenes:narrationAudio.filter(Boolean).length};
-      });
-    }
-
-    if(Boolean(audioProfile.hasMusic||audioProfile.hasAmbience)){
-      await run('music',async()=>{
-        music=await generateFallbackMusic('Original music matching the reference audio profile without copying the source. '+JSON.stringify(audioProfile),Math.max(3,Math.min(120,durationSeconds)),dir,audioProfile);
-        return{provider:music.provider,bytes:music.buffer.length,durationSeconds};
-      });
-    }
-
-    await run('render-all-scenes',async()=>{
-      const output=path.join(dir,'full-test.mp4');
-      render=await renderAutotubeVideo({
-        scenes:plan.scenes,
-        mediaResults,
-        aiClips:[],
-        narrationAudio,
-        musicBuffer:music?.buffer||null,
-        onProgress:()=>{},
-        finalOutputPath:output
-      });
-      validation=await validateRenderedMp4(output,durationSeconds);
-      const st=await fs.stat(output);
-      return{bytes:st.size,sceneCount:plan.scenes.length,...validation};
-    });
-
-    return{
-      ok:true,
-      elapsedMs:Date.now()-started,
-      reference:{url:reference,title:referenceTitle,durationSeconds},
-      checks,
-      result:{sceneCount:plan.scenes.length,referenceDurationSeconds:durationSeconds,renderedBytes:validation?.size||render?.size||0}
-    };
-  }finally{
-    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
-  }
+    console.log('AUTOTUBE AI E2E START',reference);
+    const video=await getReferenceVideo(reference);
+    if(!video?.title)throw new Error('No se pudo obtener la referencia de YouTube.');
+    const style=await analyzeYoutubeReferenceMedia(reference,video);
+    const profile=style?.visualAnalysis||{};
+    const videoProfile=profile?.videoProfile||{};
+    const audioProfile=profile?.audioProfile||{};
+    const referenceDuration=Math.max(3,Math.min(30,Number(parseIsoDurationSeconds(video.duration)||videoProfile.durationSeconds||10)));
+    const visualStyle=JSON.stringify({visual:profile,structure:style?.structureProfile||{},audio:audioProfile}).slice(0,9000);
+    const prompt='Create a completely ORIGINAL AI-generated video inspired only by this audiovisual profile. Preserve the general visual language, pacing, camera language, color mood and subject category, but do not copy footage, frames, people, logos, text, music, or exact compositions from the reference. Reference profile: '+visualStyle+' ORIGINAL SCENE: cinematic, coherent motion, high detail, natural lighting, no text, no logos, no watermark.';
+    const generated=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:Math.min(8,Math.max(4,referenceDuration)),width:704,height:400,improveTexture:false});
+    const clipValidation=await validateGeneratedVideoClip(generated.outputPath);
+    const sceneDuration=Math.max(3,Math.min(8,clipValidation.durationSeconds));
+    const scenes=[{number:1,title:'Original AI scene',duration:sceneDuration,mediaType:'video',visualPrompt:prompt}];
+    const output=path.join(dir,'autotube-ai-reference-final.mp4');
+    const render=await renderAutotubeVideo({scenes,mediaResults:[],aiClips:[{path:generated.outputPath,mediaType:'video'}],narrationAudio:[],musicBuffer:null,onProgress:p=>console.log('AUTOTUBE AI E2E RENDER',p),finalOutputPath:output,targetWidth:1280,targetHeight:720,targetFps:30,targetDurationSeconds:sceneDuration});
+    const validation=await validateRenderedMp4(output,sceneDuration);
+    const stat=await fs.stat(output);
+    if(!stat.size)throw new Error('El MP4 IA final está vacío.');
+    console.log('AUTOTUBE AI E2E VERIFIED',JSON.stringify({reference,title:video.title,provider:generated.provider,model:generated.model,bytes:stat.size,durationSeconds:validation.durationSeconds,width:validation.width,height:validation.height,fps:validation.fps,audioCodec:validation.audioCodec}));
+    return {ok:true,elapsedMs:Date.now()-started,reference:{url:reference,title:video.title,durationSeconds:referenceDuration,downloadStrategy:style.downloadStrategy||''},aiGeneration:{provider:generated.provider,model:generated.model,clipBytes:generated.bytes,clipDurationSeconds:clipValidation.durationSeconds,clipWidth:clipValidation.width,clipHeight:clipValidation.height},finalMp4:{bytes:stat.size,durationSeconds:validation.durationSeconds,width:validation.width,height:validation.height,fps:validation.fps,audioCodec:validation.audioCodec},mode:'youtube-reference-to-original-ai-video'};
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
 }
 const urlVideoJobs=new Map();
 function parseIsoDurationSeconds(value){if(Number.isFinite(Number(value))&&Number(value)>0)return Number(value);const raw=String(value||'').trim();const m=raw.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);if(!m)return 0;return Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0);}
