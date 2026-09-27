@@ -2832,7 +2832,7 @@ const autoE2EReference=String(process.env.AUTOTUBE_AUTO_E2E_REFERENCE||'').trim(
 if(autoE2EReference){
   setTimeout(()=>{
     const endpoint='http://127.0.0.1:'+PORT+'/api/verify-ai-e2e?reference='+encodeURIComponent(autoE2EReference);
-    fetch(endpoint).then(async response=>{
+    fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:autoE2EReference})}).then(async response=>{
       console.log('AUTOTUBE AUTO E2E START',response.status,await response.text());
     }).catch(err=>console.error('AUTOTUBE AUTO E2E START FAILED',err?.message||String(err)));
   },5000);
