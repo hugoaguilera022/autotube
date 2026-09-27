@@ -2498,6 +2498,15 @@ if(options.forceAi){
       }catch(err){throw new Error('No se pudo preparar la referencia visual pública: '+(err?.message||String(err)));}
 
       try{
+        if(String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim()){
+          generatedVideo=await generateGeminiOmniFromImage(publicReferenceImage,dir,prompt);
+          console.log('AUTOTUBE GEMINI OMNI VIDEO READY',JSON.stringify({jobId,bytes:generatedVideo.bytes}));
+        }
+      }catch(err){
+        videoProviderErrors.push('gemini-omni: '+String(err?.message||err));
+        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','gemini-omni',err?.message||String(err));
+      }
+      try{
         generatedVideo=await Promise.race([
           generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
           new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),240000))
