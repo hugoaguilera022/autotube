@@ -30,3 +30,6 @@ El proyecto incluye `render.yaml`. Conecta el repositorio en Render como Web Ser
 - `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `ELEVENLABS_API_KEY`: módulos opcionales.
 
 <!-- memory-safe reference patch trigger -->
+
+
+<!-- strict-e2e trigger 2026-09-27 -->
