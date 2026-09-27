@@ -34,11 +34,7 @@ if (typeof nativeFetch === 'function') {
     if (/generativelanguage\.googleapis\.com\/v1beta\/models\/lyria/i.test(url)) {
       throw new Error('Lyria disabled on constrained Render; using local music fallback.');
     }
-    // The original-image Gemini fallback is also optional. If it is unavailable or
-    // too memory-heavy, the existing Pixabay/Pexels/reference-thumbnail fallbacks run.
-    if (/generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-2\.5-flash-image/i.test(url)) {
-      throw new Error('Gemini image generation disabled on constrained Render; using visual fallback.');
-    }
+    // Gemini Image is allowed one request at a time; memory is already bounded by the renderer.
     return nativeFetch(input, init);
   };
 }
