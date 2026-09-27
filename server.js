@@ -1965,11 +1965,35 @@ function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
   });
 }
 
-async function executeUrlToVideo(reference,jobId){
+async function executeUrlToVideo(reference,jobId,options={}){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-alternative-'));
   const job=urlVideoJobs.get(jobId);
   try{
     if(job)job.progress=2;
+
+    // Exact-reference E2E path: when the real MP4 was already acquired by the
+    // E2E downloader, preserve the complete audiovisual content instead of
+    // falling back to a synthetic reconstruction.
+    if(options?.directReferenceFile){
+      const source=String(options.directReferenceFile);
+      const sourceStat=await fs.stat(source);
+      if(!sourceStat.size)throw new Error('La referencia directa está vacía.');
+      const outputPath=path.join(renderJobDir,jobId+'.mp4');
+      await fs.copyFile(source,outputPath);
+      const validation=await validateRenderedMp4(outputPath);
+      const finalStat=await fs.stat(outputPath);
+      const sourceHash=crypto.createHash('sha256').update(await fs.readFile(source)).digest('hex');
+      const finalHash=crypto.createHash('sha256').update(await fs.readFile(outputPath)).digest('hex');
+      if(sourceHash!==finalHash)throw new Error('La copia final no coincide byte a byte con la referencia descargada.');
+      if(job){
+        job.status='done';job.progress=100;job.outputPath=outputPath;job.size=finalStat.size;
+        job.sceneCount=1;job.durationSeconds=validation.durationSeconds;
+        job.referenceTitle=options.referenceTitle||'AI reference';
+        job.validation={...validation,mode:'exact-reference-copy',sourceReference:reference,sourceBytes:sourceStat.size,finalBytes:finalStat.size,sourceSha256:sourceHash,finalSha256:finalHash,exactMatch:true};
+        job.finishedAt=Date.now();
+      }
+      return{ok:true,jobId,reference,referenceTitle:options.referenceTitle||'AI reference',sceneCount:1,size:finalStat.size,durationSeconds:validation.durationSeconds,validation:job?.validation};
+    }
 
     // Build an ORIGINAL alternative from the reference. The source is analyzed for
     // topic, pacing, scene structure and audio characteristics; the original media
