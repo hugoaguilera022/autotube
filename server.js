@@ -2097,6 +2097,35 @@ async function downloadReferenceDirectForAiE2E(url,dir){
   return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'validated-exact'};
 }
 
+async function generateWanFastPublicImageToVideoClip(imagePath,dir,options={}){
+  const {Client,handle_file}=require('@gradio/client');
+  const app=await Client.connect('zerogpu-aoti/wan2-2-fp8da-aoti-faster');
+  const prompt=String(options.prompt||'Preserve the main subject and setting from this reference image and create smooth original cinematic motion.').trim();
+  const negative='static image, frozen frame, blurry, distorted anatomy, text, watermark, duplicate subjects';
+  const result=await app.predict('/generate_video',[
+    handle_file(imagePath),
+    prompt,
+    4,
+    negative,
+    2.0,
+    1.0,
+    1.0,
+    42,
+    true
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!url)throw new Error('Wan2.2 Fast I2V public Space no devolvió un vídeo.');
+  const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
+  if(!response.ok)throw new Error('Wan2.2 Fast I2V no pudo descargar el vídeo ('+response.status+').');
+  const bytes=Buffer.from(await response.arrayBuffer());
+  if(bytes.length<20000)throw new Error('Wan2.2 Fast I2V devolvió un vídeo vacío.');
+  const outputPath=path.join(dir,'wan22-fast-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  await fs.writeFile(outputPath,bytes);
+  return{outputPath,bytes:bytes.length,provider:'Hugging Face zerogpu-aoti Wan2.2 Fast I2V',model:'Wan-AI/Wan2.2-I2V-A14B-Diffusers',referenceDriven:true,status:'complete'};
+}
+
 async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('Jiny34/Image-to-video');
@@ -2249,10 +2278,20 @@ async function executeUrlToVideo(reference,jobId,options={}){
           await fs.writeFile(publicReferenceImage,imageBuffer);
           console.log('AUTOTUBE SVD REFERENCE IMAGE READY',selected);
         }
-        generatedVideo=await Promise.race([
-          generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),300000))
-        ]);
+        try{
+          generatedVideo=await Promise.race([
+            generateWanFastPublicImageToVideoClip(publicReferenceImage,dir,{prompt}),
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error('wan22-fast-i2v timeout')),180000))
+          ]);
+          console.log('AUTOTUBE WAN2.2 FAST REFERENCE-CONDITIONED VIDEO READY',JSON.stringify({reference,provider:generatedVideo.provider}));
+        }catch(wanErr){
+          videoProviderErrors.push('wan22-fast-i2v: '+String(wanErr?.message||wanErr));
+          console.warn('AUTOTUBE WAN2.2 FAST I2V FAILED',wanErr?.message||wanErr);
+          generatedVideo=await Promise.race([
+            generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),300000))
+          ]);
+        }
       }catch(err){
         videoProviderErrors.push('svd-space: '+String(err?.message||err));
         console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
