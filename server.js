@@ -2045,8 +2045,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       const videoId=extractYoutubeVideoId(reference);
       if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
       referenceDownloaded=await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
-      video=await getReferenceVideo(reference);
-      video.videoId=video.videoId||videoId;
+      video={videoId,title:`YouTube AI reference ${videoId}`,description:'',channelTitle:'',duration:String(referenceDownloaded.probe?.durationSeconds||''),thumbnails:[],thumbnail:''};
     }else{
       referenceDownloaded=options.directReferenceFile
         ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
