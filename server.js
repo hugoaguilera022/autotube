@@ -2243,9 +2243,10 @@ async function executeUrlToVideo(reference,jobId,options={}){
         }else{
           const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
           if(!thumb)throw new Error('No hay miniatura pública para el proveedor SVD.');
-          const image=await fetchImageForGemini(thumb);
-          if(!image?.inlineData?.data)throw new Error('No se pudo descargar la miniatura pública.');
-          await fs.writeFile(publicReferenceImage,Buffer.from(image.inlineData.data,'base64'));
+          const imageResponse=await fetch(thumb,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/jpeg,image/*'},signal:AbortSignal.timeout(20000)});
+          const imageBytes=Buffer.from(await imageResponse.arrayBuffer());
+          if(!imageResponse.ok||imageBytes.length<5000)throw new Error('No se pudo descargar la miniatura pública: HTTP '+imageResponse.status);
+          await fs.writeFile(publicReferenceImage,imageBytes);
         }
         generatedVideo=await Promise.race([
           generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
