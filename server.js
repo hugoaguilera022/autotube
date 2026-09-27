@@ -2146,10 +2146,6 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(options.forceAi){
       const videoId=extractYoutubeVideoId(reference);
       if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
-      // Generic AI mode intentionally does NOT require downloading the source MP4.
-      // YouTube can block server-side byte downloads even when the URL is public.
-      // The reference URL itself, its public thumbnail, and public metadata are
-      // sufficient to anchor an original AI production without hard-coding a test.
       let publicTitle=`YouTube AI reference ${videoId}`;
       let publicDescription='';
       try{
@@ -2160,9 +2156,18 @@ async function executeUrlToVideo(reference,jobId,options={}){
           publicDescription=String(meta?.author_name||'');
         }
       }catch(err){console.warn('YouTube oEmbed unavailable:',err?.message||String(err));}
-      const thumbnail='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
-      video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:'',thumbnails:[thumbnail],thumbnail};
-      referenceDownloaded={file:null,bytes:0,probe:{},strategy:'youtube-public-oembed-thumbnail'};
+      // Prefer the real reference bytes when the URL is downloadable. This is
+      // the strongest generic conditioning source and is not tied to the proof
+      // video's ID. If YouTube blocks bytes, fall back to public thumbnail mode.
+      try{
+        referenceDownloaded=await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
+        video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:String(referenceDownloaded.probe?.durationSeconds||''),thumbnails:['https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'],thumbnail:'https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'};
+      }catch(downloadErr){
+        console.warn('AUTOTUBE AI DIRECT REFERENCE DOWNLOAD FAILED; PUBLIC FALLBACK',downloadErr?.message||String(downloadErr));
+        const thumbnail='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
+        video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:'',thumbnails:[thumbnail],thumbnail};
+        referenceDownloaded={file:null,bytes:0,probe:{},strategy:'youtube-public-oembed-thumbnail'};
+      }
     }else{
       referenceDownloaded=options.directReferenceFile
         ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
