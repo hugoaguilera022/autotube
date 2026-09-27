@@ -2794,26 +2794,22 @@ if(options.forceAi){
 app.post('/api/url-to-video',async(req,res)=>{
   const reference=String(req.body?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'Añade una URL de YouTube en reference.'});
-  const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
-  if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)});
-  const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
-  const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
-  urlVideoJobs.set(jobId,job);
-  res.status(202).json({ok:true,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
-  executeUrlToVideo(reference,jobId).catch(err=>console.error('URL-to-video error:',jobId,err));
+  const result=enqueueUrlVideoJob(reference,{}),job=result.job;
+  res.status(202).json({ok:false,status:job.status,jobId:job.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(job.id),queuePosition:job.status==='queued'?queuedUrlVideoJobs.indexOf(job.id)+1:0,existing:result.existing||false});
 });
-app.get('/api/test-ai-e2e',async(_req,res)=>{if(String(process.env.AUTOTUBE_ENABLE_LEGACY_TEST_AI_E2E||'0')!=='1')return res.status(410).json({ok:false,error:'Legacy AI E2E disabled.'});const reference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim();if(!reference)return res.status(400).json({ok:false,error:'No AI E2E reference configured.'});const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)});const jobId='urlvideo_test_'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null});executeUrlToVideo(reference,jobId).catch(err=>console.error('AI E2E endpoint error:',err));res.status(202).json({ok:false,status:'running',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});});
+app.get('/api/test-ai-e2e',async(_req,res)=>{
+  if(String(process.env.AUTOTUBE_ENABLE_LEGACY_TEST_AI_E2E||'0')!=='1')return res.status(410).json({ok:false,error:'Legacy AI E2E disabled.'});
+  const reference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim();
+  if(!reference)return res.status(400).json({ok:false,error:'No AI E2E reference configured.'});
+  const result=enqueueUrlVideoJob(reference,{forceAi:true,referenceTitle:'AI reference'}),job=result.job;
+  return res.status(202).json({ok:false,status:job.status,jobId:job.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(job.id),existing:result.existing||false});
+});
 app.get('/api/url-to-video',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   const referenceHint=String(req.query?.referenceHint||'').trim().slice(0,4000);
   if(!reference)return res.status(400).json({ok:false,error:'Añade ?reference=https://www.youtube.com/watch?v=...'});
-  const existing=[...urlVideoJobs.values()].find(j=>j.status==='processing'&&j.reference===reference);
-  if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id)});
-  const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
-  const job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null};
-  urlVideoJobs.set(jobId,job);
-  res.status(202).json({ok:true,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
-  executeUrlToVideo(reference,jobId,{forceAi:true,referenceHint}).catch(err=>console.error('URL-to-video error:',jobId,err));
+  const result=enqueueUrlVideoJob(reference,{forceAi:true,referenceHint}),job=result.job;
+  res.status(202).json({ok:false,status:job.status,jobId:job.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(job.id),queuePosition:job.status==='queued'?queuedUrlVideoJobs.indexOf(job.id)+1:0,existing:result.existing||false});
 });
 app.get('/api/url-to-video/:jobId',async(req,res)=>{
   const jobId=String(req.params.jobId||'');
