@@ -1,0 +1,70 @@
+name: One real animated reference verification
+on:
+  push:
+    paths:
+      - .github/workflows/verify-animated-reference.yml
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Render
+        run: sleep 150
+      - name: Start one generation
+        id: start
+        env:
+          BASE: https://autotube-hfeu.onrender.com
+          REF: https://www.youtube.com/watch?v=P_iFWenf1VA
+        run: |
+          set -euo pipefail
+          curl -fsS -G --data-urlencode "reference=$REF" "$BASE/api/url-to-video" | tee start.json
+          python3 -c 'import json; print("job="+json.load(open("start.json"))["jobId"])' >> "$GITHUB_OUTPUT"
+      - name: Wait for MP4
+        env:
+          BASE: https://autotube-hfeu.onrender.com
+          JOB: ${{ steps.start.outputs.job }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 120); do
+            curl -sS "$BASE/api/url-to-video/$JOB" -o status.json || true
+            cat status.json
+            grep -q '"status":"done"' status.json && exit 0
+            grep -q '"status":"error"' status.json && exit 1
+            sleep 20
+          done
+          exit 1
+      - name: Download and validate
+        env:
+          BASE: https://autotube-hfeu.onrender.com
+          JOB: ${{ steps.start.outputs.job }}
+        run: |
+          set -euo pipefail
+          curl -fsSL "$BASE/api/url-to-video/$JOB/download" -o autotube-animated-reference.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,r_frame_rate,duration -of json autotube-animated-reference.mp4 | tee ffprobe.json
+          curl -fsS "$BASE/api/url-to-video/$JOB" -o final-status.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('ffprobe.json')); s=json.load(open('final-status.json')); v=s['validation']
+          streams=d['streams']; video=[x for x in streams if x['codec_type']=='video']; audio=[x for x in streams if x['codec_type']=='audio']
+          assert video and audio, 'MP4 sin video/audio'
+          assert float(d['format']['duration']) > 0
+          assert v.get('visualStyle') == 'animated'
+          assert int(v.get('animatedSceneCount',0)) > 0
+          assert s.get('sceneCount',0) > 0
+          assert s.get('referenceAudioVisualProfile')
+          print('PASS_MP4=1')
+          print('PASS_DNA=1')
+          print('PASS_ANIMATED=1')
+          print('PASS_AUDIO=1')
+          print('SCENES=',s['sceneCount'])
+          print('DURATION=',d['format']['duration'])
+          print('VIDEO=',video[0])
+          print('AUDIO=',audio[0])
+          print('ANIMATION_STYLE=',v.get('animationStyle'))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autotube-verified-animated-mp4
+          path: |
+            autotube-animated-reference.mp4
+            ffprobe.json
+            final-status.json
