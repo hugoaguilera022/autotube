@@ -43,7 +43,7 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
     const ref=await downloadReferenceDirectForAiE2E(reference,path.join(dir,'reference'));
     const job={id:jobId,reference,status:'processing',progress:1};
     urlVideoJobs.set(jobId,job);
-    executeUrlToVideo(reference,jobId,{directReferenceFile:ref.file,referenceTitle:'AI reference'})
+    executeUrlToVideo(reference,jobId,{directReferenceFile:ref.file,referenceTitle:'AI reference',forceAi:true})
       .catch(err=>{job.status='error';job.error=err?.message||String(err);console.error('AUTOTUBE AI E2E FAILED',err?.stack||err);});
     res.json({ok:true,jobId,status:'processing',bytes:ref.bytes,probe:ref.probe});
   }catch(err){res.status(500).json({error:err?.message||String(err)});}
@@ -56,7 +56,7 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
     const ref=await downloadReferenceDirectForAiE2E(reference,path.join(dir,'reference'));
     const job={id:jobId,reference,status:'processing',progress:1};
     urlVideoJobs.set(jobId,job);
-    executeUrlToVideo(reference,jobId,{directReferenceFile:ref.file,referenceTitle:'AI reference'})
+    executeUrlToVideo(reference,jobId,{directReferenceFile:ref.file,referenceTitle:'AI reference',forceAi:true})
       .catch(err=>{job.status='error';job.error=err?.message||String(err);console.error('AUTOTUBE AI E2E FAILED',err?.stack||err);});
     res.json({ok:true,jobId,status:'processing',bytes:ref.bytes,probe:ref.probe});
   }catch(err){res.status(500).json({error:err?.message||String(err)});}
