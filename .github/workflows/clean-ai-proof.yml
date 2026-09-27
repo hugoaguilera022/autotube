@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           for i in $(seq 1 270); do
             sleep 10
-            status="$(curl -fsS --max-time 30 "https://autotube-ai-reference-proof.onrender.com/api/url-to-video/$JOB")"
+            status="$(curl -fsS --max-time 30 "https://autotube-ai-reference-proof.onrender.com/api/url-to-video/$JOB?reference=$(python -c 'import urllib.parse; print(urllib.parse.quote("$REF"))')")"
             echo "$status"
             state="$(python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$status")"
             if [ "$state" = "done" ]; then
