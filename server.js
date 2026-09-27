@@ -1222,7 +1222,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       const args=['-y','-hide_banner','-loglevel','error'];
       if(isImage)args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
-      const quality=String(process.env.AUTOTUBE_QUALITY||'max').toLowerCase(); const maxQuality=quality==='max'||quality==='ultra'; const tw=Math.max(256,Math.round(Number(targetWidth)|| (maxQuality?1920:1280))),th=Math.max(256,Math.round(Number(targetHeight)|| (maxQuality?1080:720))),tf=Math.max(1,Math.round(Number(targetFps)||30));
+      const quality=String(process.env.AUTOTUBE_QUALITY||'max').toLowerCase(); const maxQuality=quality==='max'||quality==='ultra'; const tw=Math.max(256,Math.round(Number(targetWidth)||1280)),th=Math.max(256,Math.round(Number(targetHeight)||720)),tf=Math.max(1,Math.round(Number(targetFps)||30));
       const motionFilter=isImage
         ? (Number(scene.number||i)%2
           ? `scale=${tw*2}:${th*2}:force_original_aspect_ratio=increase,crop=${tw*2}:${th*2},zoompan=z='min(zoom+0.0008,1.10)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${tw}x${th}:fps=${tf},eq=contrast=1.03:saturation=1.06,format=yuv420p`
@@ -1608,7 +1608,7 @@ async function executePreflight(){
         musicBuffer:null,
         onProgress:()=>{},
         finalOutputPath:output,
-        targetWidth:1920,targetHeight:1080,targetFps:30,targetDurationSeconds:durationSeconds
+        targetWidth:1280,targetHeight:720,targetFps:30,targetDurationSeconds:durationSeconds
       });
       const validation=await validateRenderedMp4(output);
       if(!result?.size||!validation?.width)throw new Error('El pipeline de render no produjo un MP4 válido.');
