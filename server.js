@@ -2265,7 +2265,7 @@ async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
   const payload=[prompt,handle_file(imagePath),false,-1];
   const result=await Promise.race([
     app.predict('/i2v_generation',payload),
-    new Promise((_,reject)=>setTimeout(()=>reject(new Error('Wan2.1 I2V timeout')),600000))
+    new Promise((_,reject)=>setTimeout(()=>reject(new Error('Wan2.1 I2V timeout')),90000))
   ]);
   const data=Array.isArray(result?.data)?result.data:[result?.data??result];
   console.log('AUTOTUBE WAN21 I2V SYNC RESULT',JSON.stringify(data).slice(0,4000));
