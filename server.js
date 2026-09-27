@@ -91,6 +91,12 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
         console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','gemini-omni',err?.message||String(err));
       }
       if(!generated?.outputPath)try{
+        generated=await generatePublicSvdImageToVideoClip(imagePath,dir,{prompt});
+      }catch(err){
+        providerErrors.push('svd-space: '+String(err?.message||err));
+        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','svd-space',err?.message||String(err));
+      }
+      if(!generated?.outputPath)try{
         generated=await generateWaveSpeedWanVideoClip(imagePath,dir,{prompt});
       }catch(err){
         providerErrors.push('wan21-space: '+String(err?.message||err));
@@ -2260,10 +2266,15 @@ async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
   const submitResult=await app.predict('/i2v_generation_async',[prompt,handle_file(imagePath),false,-1]);
   const submitData=Array.isArray(submitResult?.data)?submitResult.data:[];
   const rawTask=submitData[0];
-  const taskId=String(
-    typeof rawTask==='string' ? rawTask :
-    rawTask?.task_id||rawTask?.taskId||rawTask?.id||rawTask?.value||''
-  ).trim();
+  const unwrap=(v)=>{
+    if(v==null)return '';
+    if(typeof v==='string')return v;
+    if(typeof v==='object'){
+      return String(v.task_id||v.taskId||v.id||v.value||v.name||v.data?.task_id||v.data?.taskId||'');
+    }
+    return String(v);
+  };
+  const taskId=unwrap(rawTask).trim();
   if(!taskId)throw new Error('Wan2.1 no devolvió task_id: '+JSON.stringify(rawTask).slice(0,1200));
   const started=Date.now();
   let lastStatus='';
