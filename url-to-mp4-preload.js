@@ -344,6 +344,32 @@ async function downloadViaLegacyYtdl(url,dir){
 }
 
 async function getTrustedYoutubeSession(){const bases=String(process.env.AUTOTUBE_YT_SESSION_URLS||'https://autotube-yt-session.onrender.com').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);for(const base of bases){try{const r=await fetch(base+'/token',{headers:{Accept:'application/json'}});if(!r.ok)continue;const d=await r.json();const po=String(d.poToken||d.po_token||'').trim(),vd=String(d.visitorData||d.visitor_data||'').trim();if(po&&vd)return{po,vd}}catch(e){console.warn('AUTOTUBE TRUSTED SESSION FAILED',base,String(e?.message||e))}}return null;}
+async function downloadReferenceFast(url,dir){
+  await fs.mkdir(dir,{recursive:true});
+  const attempts=[
+    ['yt5s',downloadViaYt5sProxy],
+    ['piped',downloadViaPiped],
+    ['cobalt',downloadViaCobalt],
+    ['alldl',downloadViaAllDL],
+    ['ytdl-api',downloadViaYtdlApi],
+    ['invidious',downloadViaInvidious]
+  ];
+  let last='';
+  for(const [name,fn] of attempts){
+    try{
+      const result=await fn(url,dir);
+      return await validateExactCandidate({...result,strategy:'reference-fast:'+name});
+    }catch(e){
+      last=name+': '+String(e?.message||e);
+      console.error('AUTOTUBE REFERENCE FAST FAILED',last);
+      for(const f of await fs.readdir(dir).catch(()=>[])){
+        if(/^source\.mp4$|^piped-|^iv-/.test(f))await fs.rm(path.join(dir,f),{force:true}).catch(()=>{});
+      }
+    }
+  }
+  throw new Error('No se pudo obtener la referencia por el canal rápido. Último error: '+last);
+}
+global.__autotubeDownloadReferenceFast=downloadReferenceFast;
 global.__autotubeDownloadExactYoutube=downloadExactYoutube;
 async function validateExactCandidate(result){const source=String(result?.source||'');if(!source)throw new Error('El proveedor no devolvió ruta de archivo.');const st=await fs.stat(source);if(!st.size)throw new Error('El proveedor devolvió un archivo vacío.');try{const p=await probe(source);if(!p.duration||!p.width||!p.height)throw new Error('FFmpeg no detectó duración/vídeo válidos.');return{...result,bytes:st.size,probe:p}}catch(err){await fs.rm(source,{force:true}).catch(()=>{});throw new Error('El proveedor devolvió un MP4 incompleto o inválido: '+String(err?.message||err))}}
 async function downloadExactYoutube(url,dir){await fs.mkdir(dir,{recursive:true});const parsed=new URL(url);if(/youtube\.com$|youtu\.be$/i.test(parsed.hostname)){try{return await validateExactCandidate(await downloadViaCobalt(url,dir))}catch(e){console.error('AUTOTUBE PRIORITY COBALT FAILED',e?.message||e)}try{return await validateExactCandidate(await downloadViaAllDL(url,dir))}catch(e){console.error('AUTOTUBE ALLDL FAILED',e?.message||e)}try{return await validateExactCandidate(await downloadViaYtdlApi(url,dir))}catch(e){console.error('AUTOTUBE YTDL API FAILED',e?.message||e)}}if(!/youtube\.com$|youtu\\.be$/i.test(parsed.hostname)){const ext=(path.extname(parsed.pathname).toLowerCase()||'.mp4');const out=path.join(dir,'source'+ext);const r=await fetch(url);if(!r.ok)throw new Error('La URL directa devolvió HTTP '+r.status+'.');const file=await fs.open(out,'w');try{if(!r.body)throw new Error('La URL directa no devolvió contenido.');const reader=r.body.getReader();while(true){const {done,value}=await reader.read();if(done)break;await file.write(value)}}finally{await file.close()}const st=await fs.stat(out);if(!st.size)throw new Error('La URL directa devolvió un archivo vacío.');return{source:out,bytes:st.size,strategy:'direct-media-url'}}try{return await validateExactCandidate(await downloadViaAllDL(url,dir))}catch(e){console.error('AUTOTUBE ALLDL FAILED',e?.message||e)}
