@@ -391,8 +391,8 @@ async function downloadReferenceFast(url,dir){
     ['cobalt',downloadViaCobalt,url],
     ['alldl',downloadViaAllDL,url],
     ['ytdl-api',downloadViaYtdlApi,url],
-    ['invidious',downloadViaInvidious]
-  ]);
+    ['invidious',downloadViaInvidious,url]
+  );
   let last='';
   for(const [name,fn,target] of attempts){
     try{
