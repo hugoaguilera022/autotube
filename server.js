@@ -2501,12 +2501,29 @@ if(options.forceAi){
 
       try{
         generatedVideo=await Promise.race([
+          generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),240000))
+        ]);
+      }catch(err){
+        videoProviderErrors.push('svd-space: '+String(err?.message||err));
+        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
+      }
+      if(!generatedVideo?.outputPath)try{
+        generatedVideo=await Promise.race([
           generateWaveSpeedWanVideoClip(publicReferenceImage,dir,{prompt}),
           new Promise((_,reject)=>setTimeout(()=>reject(new Error('wan21-space timeout')),240000))
         ]);
       }catch(err){
         videoProviderErrors.push('wan21-space: '+String(err?.message||err));
         console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','wan21-space',err?.message||String(err));
+      }
+      if(!generatedVideo?.outputPath){
+        try{
+          generatedVideo=await generateGeminiOmniImageToVideoClip(publicReferenceImage,dir,{prompt});
+        }catch(err){
+          videoProviderErrors.push('gemini-omni: '+String(err?.message||err));
+          console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','gemini-omni',err?.message||String(err));
+        }
       }
       if(!generatedVideo?.outputPath) for(const provider of ['pollinations','chopperblu','goalsave','ltx']){
         try{
