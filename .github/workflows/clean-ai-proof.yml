@@ -1,0 +1,68 @@
+name: Clean AI reference audiovisual proof
+on:
+  push:
+    branches: [e2e-stable]
+    paths: ['.github/workflows/clean-ai-proof.yml']
+  workflow_dispatch:
+concurrency:
+  group: autotube-ai-e2e
+  cancel-in-progress: false
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Wait for Render
+        run: |
+          set -e
+          for i in $(seq 1 90); do
+            curl -fsS --max-time 10 https://autotube-verify.onrender.com/api/health -o health.json && cat health.json && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Start unique URL to AI job
+        run: |
+          set -euo pipefail
+          REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
+          body="$(curl -fsS --retry 3 --retry-delay 5 -X POST -H 'Content-Type: application/json' --data "{\"reference\":\"$REF\"}" https://autotube-verify.onrender.com/api/verify-ai-e2e)"
+          echo "$body"
+          JOB="$(python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<<"$body")"
+          echo "JOB=$JOB" >> "$GITHUB_ENV"
+      - name: Poll exact job
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 135); do
+            sleep 10
+            status="$(curl -fsS --max-time 30 "https://autotube-verify.onrender.com/api/url-to-video/$JOB")"
+            echo "$status"
+            state="$(python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$status")"
+            if [ "$state" = "done" ]; then
+              echo "$status" > result.json
+              exit 0
+            fi
+            if [ "$state" = "error" ]; then exit 1; fi
+          done
+          exit 1
+      - name: Download and validate MP4
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 60 "https://autotube-verify.onrender.com/api/url-to-video/$JOB/download" -o autotube-reference-matched.mp4
+          test -s autotube-reference-matched.mp4
+          ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,codec_name,width,height,r_frame_rate -of json autotube-reference-matched.mp4 | tee validation.json
+          python - <<'PY'
+import json
+d=json.load(open('validation.json')); s=d.get('streams',[])
+v=[x for x in s if x.get('codec_type')=='video']; a=[x for x in s if x.get('codec_type')=='audio']
+assert v and a, 'video/audio missing'
+assert v[0].get('codec_name')=='h264', v
+assert a[0].get('codec_name')=='aac', a
+print('VALID MP4: H.264 + AAC')
+PY
+      - name: Upload final MP4
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-ai-reference-audiovisual-proof
+          path: |
+            autotube-reference-matched.mp4
+            result.json
+            validation.json

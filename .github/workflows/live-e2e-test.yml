@@ -1,7 +1,5 @@
 name: AutoTube E2E live regeneration test
 on:
-  push:
-    branches: [e2e-stable]
   workflow_dispatch:
 concurrency:
   group: autotube-ai-e2e
@@ -19,40 +17,5 @@ jobs:
             sleep 5
           done
           exit 1
-      - name: Start one clean AI reference job
-        run: |
-          set -euo pipefail
-          REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
-          body="$(curl -fsS --retry 3 --retry-delay 5 -X POST -H 'Content-Type: application/json' --data "{\"reference\":\"$REF\"}" https://autotube-verify.onrender.com/api/verify-ai-e2e)"
-          echo "$body"
-          JOB="$(python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<<"$body")"
-          echo "JOB=$JOB" >> "$GITHUB_ENV"
-      - name: Poll and download MP4
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 135); do
-            sleep 10
-            status="$(curl -fsS --max-time 30 "https://autotube-verify.onrender.com/api/url-to-video/$JOB")"
-            echo "$status"
-            state="$(python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$status")"
-            if [ "$state" = "done" ]; then
-              curl -fsS --max-time 60 "https://autotube-verify.onrender.com/api/url-to-video/$JOB/download" -o autotube-reference-matched.mp4
-              test -s autotube-reference-matched.mp4
-              ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,codec_name,width,height,r_frame_rate -of json autotube-reference-matched.mp4 | tee validation.json
-              python - <<'PY'
-import json
-d=json.load(open("validation.json")); s=d.get("streams",[])
-assert any(x.get("codec_type")=="video" for x in s)
-assert any(x.get("codec_type")=="audio" for x in s), "audio stream missing"
-print("MP4 technical audiovisual validation: OK")
-PY
-              exit 0
-            fi
-            if [ "$state" = "error" ]; then exit 1; fi
-          done
-          exit 1
-      - name: Upload validated MP4
-        uses: actions/upload-artifact@v4
-        with:
-          name: autotube-ai-reference-mp4
-          path: autotube-reference-matched.mp4
+      - name: Notice
+        run: echo "Use clean-ai-proof.yml for the single automated proof run."
