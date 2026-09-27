@@ -1,8 +1,7 @@
 name: AutoTube AI Benchmark
 
 on:
-  push:
-    branches: [main]
+  # push trigger disabled: use workflow_dispatch for manual runs
   workflow_dispatch:
 
 concurrency:

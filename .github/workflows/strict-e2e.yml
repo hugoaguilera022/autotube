@@ -1,7 +1,6 @@
 name: AutoTube strict E2E
 on:
-  push:
-    branches: [main]
+  # push trigger disabled: use workflow_dispatch for manual runs
   workflow_dispatch:
 jobs:
   e2e:

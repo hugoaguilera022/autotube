@@ -1,10 +1,6 @@
 name: AutoTube authenticated real LTX test
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'server.js'
-      - '.github/workflows/h3-real-test.yml'
+  # push trigger disabled: use workflow_dispatch for manual runs
   workflow_dispatch:
 jobs:
   authenticated-ltx:
