@@ -12,25 +12,25 @@ global.setTimeout=function(callback,delay,...args){
   }catch{}
   return originalSetTimeout(callback,delay,...args);
 };
-if(process.env.AUTOTUBE_E2E_ON_START==='1' || process.env.AUTOTUBE_FORCE_ONE_SHOT_E2E==='1'){
+if(process.env.AUTOTUBE_URL_E2E_ON_START==='1'){
   originalSetTimeout(async()=>{
     const base='http://127.0.0.1:'+String(process.env.PORT||10000);
-    const reference='https://www.youtube.com/watch?v=P_iFWenf1VA';
+    const reference=String(process.env.AUTOTUBE_E2E_REFERENCE||'https://www.youtube.com/watch?v=P_iFWenf1VA').trim();
     try{
-      const res=await fetch(base+'/api/full-pipeline-test?reference='+encodeURIComponent(reference));
+      const res=await fetch(base+'/api/url-to-video?reference='+encodeURIComponent(reference));
       const started=await res.json().catch(()=>null);
-      console.log('AUTOTUBE ONE-SHOT E2E START',res.status,JSON.stringify(started));
+      console.log('AUTOTUBE URL E2E START',res.status,JSON.stringify(started));
       const jobId=started?.jobId;
       if(jobId){
-        const deadline=Date.now()+25*60*1000;
+        const deadline=Date.now()+30*60*1000;
         while(Date.now()<deadline){
           await new Promise(r=>originalSetTimeout(r,5000));
-          const sr=await fetch(base+'/api/full-pipeline-test/'+encodeURIComponent(jobId));
+          const sr=await fetch(base+'/api/url-to-video/'+encodeURIComponent(jobId));
           const data=await sr.json().catch(()=>null);
-          console.log('AUTOTUBE ONE-SHOT E2E STATUS',sr.status,JSON.stringify(data).slice(0,5000));
-          if(data?.status==='done'||data?.status==='failed'||data?.status==='restart')break;
+          console.log('AUTOTUBE URL E2E STATUS',sr.status,JSON.stringify(data).slice(0,6000));
+          if(data?.status==='done'||data?.status==='error'||data?.status==='restart')break;
         }
       }
-    }catch(e){console.error('AUTOTUBE ONE-SHOT E2E trigger failed',e?.message||String(e))}
+    }catch(e){console.error('AUTOTUBE URL E2E trigger failed',e?.message||String(e))}
   },30000);
 }
