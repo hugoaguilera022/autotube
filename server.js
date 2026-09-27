@@ -2272,18 +2272,13 @@ async function executeUrlToVideo(reference,jobId,options={}){
           publicDescription=String(meta?.author_name||'');
         }
       }catch(err){console.warn('YouTube oEmbed unavailable:',err?.message||String(err));}
-      // Prefer the same validated URL-to-MP4 pipeline used by production. This is
-      // the strongest generic conditioning source and is not tied to the proof
-      // video's ID. If YouTube blocks bytes, fall back to public thumbnail mode.
-      try{
-        referenceDownloaded=await downloadYoutubeReference(reference,referenceSourceDir);
-        video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:String(referenceDownloaded.probe?.durationSeconds||''),thumbnails:['https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'],thumbnail:'https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg'};
-      }catch(downloadErr){
-        console.warn('AUTOTUBE AI DIRECT REFERENCE DOWNLOAD FAILED; PUBLIC FALLBACK',downloadErr?.message||String(downloadErr));
-        const thumbnail='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
-        video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:'',thumbnails:[thumbnail],thumbnail};
-        referenceDownloaded={file:null,bytes:0,probe:{},strategy:'youtube-public-oembed-thumbnail'};
-      }
+      // Reference-recreation mode must work even when YouTube blocks server-side
+      // media downloads. Use only public URL metadata + the public thumbnail as
+      // conditioning input; never copy the source video.
+      const thumbnail='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
+      video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:'',thumbnails:[thumbnail],thumbnail};
+      referenceDownloaded={file:null,bytes:0,probe:{},strategy:'youtube-public-thumbnail'};
+      console.log('AUTOTUBE AI REFERENCE PUBLIC CONDITIONING',JSON.stringify({videoId,title:publicTitle,strategy:'youtube-public-thumbnail'}));
     }else{
       referenceDownloaded=options.directReferenceFile
         ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
@@ -2327,7 +2322,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       : (options.directReferenceFile
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
         : await analyzeYoutubeReferenceMedia(reference,video));
-    if(job)job.progress=18;
+    if(job){job.progress=18;console.log('AUTOTUBE AI ANALYSIS READY',JSON.stringify({jobId,source:style.visualSource||'unknown',analysis:style.analysisSource||'unknown'}));}
 
     // Generic AI proof: every reference is analyzed from its own downloaded MP4.
     // Never hard-code subjects, locations, characters, or style from a test video.
@@ -2352,6 +2347,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
         '16:9, high-detail cinematic AI video, coherent continuous motion, original material, no watermark.'
       ].join('\\n');
       const videoProviderErrors=[];
+      console.log('AUTOTUBE AI GENERATION START',JSON.stringify({jobId,reference,provider:'gemini-omni-1.1-flash'}));
       const publicReferenceImage=path.join(dir,'public-reference-conditioning.jpg');
       try{
         if(referenceDownloaded?.file){
