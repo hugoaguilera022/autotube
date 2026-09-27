@@ -468,8 +468,8 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       const tw=Math.max(256,Math.round(Number(targetWidth)||910)),th=Math.max(256,Math.round(Number(targetHeight)||512)),tf=Math.max(1,Math.round(Number(targetFps)||30));
       const motionFilter=isImage
         ? (Number(scene.number||i)%2
-          ? `scale=${tw*2}:${th*2}:force_original_aspect_ratio=increase,crop=${tw}:${th}:x='(in_w-out_w)/2+80*sin(n/45)':y='(in_h-out_h)/2+35*cos(n/55)',eq=contrast=1.03:saturation=1.06,format=yuv420p,fps=${tf}`
-          : `scale=${tw*2}:${th*2}:force_original_aspect_ratio=increase,crop=${tw}:${th}:x='(in_w-out_w)/2+90*cos(n/50)':y='(in_h-out_h)/2+45*sin(n/60)',eq=contrast=1.03:saturation=1.06,format=yuv420p,fps=${tf}`)
+          ? `scale=${tw*2}:${th*2}:force_original_aspect_ratio=increase,crop=${tw}:${th}:x='(in_w-out_w)/2+80*sin(n/45)':y='(in_h-out_h)/2+35*cos(n/55)',drawbox=x='(w-140)*mod(n,180)/180':y='h/2-70':w=140:h=140:color=white@0.035:t=fill,eq=contrast=1.03:saturation=1.06,format=yuv420p,fps=${tf}`
+          : `scale=${tw*2}:${th*2}:force_original_aspect_ratio=increase,crop=${tw}:${th}:x='(in_w-out_w)/2+90*cos(n/50)':y='(in_h-out_h)/2+45*sin(n/60)',drawbox=x='(w-140)*(1-mod(n,180)/180)':y='h/2-70':w=140:h=140:color=white@0.035:t=fill,eq=contrast=1.03:saturation=1.06,format=yuv420p,fps=${tf}`)
         : `scale=${tw}:${th}:force_original_aspect_ratio=increase,crop=${tw}:${th},format=yuv420p,fps=${tf}`;
       args.push('-t',String(duration),
         // Animated treatment for still visuals: subtle Ken-Burns camera motion,
