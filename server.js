@@ -1985,6 +1985,36 @@ const urlVideoJobs=new Map();
 function parseIsoDurationSeconds(value){if(Number.isFinite(Number(value))&&Number(value)>0)return Number(value);const raw=String(value||'').trim();const m=raw.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);if(!m)return 0;return Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0);}
 
 
+async function buildLightweightAiReferenceStyle(file,video={}){
+  const probe=await probeReferenceTechnical(file).catch(()=>({}));
+  const dir=path.dirname(file);
+  const framePaths=[];
+  const duration=Math.max(1,Number(probe.durationSeconds)||Number(video.duration)||4);
+  for(const ratio of [0.12,0.5,0.88]){
+    const p=path.join(dir,'ai-ref-frame-'+Math.round(ratio*100)+'.jpg');
+    try{
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss',String(Math.min(duration-0.1,duration*ratio)),'-i',file,'-frames:v','1','-q:v','3',p]);
+      const st=await fs.stat(p); if(st.size>5000)framePaths.push(p);
+    }catch{}
+  }
+  const first=framePaths[0]||null;
+  const sceneSegments=framePaths.map((p,i)=>({index:i+1,summary:'Original visual reference frame '+(i+1),generationPrompt:'Create an original AI reinterpretation of the concrete visual content, subject, setting, composition, lighting and palette visible in this reference frame.',sourceFramePath:p,startSeconds:duration*[0.12,0.5,0.88][i]}));
+  return {
+    visualSource:'youtube-download+ffprobe+sampled-reference-frames',
+    analysisSource:'lightweight-reference-frame-analysis',
+    hasFullVideoAnalysis:false,hasAudioAnalysis:Boolean(probe.audioCodec),hasAnimationAnalysis:false,hasStructureAnalysis:false,
+    estimatedSceneCount:Math.max(1,framePaths.length),preferredSceneCount:Math.max(1,framePaths.length),
+    visualAnalysis:{
+      videoProfile:{durationSeconds:duration,visualStyle:'reference-conditioned',composition:'match the supplied reference frame',palette:'derive from supplied reference frame',lighting:'derive from supplied reference frame',cameraMovement:'preserve the reference motion language where possible'},
+      animationProfile:{motionIntensity:'medium'},
+      structureProfile:{sceneSegments},
+      audioProfile:{hasMusic:false,hasSpeech:false,hasAmbience:false,hasSoundEffects:false},
+      generationDirectives:{useReferenceFrame:true,originalOnly:true}
+    },
+    conditioningImage:first
+  };
+}
+
 async function buildReferenceBlueprint({referenceTitle,transcript='',visualReferenceAnalysis={},referenceStyle={}}){
   const audio=visualReferenceAnalysis?.audioProfile||{};
   const structure=visualReferenceAnalysis?.structureProfile||{};
@@ -2210,7 +2240,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
     }
     const style=options.forceAi
       ? (referenceDownloaded?.file
-        ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
+        ? await buildLightweightAiReferenceStyle(referenceDownloaded.file,video)
         : await analyzeYoutubeReferenceMedia(reference,video))
       : (options.directReferenceFile
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
