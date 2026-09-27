@@ -1,4 +1,4 @@
-name: Clean AI reference audiovisual proof
+name: Clean AI reference audiovisual proof # real MP4 validation
 # Generic fallback verification refresh v2: 2026-09-27T15:58:47.446Z
 on:
   push:
