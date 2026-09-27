@@ -82,13 +82,10 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
       let generated=null;
       const providerErrors=[];
       try{
-        generated=await generateGeminiOmniImageToVideoClip(imagePath,dir,{
-          prompt,
-          referenceUrl:null
-        });
+        generated=await generateWaveSpeedWanVideoClip(imagePath,dir,{prompt});
       }catch(err){
-        providerErrors.push('gemini-omni: '+String(err?.message||err));
-        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','gemini-omni',err?.message||String(err));
+        providerErrors.push('wan21-space: '+String(err?.message||err));
+        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','wan21-space',err?.message||String(err));
       }
       if(!generated?.outputPath)try{
         generated=await generatePublicSvdImageToVideoClip(imagePath,dir,{prompt});
@@ -97,10 +94,10 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
         console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','svd-space',err?.message||String(err));
       }
       if(!generated?.outputPath)try{
-        generated=await generateWaveSpeedWanVideoClip(imagePath,dir,{prompt});
+        generated=await generateGeminiOmniImageToVideoClip(imagePath,dir,{prompt,referenceUrl:null});
       }catch(err){
-        providerErrors.push('wan21-space: '+String(err?.message||err));
-        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','wan21-space',err?.message||String(err));
+        providerErrors.push('gemini-omni: '+String(err?.message||err));
+        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','gemini-omni',err?.message||String(err));
       }
       if(!generated?.outputPath)throw new Error('No se pudo generar el MP4 IA condicionado por la referencia: '+providerErrors.join(' | '));
       job.progress=80;
