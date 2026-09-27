@@ -94,3 +94,5 @@ jobs:
 # final numeric size assertion
 
 # controlled retry against currently live Render instance
+
+# true AI video attempt
