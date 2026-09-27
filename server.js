@@ -311,7 +311,6 @@ async function probeReferenceTechnical(file){
   const dm=t.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
   const duration=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
   const videoLine=t.split(/\r?\n/).find(x=>/Video:/i.test(x))||'';
-  const audioLine=t.split(/\r?\n/).find(x=>/Audio:/i.test(x))||'';
   const size=videoLine.match(/(\d{2,5})x(\d{2,5})/);
   const fps=videoLine.match(/(\d+(?:\.\d+)?)\s*fps/i);
   const videoCodec=(videoLine.match(/Video:\s*([^,\s]+)/i)||[])[1]||'';
