@@ -2262,24 +2262,29 @@ async function executeUrlToVideo(reference,jobId,options={}){
     async function generateGeminiYoutubeConditioningImage(url,dir){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
-  const response=await fetch('https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-image:generateContent',{
+  const videoId=extractYoutubeVideoId(url);
+  if(!videoId)throw new Error('No se pudo extraer el ID de YouTube.');
+  const thumbUrl='https://i.ytimg.com/vi/'+videoId+'/maxresdefault.jpg';
+  const rr=await fetch(thumbUrl,{headers:{'User-Agent':'AutoTube/1.0'},signal:AbortSignal.timeout(20000)});
+  if(!rr.ok)throw new Error('Miniatura YouTube HTTP '+rr.status);
+  const imageBytes=Buffer.from(await rr.arrayBuffer());
+  if(imageBytes.length<5000)throw new Error('Miniatura YouTube vacía.');
+  const prompt='Analyze this public YouTube reference thumbnail and create a NEW original cinematic keyframe that captures the same concrete audiovisual concept: subject, setting, visual mood, lighting, palette, depth and likely motion. Change the exact framing, moment, geometry and details. Do not reproduce any exact frame, text, logo, watermark, face likeness or composition. Return an image suitable as the first frame of a new AI video plus a concise audiovisual analysis.';
+  const response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',{
     method:'POST',
     headers:{'Content-Type':'application/json','x-goog-api-key':key},
-    body:JSON.stringify({
-      contents:[{parts:[
-        {file_data:{file_uri:String(url)},video_metadata:{fps:0.5}},
-        {text:'Study this public YouTube video as audiovisual reference. Create one NEW original cinematic keyframe for a recreation: preserve the concrete subject, setting, visual mood, lighting, palette and motion concept you observe, but change the exact moment, framing, geometry and details. Do not reproduce any exact frame, text, logo, face likeness, watermark or composition. The resulting image must be usable as the first frame for a new AI-generated video.'}
-      ]}],
-      generationConfig:{responseModalities:['TEXT','IMAGE']}
-    }),
+    body:JSON.stringify({contents:[{parts:[
+      {inline_data:{mime_type:'image/jpeg',data:imageBytes.toString('base64')}},
+      {text:prompt}
+    ]}],generationConfig:{responseModalities:['TEXT','IMAGE']}}),
     signal:AbortSignal.timeout(300000)
   });
-  const raw=await response.text();let data;try{data=JSON.parse(raw)}catch{}
-  if(!response.ok)throw new Error('Gemini YouTube conditioning HTTP '+response.status+': '+(data?.error?.message||raw.slice(0,800)));
+  const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}
+  if(!response.ok)throw new Error('Gemini conditioning HTTP '+response.status+': '+(data?.error?.message||raw.slice(0,800)));
   const parts=data?.candidates?.[0]?.content?.parts||[];
   const part=parts.find(p=>p?.inlineData?.data||p?.inline_data?.data);
   const b64=part?.inlineData?.data||part?.inline_data?.data;
-  if(!b64)throw new Error('Gemini no devolvió imagen condicionada por el vídeo de YouTube.');
+  if(!b64)throw new Error('Gemini no devolvió una imagen condicionada.');
   const imagePath=path.join(dir,'gemini-youtube-conditioned.png');
   await fs.writeFile(imagePath,Buffer.from(b64,'base64'));
   return{imagePath,bytes:(await fs.stat(imagePath)).size,analysis:parts.filter(p=>p?.text).map(p=>p.text).join(' ').slice(0,6000)};
