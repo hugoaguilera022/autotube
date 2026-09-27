@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 concurrency:
   # final-real-mp4-proof
-  group: autotube-ai-e2e-v2
+  group: autotube-ai-e2e-proof-${{ github.sha }}
   cancel-in-progress: false
   # proof uses the live generic URL-to-video AI path
 jobs:
