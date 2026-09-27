@@ -310,10 +310,8 @@ async function probeReferenceTechnical(file){
   const t=String(stderr);
   const dm=t.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
   const duration=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
-  const videoLine=t.split(/\r?
-/).find(x=>/Video:/i.test(x))||'';
-  const audioLine=t.split(/\r?
-/).find(x=>/Audio:/i.test(x))||'';
+  const videoLine=t.split(/\r?\n/).find(x=>/Video:/i.test(x))||'';
+  const audioLine=t.split(/\r?\n/).find(x=>/Audio:/i.test(x))||'';
   const size=videoLine.match(/(\d{2,5})x(\d{2,5})/);
   const fps=videoLine.match(/(\d+(?:\.\d+)?)\s*fps/i);
   const videoCodec=(videoLine.match(/Video:\s*([^,\s]+)/i)||[])[1]||'';
@@ -505,10 +503,8 @@ async function validateRenderedMp4(file,expectedDuration=0){
     const tolerance=Math.max(2,expectedDuration*0.03);
     if(Math.abs(durationSeconds-expectedDuration)>tolerance)throw new Error('Duración real del MP4: '+durationSeconds.toFixed(2)+' s; esperada '+expectedDuration.toFixed(2)+' s (tolerancia ±'+tolerance.toFixed(2)+' s).');
   }
-  const videoLine=(text.split(/\r?
-/).find(line=>/Video:/i.test(line))||'');
-  const audioLine=(text.split(/\r?
-/).find(line=>/Audio:/i.test(line))||'');
+  const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
+  const audioLine=(text.split(/\r?\n/).find(line=>/Audio:/i.test(line))||'');
   const vm=videoLine.match(/(\d{2,5})x(\d{2,5})/);  const fm=videoLine.match(/(\d+(?:\.\d+)?)\s*fps/);
   const am=audioLine.match(/Audio:\s*([a-z0-9_]+)/i);
   if(!vm)throw new Error('No se pudo verificar la resolución real del MP4.');
@@ -623,8 +619,7 @@ async function validateGeneratedVideoClip(file){
   const text=String(result||'');
   const dm=text.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
   const durationSeconds=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
-  const videoLine=(text.split(/\r?
-/).find(line=>/Video:/i.test(line))||'');
+  const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
   const vm=videoLine.match(/Video:\s*([^,]+)/i);
   const dimensions=videoLine.match(/(\d{2,5})x(\d{2,5})/);
   if(!durationSeconds||durationSeconds<3)throw new Error('El clip IA tiene una duración inválida: '+durationSeconds+' s.');
