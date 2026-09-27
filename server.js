@@ -1474,6 +1474,25 @@ async function runVideoAiSmokeTest(){
 
 const videoAiTestJobs=new Map();
 
+const referenceAiProofJobs=new Map();
+
+async function executeReferenceAiProof(reference,jobId){
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-ai-proof-')); const job=referenceAiProofJobs.get(jobId);
+  try{
+    if(job)job.progress=5; const video=await getReferenceVideo(reference); if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:12});
+    const style=await analyzeYoutubeReferenceMedia(reference,video); if(job)job.progress=35;
+    const vp=style?.visualAnalysis?.videoProfile||{}, ap=style?.visualAnalysis?.audioProfile||{}, anim=style?.visualAnalysis?.animationProfile||{};
+    const prompt=['Create an ORIGINAL AI-generated video scene inspired only by this YouTube reference audiovisual analysis.','Do not copy the source recording, frames, people, faces, logos, text, exact shots, or copyrighted footage.','Preserve the observed subject/theme, visual language, composition, lighting, palette, camera movement and motion intensity.','REFERENCE TITLE: '+String(video.title||'').slice(0,220),'VIDEO PROFILE: '+JSON.stringify(vp),'ANIMATION PROFILE: '+JSON.stringify(anim),'AUDIO PROFILE (for visual pacing only): '+JSON.stringify(ap),'Make the result cinematic, coherent, original, and clearly AI-generated. No text, logos or watermarks.'].join('\n');
+    const generated=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:3,width:256,height:256,improveTexture:false}); if(job)job.progress=70;
+    const finalPath=path.join(renderJobDir,jobId+'.mp4');
+    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-stream_loop','-1','-i',generated.outputPath,'-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000','-t','3','-map','0:v:0','-map','1:a:0','-vf','scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','26','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-shortest','-movflags','+faststart',finalPath]);
+    const validation=await validateRenderedMp4(finalPath,3), stat=await fs.stat(finalPath); if(!stat.size)throw new Error('El MP4 IA final está vacío.');
+    if(job)Object.assign(job,{status:'done',progress:100,outputPath:finalPath,size:stat.size,provider:generated.provider,model:generated.model,reference,referenceTitle:video.title||reference,validation:{...validation,mode:'ai-generated-reference-proof',sourceReference:reference,referenceVisualSource:style.visualSource||'unknown',referenceAnalysis:style.analysisSource||'unknown',generatedByAi:true},finishedAt:Date.now()});
+  }catch(err){if(job)Object.assign(job,{status:'error',progress:0,error:err?.message||String(err),finishedAt:Date.now()});}
+  finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{})}
+}
+
+
 const preflightJobs=new Map();
 
 async function executePreflight(){
@@ -1714,6 +1733,9 @@ app.get('/api/reference-match-test/:jobId',async(req,res)=>{
 });
 
 
+app.get('/api/reference-ai-video-proof',async(req,res)=>{const reference=String(req.query?.reference||'').trim();if(!reference)return res.status(400).json({ok:false,error:'Añade ?reference=https://www.youtube.com/watch?v=...'});const existing=[...referenceAiProofJobs.values()].find(j=>j.status==='running'&&j.reference===reference);if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id});const id='refai_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');referenceAiProofJobs.set(id,{id,reference,status:'running',progress:1,startedAt:Date.now()});res.status(202).json({ok:false,status:'running',jobId:id});executeReferenceAiProof(reference,id);});
+app.get('/api/reference-ai-video-proof/:jobId',async(req,res)=>{const j=referenceAiProofJobs.get(String(req.params.jobId||''));if(!j)return res.status(410).json({ok:false,status:'restart'});if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,progress:j.progress||0});if(j.status==='error')return res.status(503).json({ok:false,status:'error',jobId:j.id,error:j.error});return res.json({ok:true,status:'done',jobId:j.id,size:j.size,provider:j.provider,model:j.model,validation:j.validation,downloadUrl:'/api/reference-ai-video-proof/'+encodeURIComponent(j.id)+'/download'});});
+app.get('/api/reference-ai-video-proof/:jobId/download',async(req,res)=>{const j=referenceAiProofJobs.get(String(req.params.jobId||''));if(!j||j.status!=='done')return res.status(409).json({ok:false});try{await fs.stat(j.outputPath);res.download(j.outputPath,'autotube-ai-reference-proof.mp4')}catch{res.status(404).json({ok:false})}});
 app.get('/api/video-ai-test',async(_req,res)=>{
   const existing=[...videoAiTestJobs.values()].find(j=>j.status==='running');
   if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/video-ai-test/'+encodeURIComponent(existing.id)});
