@@ -55,6 +55,9 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
   const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
   urlVideoJobs.set(jobId,{id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null});
   res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
+  // Use the same generic URL->AI implementation as production. The endpoint
+  // must not pre-download the reference because that defeats the public
+  // metadata/thumbnail fallback for arbitrary YouTube URLs.
   executeUrlToVideo(reference,jobId,{forceAi:true}).catch(err=>{
     const job=urlVideoJobs.get(jobId);
     if(job){job.status='error';job.error=err?.message||String(err);job.progress=100;}
