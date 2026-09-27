@@ -1262,6 +1262,17 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
         '-filter_complex','[0:a]aresample=44100,acompressor=threshold=0.08:ratio=3:attack=20:release=250,asplit=2[voice][voice_sc];[1:a]aresample=44100,volume=0.14[music];[music][voice_sc]sidechaincompress=threshold=0.05:ratio=6:attack=20:release=300:makeup=1:mix=1[ducked];[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[a]',
         '-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-ar','44100','-ac','2','-b:a','160k','-threads','1','-movflags','+faststart',out]);
     }
+    // Final safety pass: every AI scene must end as a standard 16:9 master.
+    // Some image providers may ignore requested dimensions; normalize only when needed.
+    const outProbe=await probeReferenceTechnical(out);
+    if(!((outProbe.width===1280&&outProbe.height===720)||(outProbe.width===1920&&outProbe.height===1080))){
+      const normalized=path.join(dir,'autotube-final-normalized.mp4');
+      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',out,
+        '-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p',
+        '-map','0:v:0','-map','0:a:0?','-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p',
+        '-c:a','aac','-b:a','192k','-ar','44100','-ac','2','-threads','1','-movflags','+faststart',normalized]);
+      out=normalized;
+    }
     const stat=await fs.stat(out);
     if(!stat.size)throw new Error('El MP4 final está vacío.');
     const duration=targetDurationSeconds>0?Number(targetDurationSeconds):sceneInputs.reduce((n,x)=>n+Math.max(0.1,Number(x.scene.duration)||8),0);
