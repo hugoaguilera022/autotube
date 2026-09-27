@@ -1434,7 +1434,8 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
 
 async function generateChopperBluLtxVideoClip(prompt,dir,options={}) {
   const {Client}=require('@gradio/client');
-  const app=await Client.connect('ChopperBlu/ltx-2-5-demo');
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const app=await Client.connect('ChopperBlu/ltx-2-5-demo',token?{token}:undefined);
   const duration=Math.max(1,Math.min(5,Number(options.durationSeconds)||2));
   const width=832;
   const height=512;
