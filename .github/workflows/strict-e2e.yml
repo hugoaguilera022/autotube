@@ -11,13 +11,14 @@ jobs:
       - name: Start strict E2E
         run: |
           set -e
-          BASE="https://autotube-hfeu.onrender.com"
-          R=$(curl -fsS --max-time 30 "$BASE/api/full-pipeline-test")
+          BASE="https://autotube-verify.onrender.com"
+          REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
+          R=$(curl -fsS --max-time 30 --get "$BASE/api/verify-ai-e2e" --data-urlencode "reference=$REF")
           echo "$R"
           ID=$(echo "$R" | python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])')
           for i in $(seq 1 180); do
             sleep 10
-            S=$(curl -fsS --max-time 30 "$BASE/api/full-pipeline-test/$ID" || true)
+            S=$(curl -fsS --max-time 30 "$BASE/api/url-to-video/$ID" || true)
             echo "$S"
             echo "$S" | grep -q '"status":"done"' && exit 0
             echo "$S" | grep -q '"status":"failed"' && exit 1
