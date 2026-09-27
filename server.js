@@ -2213,7 +2213,17 @@ app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
 });
 
 
-const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));\nif(String(process.env.AUTOTUBE_REFERENCE_AI_PROOF_ONCE||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){\n  const proofReference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE).trim();\n  setTimeout(async()=>{\n    console.log('AUTOTUBE REFERENCE AI PROOF START',proofReference);\n    const id='refai-startup-'+Date.now(); referenceAiProofJobs.set(id,{id,reference:proofReference,status:'running',progress:1,startedAt:Date.now()});\n    try{await executeReferenceAiProof(proofReference,id); const j=referenceAiProofJobs.get(id); console.log('AUTOTUBE REFERENCE AI PROOF RESULT',JSON.stringify({status:j?.status,size:j?.size,provider:j?.provider,model:j?.model,validation:j?.validation,error:j?.error}));}\n    catch(err){console.error('AUTOTUBE REFERENCE AI PROOF FAILED',err?.stack||err?.message||String(err));}\n  },5000);\n}\n
+const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
+if(String(process.env.AUTOTUBE_REFERENCE_AI_PROOF_ONCE||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){
+  const proofReference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE).trim();
+  setTimeout(async()=>{
+    console.log('AUTOTUBE REFERENCE AI PROOF START',proofReference);
+    const id='refai-startup-'+Date.now(); referenceAiProofJobs.set(id,{id,reference:proofReference,status:'running',progress:1,startedAt:Date.now()});
+    try{await executeReferenceAiProof(proofReference,id); const j=referenceAiProofJobs.get(id); console.log('AUTOTUBE REFERENCE AI PROOF RESULT',JSON.stringify({status:j?.status,size:j?.size,provider:j?.provider,model:j?.model,validation:j?.validation,error:j?.error}));}
+    catch(err){console.error('AUTOTUBE REFERENCE AI PROOF FAILED',err?.stack||err?.message||String(err));}
+  },5000);
+}
+
 
 
 const startupAiE2EReference=String(process.env.AUTOTUBE_RUN_AI_E2E_REFERENCE||'').trim();
