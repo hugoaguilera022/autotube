@@ -2280,7 +2280,11 @@ async function executeUrlToVideo(reference,jobId,options={}){
             'Create coherent original 16:9 cinematic material, high detail, natural continuity, no watermark.',
             'This is scene '+(n+1)+' of '+count+'; preserve continuity with the reference across scenes.'
           ].join('\\n');
-          const generatedImage=await generateGeminiOriginalImage(imagePrompt,dir,{model:'gemini-2.5-flash-image',referenceImageUrl:video?.thumbnail||video?.thumbnails?.[0]||''});
+          const generatedImage=await generateGeminiOriginalImage(imagePrompt,dir,{
+            model:'gemini-2.5-flash-image',
+            referenceImagePath:referenceDownloaded?.file?publicReferenceImage:'',
+            referenceImageUrl:(!referenceDownloaded?.file)?(video?.thumbnail||video?.thumbnails?.[0]||''):''
+          });
           imagePaths.push(generatedImage.outputPath);
         }
         const montagePath=path.join(dir,'ai-reference-frame-conditioned.mp4');
