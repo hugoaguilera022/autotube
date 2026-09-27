@@ -64,7 +64,7 @@ async function downloadViaPiped(url,dir){
     }
   }
   if(!id)throw new Error('No se pudo extraer el ID de YouTube.');
-  const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi-libre.kavin.rocks,https://pipedapi.leptons.xyz,https://piped-api.privacy.com.de,https://pipedapi.adminforge.de,https://api.piped.yt,https://pipedapi.privacydev.net,https://pipedapi.smnz.de,https://pipedapi.pfcd.me,https://pipedapi.darkness.services,https://pipedapi.owo.si,https://pipedapi.12a.app,https://pipedapi.nezumi.party,https://pipedapi.ngn.tf,https://pipedapi.drgns.space').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
+  const instances=String(process.env.AUTOTUBE_PIPED_INSTANCES||'https://pipedapi.kavin.rocks,https://pipedapi-libre.kavin.rocks,https://pipedapi.leptons.xyz,https://piped-api.privacy.com.de,https://pipedapi.adminforge.de,https://api.piped.yt,https://pipedapi.privacydev.net,https://pipedapi.smnz.de,https://pipedapi.pfcd.me,https://pipedapi.darkness.services,https://pipedapi.owo.si,https://pipedapi.12a.app,https://pipedapi.nezumi.party,https://pipedapi.ngn.tf,https://pipedapi.drgns.space,https://pipedapi.reallyaweso.me,https://pipedapi.r4fo.com,https://pipedapi.reallyaweso.me,https://pipedapi.kavin.rocks').split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean);
   let last='';
   for(const base of instances){
     try{
