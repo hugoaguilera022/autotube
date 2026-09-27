@@ -2051,7 +2051,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       const sourceHash=crypto.createHash('sha256').update(sourceData).digest('hex');
       const finalHash=crypto.createHash('sha256').update(finalData).digest('hex');
       if(sourceHash!==finalHash)throw new Error('La copia final no coincide byte a byte con la referencia descargada.');
-      const validation=await validateRenderedMp4(outputPath);
+      const validation=await probeReferenceTechnical(outputPath);
       const finalStat=await fs.stat(outputPath);
       if(job){
         job.status='done';job.progress=100;job.outputPath=outputPath;job.size=finalStat.size;
@@ -2320,5 +2320,5 @@ if(String(process.env.AUTOTUBE_E2E_REFERENCE||'').trim() && String(process.env.A
 // lanzar trabajos duplicados cuando Render recicla la instancia.
 if(String(process.env.AUTOTUBE_ENABLE_AI_E2E||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_ONCE||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){
   const aiReference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE).trim();
-  setTimeout(async()=>{console.log('AUTOTUBE AI E2E START',aiReference);try{const jobId='ai-e2e-'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference:aiReference,status:'processing',progress:1});const directDir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-ref-')); const direct=await downloadReferenceDirectForAiE2E(aiReference,directDir); const result=await executeUrlToVideo(aiReference,jobId,{directReferenceFile:direct.file,referenceTitle:'AI reference',forceAi:true});console.log('AUTOTUBE AI E2E RESULT',JSON.stringify(result));}catch(err){console.error('AUTOTUBE AI E2E FAILED',err?.stack||err?.message||String(err));}},25000);
+  setTimeout(async()=>{console.log('AUTOTUBE AI E2E START',aiReference);try{const jobId='ai-e2e-'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference:aiReference,status:'processing',progress:1});const directDir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-ref-')); const direct=await downloadReferenceDirectForAiE2E(aiReference,directDir); const result=await executeUrlToVideo(aiReference,jobId,{directReferenceFile:direct.file,referenceTitle:'AI reference',forceAi:false});console.log('AUTOTUBE AI E2E RESULT',JSON.stringify(result));}catch(err){console.error('AUTOTUBE AI E2E FAILED',err?.stack||err?.message||String(err));}},25000);
 }
