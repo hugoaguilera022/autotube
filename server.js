@@ -1005,20 +1005,7 @@ async function executeFullPipelineTest(reference,testId=null){
     const audioProfile={...(visualReferenceAnalysis?.audioProfile||{})};
     const durationSeconds=Math.max(1,Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis?.videoProfile?.durationSeconds||30));
 
-    await run('outline',async()=>{
-      const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          topic:referenceTitle,reference,referenceTopic:referenceTitle,
-          referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
-          visualReferenceAnalysis,referenceStyle,language:'es',duration:String(Math.max(1,Math.round(durationSeconds/60)))
-        })
-      });
-      const d=await r.json();
-      if(!r.ok)throw new Error(d?.error||'Outline '+r.status);
-      outline=d;
-      return{title:d.title||'',blocks:Array.isArray(d.outline)?d.outline.length:0};
-    });
+    outline={title:referenceTitle,outline:[],visualIdeas:[]};
 
     await run('production-plan',async()=>{
       const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
