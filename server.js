@@ -559,16 +559,23 @@ async function generatePollinationsOriginalImage(prompt,dir,options={}) {
   const height=Math.max(288,Math.min(720,Number(options.height)||720));
   const seed=Number.isFinite(Number(options.seed))?Number(options.seed):Math.floor(Math.random()*2147483647);
   const url='https://image.pollinations.ai/prompt/'+encodeURIComponent(String(prompt||'').trim())+'?'+new URLSearchParams({model:'flux',width:String(width),height:String(height),seed:String(seed),nologo:'true',private:'true',enhance:'true',safe:'true'}).toString();
-  const response=await fetch(url,{signal:AbortSignal.timeout(90000),headers:{Accept:'image/jpeg,image/png;q=0.9,*/*;q=0.1','User-Agent':'AutoTube/1.0'}});
-  if(!response.ok)throw new Error('Pollinations image generation '+response.status);
-  const contentType=String(response.headers.get('content-type')||'').toLowerCase();
-  if(!contentType.startsWith('image/'))throw new Error('Pollinations no devolvió una imagen ('+contentType+').');
-  const bytes=Buffer.from(await response.arrayBuffer());
-  if(bytes.length<1000)throw new Error('Pollinations devolvió una imagen vacía.');
-  const outputPath=path.join(dir,'pollinations-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.jpg');
-  await fs.writeFile(outputPath,bytes);
-  const probe=await new Promise((resolve,reject)=>{const p=require('child_process').spawn(ffmpegPath,['-hide_banner','-v','error','-i',outputPath,'-f','null','-']);let err='';p.stderr.on('data',d=>err+=d);p.on('close',code=>code===0?resolve(true):reject(new Error('Imagen Pollinations inválida: '+err.slice(0,300))))});
-  return{outputPath,bytes:bytes.length,provider:'Pollinations AI · Flux',model:'flux',status:'complete'};
+  let lastError=null;
+  for(let attempt=0;attempt<3;attempt++){
+    if(attempt>0)await new Promise(r=>setTimeout(r,6500));
+    try{
+      const response=await fetch(url,{signal:AbortSignal.timeout(120000),headers:{Accept:'image/jpeg,image/png;q=0.9,*/*;q=0.1','User-Agent':'AutoTube/1.0'}});
+      if(!response.ok){lastError=new Error('Pollinations image generation '+response.status);continue;}
+      const contentType=String(response.headers.get('content-type')||'').toLowerCase();
+      if(!contentType.startsWith('image/')){lastError=new Error('Pollinations no devolvió una imagen ('+contentType+').');continue;}
+      const bytes=Buffer.from(await response.arrayBuffer());
+      if(bytes.length<1000){lastError=new Error('Pollinations devolvió una imagen vacía.');continue;}
+      const outputPath=path.join(dir,'pollinations-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.jpg');
+      await fs.writeFile(outputPath,bytes);
+      await new Promise((resolve,reject)=>{const p=require('child_process').spawn(ffmpegPath,['-hide_banner','-v','error','-i',outputPath,'-f','null','-']);let err='';p.stderr.on('data',d=>err+=d);p.on('close',code=>code===0?resolve(true):reject(new Error('Imagen Pollinations inválida: '+err.slice(0,300))) )});
+      return{outputPath,bytes:bytes.length,provider:'Pollinations AI · Flux',model:'flux',status:'complete'};
+    }catch(err){lastError=err}
+  }
+  throw lastError||new Error('Pollinations no pudo generar la imagen.');
 }
 
 async function generateNarrationTts(text,language='es',voiceStyle='Natural y cercana',audioProfile={}) {
