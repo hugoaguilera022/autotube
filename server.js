@@ -1040,17 +1040,23 @@ async function searchPixabayImages(query){if(!process.env.PIXABAY_API_KEY)return
 async function fetchImageForGemini(url){
   const value=String(url||'').trim();
   if(!value)return null;
-  const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),15000);
-  try{
-    const r=await fetch(value,{signal:controller.signal});
-    if(!r.ok||!r.body)return null;
-    const contentType=String(r.headers.get('content-type')||'image/jpeg').split(';')[0];
-    if(!contentType.startsWith('image/'))return null;
-    const data=Buffer.from(await r.arrayBuffer());
-    if(!data.length||data.length>5*1024*1024)return null;
-    return{mimeType:contentType,data:data.toString('base64')};
-  }catch{return null}finally{clearTimeout(timer)}
+  const candidates=[value];
+  const m=value.match(/(?:i\.ytimg\.com|img\.youtube\.com)\/vi\/([^/]+)\//i);
+  if(m)candidates.push('https://img.youtube.com/vi/'+m[1]+'/hqdefault.jpg','https://i.ytimg.com/vi/'+m[1]+'/maxresdefault.jpg');
+  for(const candidate of [...new Set(candidates)]){
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),15000);
+    try{
+      const r=await fetch(candidate,{signal:controller.signal,headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'}});
+      if(!r.ok||!r.body)continue;
+      const contentType=String(r.headers.get('content-type')||'image/jpeg').split(';')[0];
+      if(!contentType.startsWith('image/'))continue;
+      const data=Buffer.from(await r.arrayBuffer());
+      if(!data.length||data.length>5*1024*1024)continue;
+      return{mimeType:contentType,data:data.toString('base64'),sourceUrl:candidate};
+    }catch{}finally{clearTimeout(timer)}
+  }
+  return null;
 }
 async function evaluateSelectedVisual(referenceVideo,visualProfile,scene,mediaItem){
   const referenceThumbs=Array.isArray(referenceVideo?.thumbnails)?referenceVideo.thumbnails:[];
