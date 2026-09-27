@@ -1222,7 +1222,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       const args=['-y','-hide_banner','-loglevel','error'];
       if(isImage)args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
-      const tw=Math.max(256,Math.round(Number(targetWidth)||910)),th=Math.max(256,Math.round(Number(targetHeight)||512)),tf=Math.max(1,Math.round(Number(targetFps)||30));
+      const quality=String(process.env.AUTOTUBE_QUALITY||'max').toLowerCase(); const maxQuality=quality==='max'||quality==='ultra'; const tw=Math.max(256,Math.round(Number(targetWidth)|| (maxQuality?1920:1280))),th=Math.max(256,Math.round(Number(targetHeight)|| (maxQuality?1080:720))),tf=Math.max(1,Math.round(Number(targetFps)||30));
       const motionFilter=isImage
         ? (Number(scene.number||i)%2
           ? `scale=${tw*2}:${th*2}:force_original_aspect_ratio=increase,crop=${tw*2}:${th*2},zoompan=z='min(zoom+0.0008,1.10)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${tw}x${th}:fps=${tf},eq=contrast=1.03:saturation=1.06,format=yuv420p`
@@ -1234,7 +1234,7 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
         // Video sources keep the lightweight 720p path for Render Free memory limits.
         '-vf',motionFilter,
         '-map','0:v:0','-map','1:a:0',
-        '-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-threads','1','-filter_threads','1','-filter_complex_threads','1',
+        '-c:v','libx264','-preset',maxQuality?'medium':'ultrafast','-crf',maxQuality?'18':'23','-pix_fmt','yuv420p','-threads','1','-filter_threads','1','-filter_complex_threads','1',
         '-c:a','aac','-b:a','192k','-ar','44100','-ac','2','-af','apad',
         '-avoid_negative_ts','make_zero',output);
       await runFfmpeg(args);
@@ -1318,7 +1318,7 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key){
     const promptText=encodeURIComponent(String(prompt||'').replace(/\s+/g,' ').trim().slice(0,1800));
-    const url='https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true&model=flux';
+    const url='https://image.pollinations.ai/prompt/'+promptText+'?width=1920&height=1080&nologo=true&model=flux';
     const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),90000);
     try{
       const response=await fetch(url,{signal:controller.signal});
@@ -1608,7 +1608,7 @@ async function executePreflight(){
         musicBuffer:null,
         onProgress:()=>{},
         finalOutputPath:output,
-        targetWidth:1280,targetHeight:720,targetFps:30,targetDurationSeconds:durationSeconds
+        targetWidth:1920,targetHeight:1080,targetFps:30,targetDurationSeconds:durationSeconds
       });
       const validation=await validateRenderedMp4(output);
       if(!result?.size||!validation?.width)throw new Error('El pipeline de render no produjo un MP4 válido.');
