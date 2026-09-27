@@ -2259,7 +2259,33 @@ async function executeUrlToVideo(reference,jobId,options={}){
     let video;
     let referenceDownloaded={file:null,bytes:0,probe:{}};
     const referenceSourceDir=path.join(dir,'reference-source');
-    if(options.forceAi){
+    async function generateGeminiYoutubeConditioningImage(url,dir){
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('Falta GEMINI_API_KEY.');
+  const response=await fetch('https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-image:generateContent',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-goog-api-key':key},
+    body:JSON.stringify({
+      contents:[{parts:[
+        {file_data:{file_uri:String(url)},video_metadata:{fps:0.5}},
+        {text:'Study this public YouTube video as audiovisual reference. Create one NEW original cinematic keyframe for a recreation: preserve the concrete subject, setting, visual mood, lighting, palette and motion concept you observe, but change the exact moment, framing, geometry and details. Do not reproduce any exact frame, text, logo, face likeness, watermark or composition. The resulting image must be usable as the first frame for a new AI-generated video.'}
+      ]}],
+      generationConfig:{responseModalities:['TEXT','IMAGE']}
+    }),
+    signal:AbortSignal.timeout(300000)
+  });
+  const raw=await response.text();let data;try{data=JSON.parse(raw)}catch{}
+  if(!response.ok)throw new Error('Gemini YouTube conditioning HTTP '+response.status+': '+(data?.error?.message||raw.slice(0,800)));
+  const parts=data?.candidates?.[0]?.content?.parts||[];
+  const part=parts.find(p=>p?.inlineData?.data||p?.inline_data?.data);
+  const b64=part?.inlineData?.data||part?.inline_data?.data;
+  if(!b64)throw new Error('Gemini no devolvió imagen condicionada por el vídeo de YouTube.');
+  const imagePath=path.join(dir,'gemini-youtube-conditioned.png');
+  await fs.writeFile(imagePath,Buffer.from(b64,'base64'));
+  return{imagePath,bytes:(await fs.stat(imagePath)).size,analysis:parts.filter(p=>p?.text).map(p=>p.text).join(' ').slice(0,6000)};
+}
+
+if(options.forceAi){
       const videoId=extractYoutubeVideoId(reference);
       if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
       let publicTitle=`YouTube AI reference ${videoId}`;
@@ -2277,8 +2303,15 @@ async function executeUrlToVideo(reference,jobId,options={}){
       // conditioning input; never copy the source video.
       const thumbnail='https://i.ytimg.com/vi/'+videoId+'/hqdefault.jpg';
       video={videoId,title:publicTitle,description:publicDescription,channelTitle:publicDescription,duration:'',thumbnails:[thumbnail],thumbnail};
-      referenceDownloaded={file:null,bytes:0,probe:{},strategy:'youtube-public-thumbnail'};
-      console.log('AUTOTUBE AI REFERENCE PUBLIC CONDITIONING',JSON.stringify({videoId,title:publicTitle,strategy:'youtube-public-thumbnail'}));
+      try{
+        const conditioned=await generateGeminiYoutubeConditioningImage(reference,dir);
+        referenceDownloaded={file:conditioned.imagePath,bytes:conditioned.bytes,probe:{},strategy:'gemini-youtube-video-understanding',analysis:conditioned.analysis};
+        video.geminiReferenceAnalysis=conditioned.analysis;
+        console.log('AUTOTUBE AI REFERENCE GEMINI VIDEO CONDITIONING',JSON.stringify({videoId,title:publicTitle,strategy:referenceDownloaded.strategy,bytes:conditioned.bytes}));
+      }catch(err){
+        console.warn('AUTOTUBE GEMINI YOUTUBE CONDITIONING FAILED',err?.message||String(err));
+        referenceDownloaded={file:null,bytes:0,probe:{},strategy:'youtube-public-thumbnail'};
+      }
     }else{
       referenceDownloaded=options.directReferenceFile
         ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
@@ -2338,6 +2371,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
         'The reference is the REAL DOWNLOADED MP4 analyzed frame-by-frame. Reproduce its concrete visible subjects, setting, composition, camera language, lighting, palette, motion rhythm and visual continuity.',
         'Do not invent a generic theme and do not replace the observed subjects with unrelated subjects.',
         'Do not copy exact frames, faces, logos, text, lyrics, recordings or exact shots. Make a new original composition with the same recognizable audiovisual concept.',
+        'Direct Gemini YouTube audiovisual analysis: '+String(video.geminiReferenceAnalysis||'').slice(0,5000),
         'Reference title: '+aiReferenceTitle,
         'Reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3000),
         'Reference animation profile: '+JSON.stringify(visualReferenceAnalysis?.animationProfile||{}).slice(0,2500),
