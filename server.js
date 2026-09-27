@@ -2076,8 +2076,18 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(options.forceAi){
       const videoId=extractYoutubeVideoId(reference);
       if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
-      referenceDownloaded=await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
-      video={videoId,title:`YouTube AI reference ${videoId}`,description:'',channelTitle:'',duration:String(referenceDownloaded.probe?.durationSeconds||''),thumbnails:[],thumbnail:''};
+      try{
+        referenceDownloaded=await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
+        video={videoId,title:`YouTube AI reference ${videoId}`,description:'',channelTitle:'',duration:String(referenceDownloaded.probe?.durationSeconds||''),thumbnails:[],thumbnail:''};
+      }catch(downloadErr){
+        // YouTube can deny byte-level downloads even for public videos. Do not
+        // make the generic AI pipeline depend on one downloader. Fall back to
+        // the public YouTube metadata + thumbnail analysis path, which is
+        // deliberately generic and works for arbitrary reference URLs.
+        console.warn('AUTOTUBE AI PUBLIC REFERENCE FALLBACK',downloadErr?.message||String(downloadErr));
+        video=await getReferenceVideo(reference);
+        referenceDownloaded={file:null,bytes:0,probe:{},strategy:'public-youtube-metadata-thumbnail'};
+      }
     }else{
       referenceDownloaded=options.directReferenceFile
         ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
@@ -2128,6 +2138,49 @@ async function executeUrlToVideo(reference,jobId,options={}){
       const visualReferenceAnalysis=style.visualAnalysis||{};
       const segments=Array.isArray(visualReferenceAnalysis?.structureProfile?.sceneSegments)
         ? visualReferenceAnalysis.structureProfile.sceneSegments : [];
+      // If YouTube blocks the MP4 download, create an AI-video fallback from
+      // the public thumbnail/metadata analysis. This keeps the pipeline generic:
+      // the subject comes from THIS URL, never from a hard-coded test video.
+      if(!referenceDownloaded?.file){
+        const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
+        if(!thumb)throw new Error('La referencia de YouTube no expone una miniatura pública utilizable.');
+        const profile=style.visualAnalysis||{};
+        const audioProfile=profile.audioProfile||{};
+        const fallbackTitle=String(video.title||reference||'Contenido de referencia').slice(0,300);
+        const imageCount=4;
+        const imagePaths=[];
+        for(let i=0;i<imageCount;i++){
+          const segment=profile?.structureProfile?.sceneSegments?.[Math.min(
+            Math.max(0,(profile?.structureProfile?.sceneSegments?.length||1)-1),
+            Math.floor(i*(profile?.structureProfile?.sceneSegments?.length||1)/imageCount)
+          )]||{};
+          const imagePrompt=[
+            'Generate a NEW ORIGINAL 16:9 cinematic frame for an AI-generated video based on this specific YouTube reference.',
+            'Preserve the concrete subject/theme visibly established by the public thumbnail and metadata. Do not switch to an unrelated generic topic.',
+            'Use the reference only as visual guidance. Do not copy the exact thumbnail, text, logo, face, or composition.',
+            'Create a coherent continuation frame with the same broad subject, setting, palette, lighting and visual language.',
+            'Temporal section '+(i+1)+' of '+imageCount+': '+String(segment.summary||segment.subject||fallbackTitle),
+            'Composition: '+String(segment.composition||profile?.videoProfile?.composition||'16:9 cinematic'),
+            'Lighting: '+String(segment.lighting||profile?.videoProfile?.lighting||'coherent lighting'),
+            'Palette: '+String(segment.palette||profile?.videoProfile?.palette||'reference-derived palette'),
+            'Motion intention: '+String(segment.cameraMovement||profile?.animationProfile?.cameraMotion||'subtle cinematic movement'),
+            'Original material only, no watermark, no copied footage, no text unless naturally required by the subject.'
+          ].join('\\n');
+          const generated=await generateGeminiOriginalImage(imagePrompt,dir,{model:'gemini-2.5-flash-image',referenceImageUrl:thumb});
+          imagePaths.push(generated.outputPath);
+        }
+        const fallbackVideoPath=path.join(dir,'ai-reference-motion-fallback.mp4');
+        const inputs=[];
+        for(const imagePath of imagePaths)inputs.push('-loop','1','-t','1','-i',imagePath);
+        const filters=imagePaths.map((_,i)=>`[${i}:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,zoompan=z='min(zoom+0.0015,1.06)':d=30:s=1280x720:fps=30,format=yuv420p[v${i}]`).join(';');
+        const concat=imagePaths.map((_,i)=>`[v${i}]`).join('')+`concat=n=${imagePaths.length}:v=1:a=0[outv]`;
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error',...inputs,'-filter_complex',filters+';'+concat,'-map','[outv]','-t','4','-an','-c:v','libx264','-preset','veryfast','-crf','22','-pix_fmt','yuv420p',fallbackVideoPath]);
+        generatedVideo={outputPath:fallbackVideoPath,provider:'Gemini image-to-motion fallback',model:'gemini-2.5-flash-image',referenceDriven:true};
+        // No source audio is available in this mode. Generate original audio
+        // only from the profile inferred from the URL's public metadata.
+        console.log('AUTOTUBE AI VIDEO FALLBACK READY',JSON.stringify({reference,strategy:'thumbnail-metadata->Gemini-images->FFmpeg-motion',audioProfile}));
+      }
+
       const prompt=[
         'Create NEW ORIGINAL AI-generated video material from this specific YouTube reference.',
         'The reference is the REAL DOWNLOADED MP4 analyzed frame-by-frame. Reproduce its concrete visible subjects, setting, composition, camera language, lighting, palette, motion rhythm and visual continuity.',
