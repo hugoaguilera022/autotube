@@ -2444,28 +2444,18 @@ if(options.forceAi){
         '16:9, high-detail cinematic AI video, coherent continuous motion, original material, no watermark.'
       ].join('\\n');
       const videoProviderErrors=[];
-      console.log('AUTOTUBE AI GENERATION START',JSON.stringify({jobId,reference,provider:'wan21-first-gemini-fallback'}));
+      console.log('AUTOTUBE AI GENERATION START',JSON.stringify({jobId,reference,provider:'wan21-first'}));
       const publicReferenceImage=path.join(dir,'public-reference-conditioning.jpg');
       try{
-        if(referenceDownloaded?.file){
-          await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',referenceDownloaded.file,'-frames:v','1','-q:v','2',publicReferenceImage]);
-        }else{
-          const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
-          if(!thumb)throw new Error('No hay miniatura pública para el proveedor SVD.');
-          const imageResponse=await fetch(thumb,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/jpeg,image/*'},signal:AbortSignal.timeout(20000)});
-          const imageBytes=Buffer.from(await imageResponse.arrayBuffer());
-          if(!imageResponse.ok||imageBytes.length<5000)throw new Error('No se pudo descargar la miniatura pública: HTTP '+imageResponse.status);
-          await fs.writeFile(publicReferenceImage,imageBytes);
-        }
-        generatedVideo=await Promise.race([
-          generateGeminiOmniImageToVideoClip(publicReferenceImage,dir,{prompt}),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('gemini-omni timeout')),600000))
-        ]);
-      }catch(err){
-        videoProviderErrors.push('gemini-omni: '+String(err?.message||err));
-        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','gemini-omni',err?.message||String(err));
-      }
-      if(!generatedVideo?.outputPath) try{
+        const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
+        if(!thumb)throw new Error('No hay miniatura pública para condicionar el vídeo IA.');
+        const imageResponse=await fetch(thumb,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/jpeg,image/*'},signal:AbortSignal.timeout(20000)});
+        const imageBytes=Buffer.from(await imageResponse.arrayBuffer());
+        if(!imageResponse.ok||imageBytes.length<5000)throw new Error('No se pudo descargar la miniatura pública: HTTP '+imageResponse.status);
+        await fs.writeFile(publicReferenceImage,imageBytes);
+      }catch(err){throw new Error('No se pudo preparar la referencia visual pública: '+(err?.message||String(err)));}
+
+      try{
         generatedVideo=await Promise.race([
           generateWaveSpeedWanVideoClip(publicReferenceImage,dir,{prompt}),
           new Promise((_,reject)=>setTimeout(()=>reject(new Error('wan21-space timeout')),240000))
@@ -2474,10 +2464,13 @@ if(options.forceAi){
         videoProviderErrors.push('wan21-space: '+String(err?.message||err));
         console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','wan21-space',err?.message||String(err));
       }
-      if(!generatedVideo?.outputPath) for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
+      if(!generatedVideo?.outputPath) for(const provider of ['pollinations','chopperblu','goalsave','ltx']){
         try{
-          const fn=provider==='chopperblu'?generateChopperBluLtxVideoClip:(provider==='goalsave'?generateGoalsaveLtxVideoClip:(provider==='ltx'?generateFreeLtxVideoClip:generatePollinationsVideoClip));
-          generatedVideo=await Promise.race([fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false}),new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))]);
+          const fn=provider==='pollinations'?generatePollinationsVideoClip:(provider==='chopperblu'?generateChopperBluLtxVideoClip:(provider==='goalsave'?generateGoalsaveLtxVideoClip:generateFreeLtxVideoClip));
+          generatedVideo=await Promise.race([
+            fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImagePath:publicReferenceImage}),
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))
+          ]);
           if(generatedVideo?.outputPath)break;
         }catch(err){videoProviderErrors.push(provider+': '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));}
       }
