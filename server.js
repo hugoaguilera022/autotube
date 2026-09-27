@@ -2335,44 +2335,40 @@ async function executeUrlToVideo(reference,jobId,options={}){
       ].join('\\n');
       const videoProviderErrors=[];
       const publicReferenceImage=path.join(dir,'public-reference-conditioning.jpg');
+      if(referenceDownloaded?.file){
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',referenceDownloaded.file,'-frames:v','1','-q:v','2',publicReferenceImage]);
+      }else{
+        const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
+        if(!thumb)throw new Error('No hay miniatura pública para el proveedor image-to-video.');
+        const imageResponse=await fetch(thumb,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/jpeg,image/*'},signal:AbortSignal.timeout(20000)});
+        const imageBytes=Buffer.from(await imageResponse.arrayBuffer());
+        if(!imageResponse.ok||imageBytes.length<5000)throw new Error('No se pudo descargar la miniatura pública: HTTP '+imageResponse.status);
+        await fs.writeFile(publicReferenceImage,imageBytes);
+      }
+
+      // Primary: LTX-2.5 image-to-video, explicitly conditioned on the reference frame.
       try{
-        if(referenceDownloaded?.file){
-          await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',referenceDownloaded.file,'-frames:v','1','-q:v','2',publicReferenceImage]);
-        }else{
-          const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
-          if(!thumb)throw new Error('No hay miniatura pública para el proveedor SVD.');
-          const imageResponse=await fetch(thumb,{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/jpeg,image/*'},signal:AbortSignal.timeout(20000)});
-          const imageBytes=Buffer.from(await imageResponse.arrayBuffer());
-          if(!imageResponse.ok||imageBytes.length<5000)throw new Error('No se pudo descargar la miniatura pública: HTTP '+imageResponse.status);
-          await fs.writeFile(publicReferenceImage,imageBytes);
-        }
-        for(const conditionedProvider of ['wan-public-i2v','wan-fast-i2v','svd-space']){
-        try{
-          const fn=conditionedProvider==='wan-public-i2v'?generateNiftyWan22I2VClip:(conditionedProvider==='wan-fast-i2v'?generateWanFastI2VClip:generatePublicSvdImageToVideoClip);
-          generatedVideo=await Promise.race([
-            fn(publicReferenceImage,dir,{prompt,durationSeconds:3.5,width:704,height:400}),
-            new Promise((_,reject)=>setTimeout(()=>reject(new Error(conditionedProvider+' timeout')),conditionedProvider==='wan-public-i2v'?300000:(conditionedProvider==='wan-fast-i2v'?300000:600000)))
-          ]);
-          if(generatedVideo?.outputPath)break;
-        }catch(err){
-          videoProviderErrors.push(conditionedProvider+': '+String(err?.message||err));
-          console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',conditionedProvider,err?.message||String(err));
-        }
-      }
+        generatedVideo=await Promise.race([
+          generateChopperBluLtxVideoClip(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImagePath:publicReferenceImage}),
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('chopperblu image-to-video timeout')),600000))
+        ]);
+        if(!generatedVideo?.outputPath||!generatedVideo.referenceFrameConditioned)throw new Error('LTX-2.5 no confirmó condicionamiento por imagen.');
       }catch(err){
-        videoProviderErrors.push('svd-space: '+String(err?.message||err));
-        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
+        videoProviderErrors.push('chopperblu-image-to-video: '+String(err?.message||err));
+        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','chopperblu-image-to-video',err?.message||String(err));
       }
+
+      // Secondary: SVD only if LTX-2.5 is unavailable.
       if(!generatedVideo?.outputPath){
         try{
           generatedVideo=await Promise.race([
-            generateChopperBluLtxVideoClip(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImagePath:publicReferenceImage}),
-            new Promise((_,reject)=>setTimeout(()=>reject(new Error('chopperblu image-to-video timeout')),600000))
+            generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),600000))
           ]);
-          if(!generatedVideo?.outputPath||!generatedVideo.referenceFrameConditioned)generatedVideo=null;
+          if(!generatedVideo?.outputPath||!generatedVideo.referenceFrameConditioned)throw new Error('SVD no confirmó condicionamiento por imagen.');
         }catch(err){
-          videoProviderErrors.push('chopperblu-image-to-video: '+String(err?.message||err));
-          console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','chopperblu-image-to-video',err?.message||String(err));
+          videoProviderErrors.push('svd-space: '+String(err?.message||err));
+          console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','svd-space',err?.message||String(err));
         }
       }
       if(!generatedVideo?.outputPath){
