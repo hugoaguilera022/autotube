@@ -15,9 +15,9 @@ permissions:
 jobs:
   run-ai-reference:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - name: Start AI reference job
+      - name: Start short AI reference proof
         id: start
         env:
           APP_URL: https://autotube-ai-e2e-isolated.onrender.com
@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           encoded="$(python -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["REFERENCE"], safe=""))')"
-          response="$(curl -fsS --retry 5 --retry-all-errors --connect-timeout 15 --max-time 60 "$APP_URL/api/url-to-video?reference=$encoded")"
+          response="$(curl -fsS --retry 5 --retry-all-errors --connect-timeout 15 --max-time 60 "$APP_URL/api/reference-ai-video-proof?reference=$encoded")"
           echo "$response"
           job="$(python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<<"$response")"
           echo "job=$job" >> "$GITHUB_OUTPUT"
@@ -36,8 +36,8 @@ jobs:
           JOB: ${{ steps.start.outputs.job }}
         run: |
           set -euo pipefail
-          for i in $(seq 1 90); do
-            body="$(curl -fsS --retry 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$APP_URL/api/url-to-video/$JOB" 2>/dev/null)" || {
+          for i in $(seq 1 60); do
+            body="$(curl -fsS --retry 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$APP_URL/api/reference-ai-video-proof/$JOB" 2>/dev/null)" || {
               echo "Render job endpoint unavailable"
               exit 1
             }
@@ -47,10 +47,10 @@ jobs:
               echo "$body" > job.json
               exit 0
             fi
-            if [ "$status" = "error" ] || [ "$status" = "restart" ]; then
+            if [ "$status" = "error" ]; then
               exit 1
             fi
-            sleep 10
+            sleep 5
           done
           exit 1
 
@@ -60,7 +60,7 @@ jobs:
           JOB: ${{ steps.start.outputs.job }}
         run: |
           set -euo pipefail
-          curl -fL --retry 5 --retry-all-errors --connect-timeout 15 --max-time 120 "$APP_URL/api/url-to-video/$JOB/download" -o autotube-ai-reference.mp4
+          curl -fL --retry 5 --retry-all-errors --connect-timeout 15 --max-time 120 "$APP_URL/api/reference-ai-video-proof/$JOB/download" -o autotube-ai-reference.mp4
           test -s autotube-ai-reference.mp4
           ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,avg_frame_rate,codec_type -of json autotube-ai-reference.mp4 | tee mp4-probe.json
           test "$(stat -c%s autotube-ai-reference.mp4)" -gt 10000
