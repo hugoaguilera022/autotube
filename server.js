@@ -19,6 +19,7 @@ const renderJobDir = path.join(os.tmpdir(), 'autotube-render-jobs');
 fs.mkdir(renderJobDir, { recursive: true }).catch(() => {});
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 async function callGemini({system,user,images=[],files=[],temperature=0.7,maxOutputTokens=1200,json=false}){const k=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();if(!k)throw new Error('Falta la clave de Gemini.');const parts=[{text:String(user||'')}];for(const im of images)parts.push({inline_data:{mime_type:im.mimeType||'image/jpeg',data:im.data}});for(const file of files){if(file?.uri)parts.push({file_data:{mime_type:file.mimeType||'application/octet-stream',file_uri:file.uri}});}const headers={'Content-Type':'application/json'};headers['x-goog-'+'api-key']=k;const models=[...new Set([String(GEMINI_MODEL||'').trim(),'gemini-3.5-flash-lite','gemini-3.1-flash-lite'].filter(Boolean))];let lastError='';for(const model of models){for(const structured of (json?[true,false]:[false])){const body={system_instruction:{parts:[{text:String(system||'')}]},contents:[{role:'user',parts}],generationConfig:{maxOutputTokens,...(structured?{responseMimeType:'application/json'}:{})}};const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),20000);let response;try{response=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent',{method:'POST',headers,body:JSON.stringify(body),signal:controller.signal});}catch(err){lastError=err?.name==='AbortError'?'Gemini request timeout (20s).':String(err?.message||err);continue}finally{clearTimeout(timer)}const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}if(response.ok){const text=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('').trim()||'';if(text)return text;lastError='Gemini no devolvió contenido.';continue}const message=data?.error?.message||raw.slice(0,500)||'Error desconocido';lastError='Gemini '+response.status+': '+message;if(response.status===429||response.status>=500)break;if(response.status===400&&structured)continue;if(response.status===404||/model|not found|unsupported/i.test(message))break;break}}throw new Error(lastError||'Gemini no pudo procesar la solicitud.');}
+async function callGeminiYoutube(url,{user,maxOutputTokens=5000}={}){const k=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();if(!k)throw new Error('Falta la clave de Gemini.');const body={model:'gemini-3.8-flash',input:[{type:'text',text:String(user||'')},{type:'video',uri:String(url)}],generation_config:{max_output_tokens:maxOutputTokens},processing:'agentic'};const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),120000);let response;try{response=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':k},body:JSON.stringify(body),signal:controller.signal});}catch(err){throw new Error(err?.name==='AbortError'?'Gemini YouTube URL timeout (120s).':String(err?.message||err));}finally{clearTimeout(timer)}const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}if(!response.ok)throw new Error('Gemini YouTube '+response.status+': '+String(data?.error?.message||raw.slice(0,500)));const output=String(data?.output_text||data?.outputText||data?.steps?.flatMap(s=>s?.content||[]).map(c=>c?.text||'').join('')||'').trim();if(!output)throw new Error('Gemini YouTube no devolvió análisis.');return output;}
 function parseJsonResponse(text){
   const raw=String(text||'').replace(/^\\s*\\x60\\x60\\x60(?:json)?\\s*/i,'').replace(/\\s*\\x60\\x60\\x60\\s*$/i,'').trim();
   let candidate=raw;
@@ -405,31 +406,25 @@ async function analyzeDownloadedReferenceMedia(file,video){
   }
 }
 
-async function analyzeYoutubeReferenceMedia(url,video){
-  const referenceUrl=String(url||'').trim();
-  if(!referenceUrl)throw new Error('Falta la URL de YouTube.');
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-download-'));
   try{
     try{
+      const prompt='Analiza DIRECTAMENTE el vídeo público de YouTube proporcionado. Debes observar vídeo, audio y evolución temporal reales; no uses la miniatura ni inventes detalles. El objetivo es crear una recreación ORIGINAL que conserve el tema, estructura, ritmo, lenguaje visual, movimiento, composición, iluminación, paleta, continuidad, tratamiento de audio, voz/música/ambiente/efectos y cambios temporales del original sin copiar planos, personajes, texto, guion ni grabación. Devuelve ÚNICAMENTE JSON válido con videoProfile, animationProfile, audioProfile, structureProfile y generationDirectives. videoProfile: durationSeconds,constantImage,estimatedSceneCount,sceneChangeRate,cameraMovement,composition,palette,lighting,visualStyle,continuity. animationProfile: cameraMotion,zoomStyle,panStyle,overlays,textAnimation,effects,transitionStyle,motionIntensity,visualRhythm. audioProfile: hasSpeech,language,speechRate,pauses,emotion,hasMusic,hasAmbience,hasSoundEffects,musicMood,energy,dynamics,instrumentation,voiceStyle,bpmEstimate,voiceMusicBalance,audioContinuity. structureProfile: opening,pacing,transitions,segmentCount,segmentDurations,visualContinuity,timestamps,sceneSegments; sceneSegments debe cubrir toda la duración e incluir startSeconds,endSeconds,summary,subject,shotScale,composition,cameraMovement,motionIntensity,lighting,palette,transitionIn,transitionOut,audioRole,narrationRole,continuityAnchor,generationPrompt. generationDirectives: useSingleContinuousVisual,preferredSceneCount,preserveVisualContinuity,preserveAudioContinuity,visualSearchStrategy,musicStrategy,narrationStrategy,animationStrategy. Incluye marcas temporales para cambios relevantes. Metadatos adicionales: '+JSON.stringify({title:video?.title||'',description:String(video?.description||'').slice(0,3000),tags:Array.isArray(video?.tags)?video.tags.slice(0,20):[],duration:video?.duration||''});
+      const text=await callGeminiYoutube(referenceUrl,{user:prompt,maxOutputTokens:5000});
+      const analysis=parseJsonResponse(text),vp=analysis?.videoProfile||{},ap=analysis?.audioProfile||{},an=analysis?.animationProfile||{},sp=analysis?.structureProfile||{},gd=analysis?.generationDirectives||{};
+      const durationSeconds=Math.max(1,Number(vp.durationSeconds||parseIsoDurationSeconds(video?.duration)||60));
+      vp.durationSeconds=durationSeconds;vp.constantImage=Boolean(vp.constantImage||gd.useSingleContinuousVisual);vp.estimatedSceneCount=Math.max(1,Number(vp.estimatedSceneCount||sp.segmentCount||Math.ceil(durationSeconds/20)));
+      sp.segmentCount=Math.max(1,Number(sp.segmentCount||vp.estimatedSceneCount));
+      gd.useSingleContinuousVisual=Boolean(gd.useSingleContinuousVisual||vp.constantImage);gd.preferredSceneCount=gd.useSingleContinuousVisual?1:Math.max(1,Number(gd.preferredSceneCount||sp.segmentCount));gd.preserveVisualContinuity=true;gd.preserveAudioContinuity=true;
+      analysis.videoProfile=vp;analysis.audioProfile=ap;analysis.animationProfile=an;analysis.structureProfile=sp;analysis.generationDirectives=gd;
+      return{visualAnalysis:analysis,visualSource:'Gemini-YouTube-URL',analysisSource:'Gemini direct public YouTube video',thumbnailCount:0,referenceFileBytes:0,hasFullVideoAnalysis:true,hasAudioAnalysis:true,audioAnalysisSource:'Gemini direct video/audio analysis',hasAnimationAnalysis:Boolean(Object.keys(an).length),hasStructureAnalysis:Boolean(Object.keys(sp).length),measuredVisualContinuity:{source:'Gemini direct YouTube video',constantImage:Boolean(vp.constantImage)},constantImage:Boolean(vp.constantImage),estimatedSceneCount:vp.estimatedSceneCount,preferredSceneCount:gd.preferredSceneCount};
+    }catch(directErr){
+      console.warn('Gemini direct YouTube analysis unavailable; trying real reference download:',directErr?.message||String(directErr));
       const downloaded=await downloadYoutubeReference(referenceUrl,dir);
       const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
       const analyzed=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
-      analyzed.referenceFileBytes=downloaded.bytes;
-      analyzed.downloadStrategy=downloaded.strategy;
-      analyzed.measuredVisualContinuity={
-        ...analyzed.measuredVisualContinuity,
-        ...measured,
-        source:'FFmpeg + Gemini sampled frames'
-      };
-      if(measured.constantImage){
-        analyzed.constantImage=true;
-        analyzed.visualAnalysis.videoProfile.constantImage=true;
-        analyzed.visualAnalysis.generationDirectives.useSingleContinuousVisual=true;
-        analyzed.visualAnalysis.generationDirectives.preferredSceneCount=1;
-      }
+      analyzed.referenceFileBytes=downloaded.bytes;analyzed.downloadStrategy=downloaded.strategy;analyzed.measuredVisualContinuity={...analyzed.measuredVisualContinuity,...measured,source:'FFmpeg + Gemini sampled frames'};
+      if(measured.constantImage){analyzed.constantImage=true;analyzed.visualAnalysis.videoProfile.constantImage=true;analyzed.visualAnalysis.generationDirectives.useSingleContinuousVisual=true;analyzed.visualAnalysis.generationDirectives.preferredSceneCount=1;}
       return analyzed;
-    }catch(downloadErr){
-      throw new Error('REFERENCIA_REAL_OBLIGATORIA: no se obtuvieron los bytes del MP4 de YouTube. '+String(downloadErr?.message||downloadErr));
     }
   }finally{
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
