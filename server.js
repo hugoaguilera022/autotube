@@ -2257,43 +2257,27 @@ async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
 
 async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
-  const app=await Promise.race([
-    Client.connect('Wan-AI/Wan2.1'),
-    new Promise((_,reject)=>setTimeout(()=>reject(new Error('Wan2.1 connect timeout')),30000))
-  ]);
+  const app=await Promise.race([Client.connect('Wan-AI/Wan2.1'),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Wan2.1 connect timeout')),30000))]);
   const prompt=String(options.prompt||'Generate original natural cinematic motion while preserving the main subject, setting and visual identity of the reference image.').slice(0,4000);
   const payload=[prompt,handle_file(imagePath),false,-1];
-  let lastData=null;
-  const job=app.submit('/i2v_generation_async',payload);
-  for await(const msg of job){
-    if(msg?.type==='data'){
-      lastData=msg.data;
-      console.log('AUTOTUBE WAN21 I2V DATA',JSON.stringify(msg.data).slice(0,2000));
-    }else if(msg?.type==='status'){
-      console.log('AUTOTUBE WAN21 I2V STATUS',JSON.stringify(msg).slice(0,1200));
-    }
-  }
-  const result={data:Array.isArray(lastData)?lastData:[]};
-  console.log('AUTOTUBE WAN21 I2V RESULT',JSON.stringify(result).slice(0,2000));
-  const data=result.data;
+  const result=await Promise.race([app.predict('/i2v_generation_async',payload),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Wan2.1 submit timeout')),90000))]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  console.log('AUTOTUBE WAN21 I2V RESULT',JSON.stringify(data).slice(0,2500));
   const candidates=[];
-  for(const x of data){
-    candidates.push(x);
-    if(x&&typeof x==='object'){
-      candidates.push(x.url,x.path,x.video?.url,x.video?.path,x.value);
-    }
-  }
+  const unwrap=(x)=>typeof x==='string'?x:(x?.url||x?.path||x?.video?.url||x?.video?.path||x?.value||x?.task_id||x?.taskId||x?.id||'');
+  for(const x of data){candidates.push(x);const u=unwrap(x);if(u)candidates.push(u);}
   for(const candidate of candidates){
-    const url=typeof candidate==='string'?candidate:(candidate?.url||candidate?.path||candidate?.video?.url||candidate?.video?.path||candidate?.value||'');
+    const url=unwrap(candidate);
     if(!url||!/^https?:/i.test(String(url)))continue;
     const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
-    if(!response.ok)continue;
-    const outputPath=path.join(dir,'wan21-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-    await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
-    const stat=await fs.stat(outputPath);
-    if(stat.size)return{outputPath,bytes:stat.size,provider:'Hugging Face Wan-AI/Wan2.1',model:'Wan2.1 I2V',referenceDriven:true,status:'complete'};
+    if(response.ok){
+      const outputPath=path.join(dir,'wan21-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+      await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+      const stat=await fs.stat(outputPath);
+      if(stat.size)return{outputPath,bytes:stat.size,provider:'Hugging Face Wan-AI/Wan2.1',model:'Wan2.1 I2V',referenceDriven:true,status:'complete'};
+    }
   }
-  throw new Error('Wan2.1 no devolvió un MP4 en el resultado final: '+JSON.stringify(result).slice(0,1800));
+  throw new Error('Wan2.1 no devolvió un vídeo directamente: '+JSON.stringify(data).slice(0,1800));
 }
 
 async function getPublicYoutubeReferenceFallback(reference){
