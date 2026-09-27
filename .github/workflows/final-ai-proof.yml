@@ -80,3 +80,5 @@ jobs:
 # retry against bounded AI path
 
 # retry after reference-download bypass
+
+# retry after prompt fix
