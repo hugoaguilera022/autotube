@@ -1431,15 +1431,23 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
 
 async function generatePollinationsVideoClip(prompt,dir,options={}){
   const duration=Math.max(3,Math.min(8,Number(options.durationSeconds)||4));
-  const body={prompt:String(prompt||'').trim(),model:'video-gen',duration,resolution:'720p',seed:Math.floor(Math.random()*2147483647)};
+  const width=Math.max(256,Math.min(1280,Math.round((Number(options.width)||704)/32)*32));
+  const height=Math.max(256,Math.min(1280,Math.round((Number(options.height)||400)/32)*32));
+  const seed=Math.floor(Math.random()*2147483647);
+  const encoded=encodeURIComponent(String(prompt||'').trim());
+  const url='https://video.pollinations.ai/prompt/'+encoded+'?duration='+encodeURIComponent(duration)+'&width='+encodeURIComponent(width)+'&height='+encodeURIComponent(height)+'&seed='+encodeURIComponent(seed)+'&nologo=true';
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),180000);
   try{
-    const response=await fetch('https://video.pollinations.ai/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});
+    const response=await fetch(url,{method:'GET',headers:{'Accept':'video/mp4,*/*'},signal:controller.signal});
     const raw=Buffer.from(await response.arrayBuffer());
-    if(!response.ok||raw.length<20000)throw new Error('Pollinations video '+response.status+' ('+raw.length+' bytes)');
+    const contentType=String(response.headers.get('content-type')||'').toLowerCase();
+    if(!response.ok||raw.length<20000||(!contentType.includes('video')&&!raw.slice(0,12).toString('latin1').includes('ftyp'))){
+      throw new Error('Pollinations video GET '+response.status+' ('+raw.length+' bytes; '+contentType+')');
+    }
     const outputPath=path.join(dir,'pollinations-ai-video-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
     await fs.writeFile(outputPath,raw);
     const stat=await fs.stat(outputPath);
+    if(!stat.size)throw new Error('Pollinations video devolvió un archivo vacío.');
     return{outputPath,bytes:stat.size,provider:'Pollinations AI Video',model:'video-gen',status:'complete'};
   }finally{clearTimeout(timer)}
 }

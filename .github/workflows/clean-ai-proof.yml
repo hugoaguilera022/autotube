@@ -7,6 +7,7 @@ on:
 concurrency:
   group: autotube-ai-e2e
   cancel-in-progress: true
+  # proof uses the live generic URL-to-video AI path
 jobs:
   proof:
     runs-on: ubuntu-latest
