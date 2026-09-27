@@ -1,4 +1,5 @@
 name: AutoTube strict E2E
+# current verifier rerun
 on:
   push:
     branches: [main]
