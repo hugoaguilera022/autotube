@@ -76,3 +76,5 @@ jobs:
             autotube-ai-reference.mp4
             mp4-probe.json
             job.json
+
+# retry against bounded AI path
