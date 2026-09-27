@@ -2262,43 +2262,38 @@ async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
     new Promise((_,reject)=>setTimeout(()=>reject(new Error('Wan2.1 connect timeout')),30000))
   ]);
   const prompt=String(options.prompt||'Generate original natural cinematic motion while preserving the main subject, setting and visual identity of the reference image.').slice(0,4000);
-  try{await app.predict('/switch_i2v_tab');}catch{}
-  const args=[prompt,handle_file(imagePath),false,-1];
-  const submitResult=await Promise.race([
-    app.predict('/i2v_generation_async',args),
-    new Promise((_,reject)=>setTimeout(()=>reject(new Error('Wan2.1 submit timeout')),60000))
-  ]);
-  const data=Array.isArray(submitResult?.data)?submitResult.data:[];
-  const raw= data[0];
-  const taskId=String(typeof raw==='string'?raw:(raw?.task_id||raw?.taskId||raw?.id||raw?.value||raw?.name||raw?.data?.task_id||raw?.data?.taskId||'')).trim();
-  console.log('AUTOTUBE WAN21 I2V SUBMIT',JSON.stringify({taskId,raw:String(JSON.stringify(raw)).slice(0,800)}));
-  if(!taskId||taskId==='[object Object]')throw new Error('Wan2.1 no devolvió task_id válido: '+JSON.stringify(raw).slice(0,1200));
-  const started=Date.now(); let lastStatus='';
-  for(let i=0;i<180;i++){
-    await new Promise(r=>setTimeout(r,4000));
-    try{
-      const status=await app.predict('/status_refresh_1',[taskId,'i2v',false]);
-      const sd=Array.isArray(status?.data)?status.data:[];
-      for(const candidate of sd){
-        const url=typeof candidate==='string'?candidate:(candidate?.url||candidate?.path||candidate?.video?.url||candidate?.video?.path||'');
-        if(url&&/^https?:/i.test(String(url))){
-          const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
-          if(response.ok){
-            const outputPath=path.join(dir,'wan21-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-            await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
-            const stat=await fs.stat(outputPath);
-            if(stat.size)return{outputPath,bytes:stat.size,provider:'Hugging Face Wan-AI/Wan2.1',model:'Wan2.1 I2V',referenceDriven:true,status:'complete'};
-          }
-        }
-      }
-      lastStatus=JSON.stringify(sd).slice(0,1000);
-      if(i<3||(i+1)%15===0)console.log('AUTOTUBE WAN21 I2V POLL',JSON.stringify({taskId,elapsedSeconds:Math.round((Date.now()-started)/1000),status:lastStatus}));
-    }catch(err){
-      lastStatus=String(err?.message||err);
-      if((i+1)%15===0)console.warn('AUTOTUBE WAN21 I2V POLL ERROR',lastStatus);
+  const payload=[prompt,handle_file(imagePath),false,-1];
+  let lastData=null;
+  const job=app.submit('/i2v_generation_async',payload);
+  for await(const msg of job){
+    if(msg?.type==='data'){
+      lastData=msg.data;
+      console.log('AUTOTUBE WAN21 I2V DATA',JSON.stringify(msg.data).slice(0,2000));
+    }else if(msg?.type==='status'){
+      console.log('AUTOTUBE WAN21 I2V STATUS',JSON.stringify(msg).slice(0,1200));
     }
   }
-  throw new Error('Wan2.1 I2V timeout: '+lastStatus);
+  const result={data:Array.isArray(lastData)?lastData:[]};
+  console.log('AUTOTUBE WAN21 I2V RESULT',JSON.stringify(result).slice(0,2000));
+  const data=result.data;
+  const candidates=[];
+  for(const x of data){
+    candidates.push(x);
+    if(x&&typeof x==='object'){
+      candidates.push(x.url,x.path,x.video?.url,x.video?.path,x.value);
+    }
+  }
+  for(const candidate of candidates){
+    const url=typeof candidate==='string'?candidate:(candidate?.url||candidate?.path||candidate?.video?.url||candidate?.video?.path||candidate?.value||'');
+    if(!url||!/^https?:/i.test(String(url)))continue;
+    const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
+    if(!response.ok)continue;
+    const outputPath=path.join(dir,'wan21-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+    await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+    const stat=await fs.stat(outputPath);
+    if(stat.size)return{outputPath,bytes:stat.size,provider:'Hugging Face Wan-AI/Wan2.1',model:'Wan2.1 I2V',referenceDriven:true,status:'complete'};
+  }
+  throw new Error('Wan2.1 no devolvió un MP4 en el resultado final: '+JSON.stringify(result).slice(0,1800));
 }
 
 async function getPublicYoutubeReferenceFallback(reference){
