@@ -2015,7 +2015,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       const prompt=[
         'Create a NEW original AI-generated cinematic video keyframe inspired only by the reference style.',
         'Reference topic: '+aiReferenceTitle,
-        'Visual analysis: '+JSON.stringify(visualReferenceAnalysis).slice(0,5000),
+        'Visual analysis: '+JSON.stringify(style.visualAnalysis||{}).slice(0,5000),
         '16:9, photorealistic, high quality, original composition, no copied frames, no logos, no text, no watermark.'
       ].join('\n');
       const generated=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
