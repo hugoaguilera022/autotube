@@ -180,7 +180,7 @@ async function downloadViaCobalt(url,dir){
       try{
         r=await fetch(base+'/',{method:'POST',headers,body:JSON.stringify({
           url,videoQuality:'max',downloadMode:'auto',youtubeVideoCodec:'h264',
-          youtubeVideoContainer:'mp4',youtubeBetterAudio:true,disableMetadata:false
+          youtubeVideoContainer:'mp4',youtubeBetterAudio:true,alwaysProxy:true,disableMetadata:false
         }),signal:controller.signal});
       }finally{clearTimeout(timer)}
       const raw=await r.text();
