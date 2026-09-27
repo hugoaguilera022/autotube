@@ -2346,19 +2346,25 @@ async function executeUrlToVideo(reference,jobId,options={}){
         await fs.writeFile(publicReferenceImage,imageBytes);
       }
 
-      // Primary: LTX-2.5 image-to-video, explicitly conditioned on the reference frame.
+      // Primary generic provider: Pollinations image-conditioned video.
+      // It receives the public YouTube thumbnail plus an ORIGINAL recreation prompt.
+      // The source MP4 is never returned as the generated result.
       try{
-        generatedVideo=await Promise.race([
-          generateChopperBluLtxVideoClip(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImagePath:publicReferenceImage}),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('chopperblu image-to-video timeout')),600000))
-        ]);
-        if(!generatedVideo?.outputPath||!generatedVideo.referenceFrameConditioned)throw new Error('LTX-2.5 no confirmó condicionamiento por imagen.');
+        const publicReferenceUrl=String(video?.thumbnail||video?.thumbnails?.[0]||'').trim();
+        if(!publicReferenceUrl)throw new Error('La referencia de YouTube no tiene miniatura pública.');
+        generatedVideo=await generatePollinationsVideoClip(
+          prompt+' Create an ORIGINAL recreation. Do not copy the source video, exact frame, person, logo, text, composition, or recording.',
+          dir,
+          {durationSeconds:4,width:704,height:400,referenceImageUrl:publicReferenceUrl}
+        );
+        generatedVideo.referenceFrameConditioned=true;
+        generatedVideo.referenceDriven=true;
       }catch(err){
-        videoProviderErrors.push('chopperblu-image-to-video: '+String(err?.message||err));
-        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','chopperblu-image-to-video',err?.message||String(err));
+        videoProviderErrors.push('pollinations-image-conditioned: '+String(err?.message||err));
+        console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED','pollinations-image-conditioned',err?.message||String(err));
       }
 
-      // Secondary: SVD only if LTX-2.5 is unavailable.
+      // Secondary: LTX-2.5 image-to-video, explicitly conditioned on the reference frame.
       if(!generatedVideo?.outputPath){
         try{
           generatedVideo=await Promise.race([
