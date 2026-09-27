@@ -2145,7 +2145,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       if(generatedAudio?.buffer){
         await fs.writeFile(audioPath,generatedAudio.buffer);
       }else if(referenceDownloaded?.file){
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',referenceDownloaded.file,'vn','-sn','-dn','-t','4','-ac','2','-ar','48000','-c:a','pcm_s16le',audioPath]);
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',referenceDownloaded.file ,'-vn','-sn','-dn','-t','4','-ac','2','-ar','48000','-c:a','pcm_s16le',audioPath]);
       }else{
         await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000','-t','4','-c:a','pcm_s16le',audioPath]);
       }
