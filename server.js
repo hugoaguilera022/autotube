@@ -37,17 +37,18 @@ const app=express();
 app.post('/api/verify-ai-e2e',async(req,res)=>{
   const reference=String(req.body?.reference||'').trim();
   if(!reference)return res.status(400).json({error:'reference requerida'});
-  try{
-    const jobId='ai-e2e-'+Date.now();
-    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-'));
-    const ref=await downloadReferenceDirectForAiE2E(reference,path.join(dir,'reference'));
-    const job={id:jobId,reference,status:'processing',progress:1};
-    urlVideoJobs.set(jobId,job);
-    executeUrlToVideo(reference,jobId,{directReferenceFile:ref.file,referenceTitle:'AI reference',forceAi:true})
-      .catch(err=>{job.status='error';job.error=err?.message||String(err);console.error('AUTOTUBE AI E2E FAILED',err?.stack||err);});
-    res.json({ok:true,jobId,status:'processing',bytes:ref.bytes,probe:ref.probe});
-  }catch(err){res.status(500).json({error:err?.message||String(err)});}
-});async function geminiYoutubeUrlAnalysis(reference){
+  const videoId=extractYoutubeVideoId(reference);
+  if(!videoId)return res.status(400).json({error:'URL de YouTube no válida'});
+  const jobId='ai-e2e-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex');
+  const job={id:jobId,reference,status:'processing',progress:1,outputPath:null,error:null,startedAt:Date.now()};
+  urlVideoJobs.set(jobId,job);
+  executeUrlToVideo(reference,jobId,{referenceTitle:'AI reference',forceAi:true})
+    .then(result=>{if(job.status==='processing'){job.status=result?.ok?'done':'error';job.result=result;job.finishedAt=Date.now();}})
+    .catch(err=>{job.status='error';job.progress=100;job.error=err?.message||String(err);job.finishedAt=Date.now();console.error('AUTOTUBE AI E2E FAILED',err?.stack||String(err));});
+  res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId),reference});
+});
+
+async function geminiYoutubeUrlAnalysis(reference){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('GEMINI_API_KEY no configurada para análisis audiovisual directo de YouTube.');
   const body={model:'gemini-3.8-flash',input:[
