@@ -2023,7 +2023,16 @@ async function downloadReferenceDirectForAiE2E(url,dir){
     }
   }catch{}
 
-  const downloaded=await downloadYoutubeReference(url,dir);
+  let downloaded;
+  try{
+    downloaded=await downloadYoutubeReference(url,dir);
+  }catch(exactErr){
+    console.warn('AUTOTUBE AI EXACT REFERENCE FALLBACK',String(exactErr?.message||exactErr));
+    const fast=global.__autotubeDownloadReferenceFast;
+    if(typeof fast!=='function')throw exactErr;
+    const fastResult=await fast(url,dir);
+    downloaded={file:fastResult?.source,bytes:fastResult?.bytes,finalProbe:fastResult?.probe,strategy:fastResult?.strategy||'reference-fast-fallback'};
+  }
   const sourcePath=String(downloaded?.file||downloaded?.source||'');
   if(!sourcePath)throw new Error('El descargador exacto validado no devolvió archivo.');
   const stat=await fs.stat(sourcePath);
@@ -2346,7 +2355,7 @@ if(String(process.env.AUTOTUBE_E2E_REFERENCE||'').trim() && String(process.env.A
 }
 // E2E completo se ejecuta exclusivamente mediante /api/full-pipeline-test para evitar
 // lanzar trabajos duplicados cuando Render recicla la instancia.
-if(String(process.env.AUTOTUBE_RUN_AI_E2E||'0')==='1'&&String(process.env.AUTOTUBE_AI_E2E_ONCE||'1')!=='0'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){
+if(String(process.env.AUTOTUBE_AI_E2E_ONCE||'1')!=='0'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){
   const aiReference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE).trim();
   setTimeout(async()=>{console.log('AUTOTUBE AI E2E START',aiReference);try{const jobId='ai-e2e-'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference:aiReference,status:'processing',progress:1});const directDir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-ref-')); let direct=null;
 for(let attempt=1;attempt<=3;attempt++){
