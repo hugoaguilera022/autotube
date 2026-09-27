@@ -1330,7 +1330,23 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
       const stat=await fs.stat(outputPath);
       if(!stat.size)throw new Error('La imagen IA está vacía.');
       return{outputPath,bytes:stat.size,mediaType:'image',provider:'Pollinations AI · Flux',model:'flux',status:'complete'};
-    }finally{clearTimeout(timer)}
+    }catch(err){console.warn('Pollinations image fallback failed:',err?.message||String(err));}
+    finally{clearTimeout(timer)}
+    const openaiKey=String(process.env.OPENAI_API_KEY||'').trim();
+    if(openaiKey){
+      const response=await fetch('https://api.openai.com/v1/images/generations',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+openaiKey},body:JSON.stringify({model:'gpt-image-2',prompt:String(prompt||'').trim(),size:'1536x1024',quality:'high',n:1,response_format:'b64_json'})});
+      const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}
+      if(response.ok){
+        const b64=String(data?.data?.[0]?.b64_json||'').trim();
+        if(b64){
+          const outputPath=path.join(dir,'openai-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.png');
+          await fs.writeFile(outputPath,Buffer.from(b64,'base64'));
+          const stat=await fs.stat(outputPath);
+          if(stat.size)return{outputPath,bytes:stat.size,mediaType:'image',provider:'OpenAI Image',model:'gpt-image-2',status:'complete'};
+        }
+      }else{console.warn('OpenAI image fallback unavailable:',response.status,raw.slice(0,400));}
+    }
+    throw new Error('No hay proveedor de imagen IA disponible (Gemini, Pollinations u OpenAI).');
   }
   const model=String(options.model||'gemini-2.5-flash-image').trim();
   const controller=new AbortController();
