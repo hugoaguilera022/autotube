@@ -1488,7 +1488,9 @@ async function generatePollinationsVideoClip(prompt,dir,options={}){
   const height=Math.max(256,Math.min(1280,Math.round((Number(options.height)||400)/32)*32));
   const seed=Math.floor(Math.random()*2147483647);
   const encoded=encodeURIComponent(String(prompt||'').trim());
-  const url='https://video.pollinations.ai/prompt/'+encoded+'?duration='+encodeURIComponent(duration)+'&width='+encodeURIComponent(width)+'&height='+encodeURIComponent(height)+'&seed='+encodeURIComponent(seed)+'&nologo=true';
+  const referenceImageUrl=String(options.referenceImageUrl||'').trim();
+  const referenceParam=referenceImageUrl?'&image='+encodeURIComponent(referenceImageUrl):'';
+  const url='https://video.pollinations.ai/prompt/'+encoded+'?duration='+encodeURIComponent(duration)+'&width='+encodeURIComponent(width)+'&height='+encodeURIComponent(height)+'&seed='+encodeURIComponent(seed)+'&nologo=true'+referenceParam;
   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),180000);
   try{
     const response=await fetch(url,{method:'GET',headers:{'Accept':'video/mp4,*/*'},signal:controller.signal});
@@ -1501,7 +1503,7 @@ async function generatePollinationsVideoClip(prompt,dir,options={}){
     await fs.writeFile(outputPath,raw);
     const stat=await fs.stat(outputPath);
     if(!stat.size)throw new Error('Pollinations video devolvió un archivo vacío.');
-    return{outputPath,bytes:stat.size,provider:'Pollinations AI Video',model:'video-gen',status:'complete'};
+    return{outputPath,bytes:stat.size,provider:'Pollinations AI Video',model:'video-gen',status:'complete',referenceDriven:Boolean(referenceImageUrl),referenceImageUrl:referenceImageUrl||null};
   }finally{clearTimeout(timer)}
 }
 
@@ -2259,7 +2261,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       if(!generatedVideo?.outputPath) for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
         try{
           const fn=provider==='chopperblu'?generateChopperBluLtxVideoClip:(provider==='goalsave'?generateGoalsaveLtxVideoClip:(provider==='ltx'?generateFreeLtxVideoClip:generatePollinationsVideoClip));
-          generatedVideo=await Promise.race([fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false}),new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))]);
+          generatedVideo=await Promise.race([fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false,referenceImageUrl:video?.thumbnail||video?.thumbnails?.[0]||''}),new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))]);
           if(generatedVideo?.outputPath)break;
         }catch(err){videoProviderErrors.push(provider+': '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));}
       }
