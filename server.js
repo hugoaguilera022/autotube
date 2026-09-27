@@ -1955,22 +1955,26 @@ async function executeUrlToVideo(reference,jobId,options={}){
   try{
     if(job)job.progress=2;
 
-    // Build an ORIGINAL alternative from the reference. The source is analyzed for
-    // topic, pacing, scene structure and audio characteristics; the original media
-    // streams are never copied into the alternative.
+    // Build an ORIGINAL alternative from the reference. For the bounded proof path,
+    // do not download the source MP4: use the URL plus public metadata/thumbnails.
     let video;
+    let referenceDownloaded={file:null,bytes:0,probe:{}};
     const referenceSourceDir=path.join(dir,'reference-source');
-    const referenceDownloaded=options.directReferenceFile
-      ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
-      : await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
-    if(options.directReferenceFile){
-      video={title:options.referenceTitle||reference,videoId:'',channelTitle:'',duration:String(referenceDownloaded.probe?.durationSeconds||'')};
-    }else{
+    if(options.forceAi){
       video=await getReferenceVideo(reference);
+    }else{
+      referenceDownloaded=options.directReferenceFile
+        ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
+        : await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
+      if(options.directReferenceFile){
+        video={title:options.referenceTitle||reference,videoId:'',channelTitle:'',duration:String(referenceDownloaded.probe?.durationSeconds||'')};
+      }else{
+        video=await getReferenceVideo(reference);
+      }
     }
     if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
     const referenceProbe=referenceDownloaded.probe||{};
-    if(!referenceDownloaded?.bytes)throw new Error('No se obtuvo una referencia MP4 validada.');
+    if(!options.forceAi && !referenceDownloaded?.bytes)throw new Error('No se obtuvo una referencia MP4 validada.');
 
     // E2E exact verification: when the real reference MP4 was supplied, make the
     // final artifact from that exact file and prove byte-for-byte identity.
@@ -1994,9 +1998,11 @@ async function executeUrlToVideo(reference,jobId,options={}){
       }
       return{ok:true,jobId,reference,referenceTitle:options.referenceTitle||'AI reference',sceneCount:1,size:finalStat.size,durationSeconds:validation.durationSeconds,validation:job?.validation};
     }
-    const style=options.directReferenceFile
-      ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
-      : await analyzeYoutubeReferenceMedia(reference,video);
+    const style=options.forceAi
+      ? await analyzeYoutubeReferenceMedia(reference,video)
+      : (options.directReferenceFile
+        ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
+        : await analyzeYoutubeReferenceMedia(reference,video));
     if(job)job.progress=18;
 
     // Lightweight proof path: create one original AI visual from the reference
