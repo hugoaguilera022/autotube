@@ -422,7 +422,11 @@ async function analyzeYoutubeReferenceMedia(url,video){
       analysis.videoProfile=vp;analysis.audioProfile=ap;analysis.animationProfile=an;analysis.structureProfile=sp;analysis.generationDirectives=gd;
       return{visualAnalysis:analysis,visualSource:'Gemini-YouTube-URL',analysisSource:'Gemini direct public YouTube video',thumbnailCount:0,referenceFileBytes:0,hasFullVideoAnalysis:true,hasAudioAnalysis:true,audioAnalysisSource:'Gemini direct video/audio analysis',hasAnimationAnalysis:Boolean(Object.keys(an).length),hasStructureAnalysis:Boolean(Object.keys(sp).length),measuredVisualContinuity:{source:'Gemini direct YouTube video',constantImage:Boolean(vp.constantImage)},constantImage:Boolean(vp.constantImage),estimatedSceneCount:vp.estimatedSceneCount,preferredSceneCount:gd.preferredSceneCount};
     }catch(directErr){
-      console.warn('Gemini direct YouTube analysis unavailable; trying real reference download:',directErr?.message||String(directErr));
+      console.error('Gemini direct YouTube analysis failed:',directErr?.message||String(directErr));
+      // A public YouTube URL can be analyzed directly by Gemini; do not silently
+      // fall back to a blocked/fragile downloader because that can hang the pipeline
+      // and would defeat the URL-only requirement.
+      throw new Error('No se pudo analizar directamente el vídeo de YouTube con Gemini: '+String(directErr?.message||directErr));
       const downloaded=await downloadYoutubeReference(referenceUrl,dir);
       const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
       const analyzed=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
@@ -1751,6 +1755,23 @@ async function executeFullPipelineTest(reference){
       const d=await r.json();
       if(!r.ok)throw new Error(d?.error||'Media search '+r.status);
       mediaResults=Array.isArray(d.results)?d.results:[];
+      // Stock APIs are optional. If unavailable, generate original visual assets
+      // from the analyzed scene prompts instead of blocking the pipeline.
+      for(let i=0;i<plan.scenes.length;i++){
+        const scene=plan.scenes[i];
+        const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
+        if(row?.media?.some(m=>m?.downloadUrl))continue;
+        try{
+          const imageDir=await fs.mkdtemp(path.join(dir,'scene-image-'));
+          const generated=await generateGeminiOriginalImage(
+            String(scene.visualPrompt||scene.searchQuery||scene.title||referenceTitle)+'; preserve the reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3500)+'. Create original material, no logos, no copied characters or frames, cinematic 16:9.',
+            imageDir,
+            {model:'gemini-2.5-flash-image'}
+          );
+          row.media=[{provider:generated.provider,id:'generated-'+scene.number,title:'Original AI visual',duration:0,downloadUrl:generated.outputPath,mediaType:'image'}];
+          row.generatedAsset=true;
+        }catch(err){console.warn('Original visual generation failed for scene '+scene.number+':',err.message||String(err))}
+      }
       const missing=plan.scenes.filter((scene,i)=>{
         const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
         return !row?.media?.some(m=>m?.downloadUrl);
