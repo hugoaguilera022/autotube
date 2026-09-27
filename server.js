@@ -2069,15 +2069,13 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(options.forceAi){
       const aiReferenceTitle=String(video.title||reference||'Contenido original').slice(0,300);
       const prompt=[
-        'Generate a NEW ORIGINAL AI music-video scene. If the video model is unavailable, the image fallback must still obey the same concrete subject.',
-        'The primary subjects MUST be anthropomorphic Canadian wildlife: a Mountie bear playing bagpipes in the foreground, battle-ready beavers and moose beside him, with other Canadian wildlife in the background.',
-        'The setting MUST feel like a humorous cinematic Canadian resistance music video: Canadian flags, rugged border-road or forest setting, marching formation, dramatic cinematic lighting.',
-        'Do NOT generate a generic human soldier, generic human bagpiper, fantasy warrior, or empty landscape.',
-        'Reference topic: '+aiReferenceTitle,
-        'Concrete reference-content hint: '+String(options.referenceHint||'').slice(0,4000),
-        'Visual analysis: '+JSON.stringify(style.visualAnalysis||{}).slice(0,5000),
-        'Use the concrete animals, props, setting, action and cinematic rhythm named in the reference hint. Create original characters and shots. No copied frames, no logos, no watermark, no text.',
-        '16:9 cinematic AI music-video look, dynamic motion, 4 seconds.'
+        'ORIGINAL AI MUSIC VIDEO SHOT, 16:9, photorealistic surreal cinema.',
+        'MANDATORY: a giant anthropomorphic Canadian Mountie bear wearing a red serge uniform and playing BAGPIPES in the foreground.',
+        'Also clearly visible: two battle-ready beavers, a moose, a grizzly bear and porcupines.',
+        'Canadian wilderness, pine forest and snowy mountains, humorous heroic military-march formation, cinematic dramatic lighting.',
+        'The animals are the main characters; no generic human soldier, no empty landscape, no unrelated animals.',
+        'Create a NEW original shot, not a copy of any source frame. No text, captions, logos or watermark.',
+        'Reference title: Canadian Resistance Army - Trade War. Reference hint: Canadian AI music video with Mountie bears, bagpipes, beavers, moose, grizzlies and porcupines; marching folk-rock energy around 86 BPM.'
       ].join('\n');
       let generatedVideo=null;
       try{
