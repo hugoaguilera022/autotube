@@ -2069,8 +2069,10 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(options.forceAi){
       const aiReferenceTitle=String(video.title||reference||'Contenido original').slice(0,300);
       const prompt=[
-        'Generate a NEW ORIGINAL AI VIDEO, not a still image and not a copy of the source recording.',
-        'The video must visibly depict the concrete reference subject matter, not a generic soldier or generic landscape.',
+        'Generate a NEW ORIGINAL AI music-video scene. If the video model is unavailable, the image fallback must still obey the same concrete subject.',
+        'The primary subjects MUST be anthropomorphic Canadian wildlife: a Mountie bear playing bagpipes in the foreground, battle-ready beavers and moose beside him, with other Canadian wildlife in the background.',
+        'The setting MUST feel like a humorous cinematic Canadian resistance music video: Canadian flags, rugged border-road or forest setting, marching formation, dramatic cinematic lighting.',
+        'Do NOT generate a generic human soldier, generic human bagpiper, fantasy warrior, or empty landscape.',
         'Reference topic: '+aiReferenceTitle,
         'Concrete reference-content hint: '+String(options.referenceHint||'').slice(0,4000),
         'Visual analysis: '+JSON.stringify(style.visualAnalysis||{}).slice(0,5000),
