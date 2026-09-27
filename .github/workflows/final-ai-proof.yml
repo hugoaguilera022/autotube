@@ -92,3 +92,5 @@ jobs:
 # Uses a concrete public-content hint only for this validation URL.
 
 # final numeric size assertion
+
+# controlled retry against currently live Render instance
