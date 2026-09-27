@@ -2239,19 +2239,22 @@ async function gradioPredictCompat(app,endpoint,args){
 
 async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
-  const app=await Client.connect('Jiny34/Image-to-video');
+  console.log('AUTOTUBE SVD START');
+  const app=await Promise.race([Client.connect('Jiny34/Image-to-video'),new Promise((_,reject)=>setTimeout(()=>reject(new Error('SVD connect timeout')),30000))]);
   const prompt=String(options.prompt||'Generate original natural camera motion from this reference image, preserve the main subject and setting.').trim();
-  const result=await app.predict('/make_video',[[handle_file(imagePath)],prompt]);
+  const result=await Promise.race([app.predict('/make_video',[[handle_file(imagePath)],prompt]),new Promise((_,reject)=>setTimeout(()=>reject(new Error('SVD generation timeout')),300000))]);
+  console.log('AUTOTUBE SVD RESULT',JSON.stringify(result).slice(0,2500));
   const data=Array.isArray(result?.data)?result.data:[];
   const output=data[0];
-  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||output?.video?.path||'');
   if(!url)throw new Error('SVD public Space no devolvió un vídeo.');
   const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
   if(!response.ok)throw new Error('SVD public Space no pudo descargar el vídeo ('+response.status+').');
   const outputPath=path.join(dir,'svd-public-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-  await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+  const buf=Buffer.from(await response.arrayBuffer());
+  if(buf.length<10000)throw new Error('SVD public Space devolvió un vídeo vacío o inválido.');
+  await fs.writeFile(outputPath,buf);
   const stat=await fs.stat(outputPath);
-  if(!stat.size)throw new Error('SVD public Space devolvió un vídeo vacío.');
   return{outputPath,bytes:stat.size,provider:'Hugging Face public SVD Space',model:'stabilityai/stable-video-diffusion-img2vid',referenceDriven:true,status:'complete'};
 }
 
