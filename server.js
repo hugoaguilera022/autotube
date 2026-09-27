@@ -2125,6 +2125,45 @@ async function downloadReferenceDirectForAiE2E(url,dir){
   return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'validated-exact'};
 }
 
+async function generateNiftyWan22I2VClip(imagePath,dir,options={}){
+  const {Client,handle_file}=require('@gradio/client');
+  const app=await Client.connect('cbensimon/wan2-2-fp8da-aoti-preview2');
+  const prompt=String(options.prompt||'Create original cinematic motion from this reference image; preserve the visible subject, setting and composition while adding natural camera and subject movement.').trim();
+  const duration=Math.max(0.5,Math.min(4.5,Number(options.durationSeconds)||4.2));
+  const steps=Math.max(1,Math.min(12,Number(options.steps)||6));
+  const seed=Math.floor(Math.random()*2147483647);
+  const result=await app.predict('/generate_video',[
+    await handle_file(imagePath),
+    null,
+    prompt,
+    steps,
+    'worst quality, blurry, jittery, distorted, text, logos, watermark, static frame',
+    duration,
+    1,
+    1,
+    seed,
+    true,
+    6,
+    'UniPCMultistep',
+    3.0,
+    16,
+    false,
+    true
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!url)throw new Error('Wan 2.2 public Space no devolvió un vídeo.');
+  const response=await fetch(String(url),{signal:AbortSignal.timeout(90000)});
+  if(!response.ok)throw new Error('Wan 2.2 public Space no pudo descargar el vídeo ('+response.status+').');
+  const dataBuf=Buffer.from(await response.arrayBuffer());
+  if(dataBuf.length<20000)throw new Error('Wan 2.2 public Space devolvió un vídeo vacío o inválido.');
+  const outputPath=path.join(dir,'wan2-2-public-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  await fs.writeFile(outputPath,dataBuf);
+  const stat=await fs.stat(outputPath);
+  return{outputPath,bytes:stat.size,provider:'Hugging Face public Wan 2.2 I2V',model:'cbensimon/wan2-2-fp8da-aoti-preview2',durationSeconds:duration,referenceDriven:true,referenceFrameConditioned:true,status:'complete'};
+}
+
 async function generateWanFastI2VClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('zerogpu-aoti/wan2-2-fp8da-aoti-faster');
@@ -2307,12 +2346,12 @@ async function executeUrlToVideo(reference,jobId,options={}){
           if(!imageResponse.ok||imageBytes.length<5000)throw new Error('No se pudo descargar la miniatura pública: HTTP '+imageResponse.status);
           await fs.writeFile(publicReferenceImage,imageBytes);
         }
-        for(const conditionedProvider of ['wan-fast-i2v','svd-space']){
+        for(const conditionedProvider of ['wan-public-i2v','wan-fast-i2v','svd-space']){
         try{
-          const fn=conditionedProvider==='wan-fast-i2v'?generateWanFastI2VClip:generatePublicSvdImageToVideoClip;
+          const fn=conditionedProvider==='wan-public-i2v'?generateNiftyWan22I2VClip:(conditionedProvider==='wan-fast-i2v'?generateWanFastI2VClip:generatePublicSvdImageToVideoClip);
           generatedVideo=await Promise.race([
             fn(publicReferenceImage,dir,{prompt,durationSeconds:3.5,width:704,height:400}),
-            new Promise((_,reject)=>setTimeout(()=>reject(new Error(conditionedProvider+' timeout')),conditionedProvider==='wan-fast-i2v'?300000:600000))
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error(conditionedProvider+' timeout')),conditionedProvider==='wan-public-i2v'?300000:(conditionedProvider==='wan-fast-i2v'?300000:600000)))
           ]);
           if(generatedVideo?.outputPath)break;
         }catch(err){
