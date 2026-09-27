@@ -44,7 +44,7 @@ async function generateUrlToVideo(){
     let finished=null;
     for(let i=0;i<900;i++){
       await new Promise(r=>setTimeout(r,2000));
-      const status=await apiJson('/api/url-to-video/'+encodeURIComponent(jobId),{},'el estado de la regeneración');
+      const status=await apiJson('/api/url-to-video/'+encodeURIComponent(jobId)+'?reference='+encodeURIComponent(value),{},'el estado de la regeneración');
       if(status.status==='done'){finished=status;break;}
       if(status.status==='error')throw new Error(status.error||'No se pudo regenerar el vídeo.');
       const p=Math.max(0,Math.min(99,Number(status.progress)||0));
