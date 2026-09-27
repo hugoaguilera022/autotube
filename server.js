@@ -1533,7 +1533,8 @@ async function executePreflight(){
         narrationAudio:[],
         musicBuffer:null,
         onProgress:()=>{},
-        finalOutputPath:output
+        finalOutputPath:output,
+        targetWidth:1280,targetHeight:720,targetFps:30,targetDurationSeconds:durationSeconds
       });
       const validation=await validateRenderedMp4(output);
       if(!result?.size||!validation?.width)throw new Error('El pipeline de render no produjo un MP4 válido.');
@@ -1827,6 +1828,7 @@ async function executeFullPipelineTest(reference){
       render=await renderAutotubeVideo({
         scenes:plan.scenes,
         mediaResults,
+        aiClips:[],
         narrationAudio,
         musicBuffer:music?.buffer||null,
         onProgress:()=>{},
@@ -1989,6 +1991,41 @@ async function executeUrlToVideo(reference,jobId){
     const mediaData=await mediaResponse.json();
     if(!mediaResponse.ok)throw new Error(mediaData?.error||'No se pudieron buscar visuales originales.');
     const mediaResults=Array.isArray(mediaData.results)?mediaData.results:[];
+    // AI mode: generate original visual assets from the reference-derived scene plan.
+    // Keep the scene count bounded for Render while preserving the full timeline.
+    const aiMode=String(process.env.AUTOTUBE_URL_VIDEO_AI||'1')==='1';
+    let aiClips=[];
+    if(aiMode){
+      const maxAiScenes=Math.max(1,Math.min(12,Number(process.env.AUTOTUBE_AI_MAX_SCENES)||12));
+      if(scenes.length>maxAiScenes){
+        const grouped=[];
+        for(let i=0;i<maxAiScenes;i++){
+          const start=Math.floor(i*scenes.length/maxAiScenes), end=Math.max(start+1,Math.floor((i+1)*scenes.length/maxAiScenes));
+          const group=scenes.slice(start,end);
+          const duration=group.reduce((n,s)=>n+Math.max(0.5,Number(s.duration)||0),0);
+          grouped.push({...group[0],number:i+1,duration, title:group.map(s=>s.title).filter(Boolean).slice(0,2).join(' · ')||('Escena '+(i+1)), visualPrompt:group.map(s=>s.visualPrompt||s.title||'').filter(Boolean).join('; ').slice(0,2500), narration:group.map(s=>s.narration||'').filter(Boolean).join(' '), animationNotes:group.map(s=>s.animationNotes||'').filter(Boolean).join('; ').slice(0,1500)});
+        }
+        scenes=grouped;
+      }
+      if(job)job.progress=45;
+      for(let i=0;i<scenes.length;i++){
+        const scene=scenes[i];
+        const vp=visualReferenceAnalysis?.videoProfile||{};
+        const ap=visualReferenceAnalysis?.animationProfile||{};
+        const prompt=[
+          'Create a NEW original cinematic visual for this scene.',
+          'Topic: '+referenceTitle,
+          'Scene: '+String(scene.title||''),
+          'Visual direction: '+String(scene.visualPrompt||''),
+          'Animation/camera direction: '+String(scene.animationNotes||''),
+          'Reference visual language only: '+JSON.stringify({style:vp.visualStyle,composition:vp.composition,palette:vp.palette,lighting:vp.lighting,cameraMovement:vp.cameraMovement,continuity:vp.continuity,motion:ap.motionIntensity}).slice(0,3500),
+          '16:9 photorealistic high quality. Original material only. Do not copy any frame, person, face, logo, text, exact composition, or identifiable copyrighted expression from the reference. No watermark, no text, no logos.'
+        ].join('\\n');
+        const generated=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
+        aiClips.push({path:generated.outputPath,mediaType:'image'});
+        if(job)job.progress=45+Math.round(((i+1)/scenes.length)*20);
+      }
+    }
     const missing=scenes.filter((scene,i)=>{
       const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
       return !row?.media?.some(m=>m?.downloadUrl);
@@ -2015,7 +2052,7 @@ async function executeUrlToVideo(reference,jobId){
 
     const outputPath=path.join(renderJobDir,jobId+'.mp4');
     const render=await renderAutotubeVideo({
-      scenes,mediaResults,narrationAudio,musicBuffer:music?.buffer||null,
+      scenes,mediaResults,aiClips,narrationAudio,musicBuffer:music?.buffer||null,
       onProgress:p=>{if(job)job.progress=Math.min(96,68+Math.round(p*0.28));},
       finalOutputPath:outputPath,
       targetWidth:1280,targetHeight:720,targetFps:30,targetDurationSeconds:durationSeconds
