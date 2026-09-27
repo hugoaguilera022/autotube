@@ -1238,7 +1238,9 @@ async function executeUrlToVideo(reference,jobId,options={}){
     const video=await getReferenceVideo(reference);
     if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
 
-    const style=await analyzeYoutubeReferenceMedia(reference,video);
+    let style;
+    try { style=await analyzeYoutubeReferenceMediaDirect(reference,video); if(!style?.hasFullVideoAnalysis) throw new Error('Gemini no devolvió análisis completo.'); }
+    catch(directErr){ console.warn('Direct Gemini YouTube analysis failed; real-media fallback:',directErr.message||String(directErr)); style=await analyzeYoutubeReferenceMedia(reference,video); }
     if(job)job.progress=18;
 
     const referenceTitle=String(video.title||'Contenido original').slice(0,300);
