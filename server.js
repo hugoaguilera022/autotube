@@ -47,7 +47,21 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
       .catch(err=>{job.status='error';job.error=err?.message||String(err);console.error('AUTOTUBE AI E2E FAILED',err?.stack||err);});
     res.json({ok:true,jobId,status:'processing',bytes:ref.bytes,probe:ref.probe});
   }catch(err){res.status(500).json({error:err?.message||String(err)});}
+});app.get('/api/verify-ai-e2e',async(req,res)=>{
+  const reference=String(req.query?.reference||'').trim();
+  if(!reference)return res.status(400).json({error:'reference requerida'});
+  try{
+    const jobId='ai-e2e-'+Date.now();
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-'));
+    const ref=await downloadReferenceDirectForAiE2E(reference,path.join(dir,'reference'));
+    const job={id:jobId,reference,status:'processing',progress:1};
+    urlVideoJobs.set(jobId,job);
+    executeUrlToVideo(reference,jobId,{directReferenceFile:ref.file,referenceTitle:'AI reference'})
+      .catch(err=>{job.status='error';job.error=err?.message||String(err);console.error('AUTOTUBE AI E2E FAILED',err?.stack||err);});
+    res.json({ok:true,jobId,status:'processing',bytes:ref.bytes,probe:ref.probe});
+  }catch(err){res.status(500).json({error:err?.message||String(err)});}
 });
+
 
 // Brief creation mode: inputs may include topic, visual references, custom script and optional sample media.
 let youtubeTokens=null,youtubeProfileCache=null,youtubeLoaded=false;
