@@ -385,6 +385,22 @@ async function downloadViaLocalYtdlp(url,dir){
   if(!f)throw new Error('yt-dlp local no produjo MP4: '+files.join(','));
   return{source:path.join(dir,f),strategy:'local-ytdlp-po'};
 }
+async function downloadViaYtdlpEmbedded(url,dir){
+  const out=path.join(dir,'source.%(ext)s');
+  const result=await youtubedl(url,{
+    format:'bestvideo*+bestaudio/best',
+    mergeOutputFormat:'mp4',
+    output:out,
+    noPlaylist:true,
+    noWarnings:true,
+    retries:2,
+    extractorArgs:'youtube:player_client=web_embedded'
+  },{timeout:120000});
+  const files=await fs.readdir(dir);
+  const candidate=files.find(f=>/^source\.(mp4|mkv|webm|mov)$/i.test(f));
+  if(!candidate)throw new Error('yt-dlp web_embedded no generó MP4: '+String(result||'').slice(-1000));
+  return{source:path.join(dir,candidate),strategy:'yt-dlp-web-embedded'};
+}
 async function downloadReferenceFast(url,dir){
   await fs.mkdir(dir,{recursive:true});
   const artifact=String(process.env.AUTOTUBE_REFERENCE_ARTIFACT_URL||'').trim();
