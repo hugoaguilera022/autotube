@@ -12,3 +12,13 @@ global.setTimeout=function(callback,delay,...args){
   }catch{}
   return originalSetTimeout(callback,delay,...args);
 };
+if(process.env.AUTOTUBE_E2E_ON_START==='1'){
+  originalSetTimeout(async()=>{
+    const base='http://127.0.0.1:'+String(process.env.PORT||10000);
+    const reference='https://www.youtube.com/watch?v=lnCZPPhAEwM';
+    try{
+      const res=await fetch(base+'/api/full-pipeline-test?reference='+encodeURIComponent(reference));
+      console.log('AUTOTUBE ONE-SHOT E2E',res.status,await res.text());
+    }catch(e){console.error('AUTOTUBE ONE-SHOT E2E trigger failed',e?.message||String(e))}
+  },30000);
+}
