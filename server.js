@@ -1458,6 +1458,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       targetWidth:1280,targetHeight:720,targetFps:30,targetDurationSeconds:durationSeconds
     });
     const validation=await validateRenderedMp4(outputPath,durationSeconds);
+    const animatedMotion=await validateAnimatedMotion(outputPath);
     const stat=await fs.stat(outputPath);
     if(!stat.size)throw new Error('El MP4 alternativo está vacío.');
 
@@ -1476,7 +1477,10 @@ async function executeUrlToVideo(reference,jobId,options={}){
           creativeDirection:planResponseData?.creativeDirection||null,
           visualStyle:'animated',
           animationStyle:planResponseData?.creativeDirection?.animationStyle||'animated cinematic 2D/3D',
-          animatedSceneCount:scenes.filter(s=>String(s.animationNotes||s.visualPrompt||'').match(/animat|2d|3d|motion|camera|movement|movimiento/i)).length
+          animatedSceneCount:scenes.filter(s=>String(s.animationNotes||s.visualPrompt||'').match(/animat|2d|3d|motion|camera|movement|movimiento/i)).length,
+          motionDetected:Boolean(animatedMotion.motionDetected),
+          sampledFrames:animatedMotion.sampledFrames,
+          uniqueFrames:animatedMotion.uniqueFrames
         }};
       job.finishedAt=Date.now();
     }
