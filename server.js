@@ -424,6 +424,7 @@ app.post('/api/reference/visual-analysis',upload.single('video'),async(req,res)=
   }
 });
 
+async function downloadToFile(url,file){const response=await fetch(String(url),{redirect:'follow',signal:AbortSignal.timeout(90000),headers:{'User-Agent':'AutoTube/1.0'}});if(!response.ok)throw new Error('Descarga de recurso '+response.status);const data=Buffer.from(await response.arrayBuffer());if(!data.length)throw new Error('Recurso descargado vacío.');await fs.writeFile(file,data);return file;}
 async function downloadAudioBuffer(source,file){if(typeof source==='string'){await fs.copyFile(source,file)}else{await fs.writeFile(file,source)}const stat=await fs.stat(file);if(!stat.size)throw new Error('El audio generado está vacío.');}
 async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationAudio=[],musicBuffer=null,onProgress=()=>{},finalOutputPath,targetWidth=910,targetHeight=512,targetFps=30,targetDurationSeconds=0}){
   if(!ffmpegPath)throw new Error('FFmpeg no está disponible.');
