@@ -1919,6 +1919,19 @@ function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
   });
 }
 
+async function downloadReferenceDirectForAiE2E(url,dir){
+  await fs.mkdir(dir,{recursive:true});
+  const downloader=global.__autotubeDownloadExactYoutube;
+  if(typeof downloader!=='function')throw new Error('El descargador exacto no está disponible.');
+  const downloaded=await downloader(url,dir);
+  const sourcePath=String(downloaded?.source||'');
+  if(!sourcePath)throw new Error('El descargador exacto no devolvió el archivo.');
+  const stat=await fs.stat(sourcePath);if(!stat.size)throw new Error('La referencia descargada está vacía.');
+  const probe=await probeReferenceTechnical(sourcePath);
+  if(!probe.durationSeconds||!probe.width||!probe.height)throw new Error('La referencia descargada no superó la validación FFmpeg.');
+  return{file:sourcePath,bytes:stat.size,probe,strategy:downloaded.strategy||'direct-exact'};
+}
+
 async function executeUrlToVideo(reference,jobId){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-url-video-alternative-'));
   const job=urlVideoJobs.get(jobId);
@@ -1931,8 +1944,8 @@ async function executeUrlToVideo(reference,jobId){
     const video=await getReferenceVideo(reference);
     if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
     const referenceSourceDir=path.join(dir,'reference-source');
-    const referenceDownloaded=await downloadYoutubeReference(reference,referenceSourceDir);
-    const referenceProbe=referenceDownloaded.finalProbe||{};
+    const referenceDownloaded=await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
+    const referenceProbe=referenceDownloaded.probe||{};
     if(!referenceDownloaded?.bytes)throw new Error('No se obtuvo una referencia MP4 validada.');
     const style=await analyzeYoutubeReferenceMedia(reference,video);
     if(job)job.progress=18;
