@@ -54,7 +54,7 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
   if(existing)return res.status(202).json({ok:false,status:'processing',jobId:existing.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(existing.id),reused:true});
   const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
   urlVideoJobs.set(jobId,{id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null});
-  res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)});
+  res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId)+'?reference='+encodeURIComponent(reference)});
   // Use the same generic URL->AI implementation as production. The endpoint
   // must not pre-download the reference because that defeats the public
   // metadata/thumbnail fallback for arbitrary YouTube URLs.
@@ -2565,8 +2565,19 @@ app.get('/api/url-to-video',async(req,res)=>{
   executeUrlToVideo(reference,jobId,{forceAi:true,referenceHint}).catch(err=>console.error('URL-to-video error:',jobId,err));
 });
 app.get('/api/url-to-video/:jobId',async(req,res)=>{
-  const job=urlVideoJobs.get(String(req.params.jobId||''));
-  if(!job)return res.status(410).json({ok:false,status:'restart',error:'El trabajo se perdió porque Render reinició la instancia.'});
+  const jobId=String(req.params.jobId||'');
+  let job=urlVideoJobs.get(jobId);
+  if(!job){
+    const reference=String(req.query?.reference||'').trim();
+    if(reference && /^https?:\\/\\/(www\\.)?(youtube\\.com|youtu\\.be)\\//i.test(reference)){
+      job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null,restartedCount:1};
+      urlVideoJobs.set(jobId,job);
+      executeUrlToVideo(reference,jobId).catch(err=>console.error('AI URL job resurrection error:',err));
+      console.warn('AUTOTUBE RESURRECTED URL JOB AFTER INSTANCE RESTART',jobId);
+    }else{
+      return res.status(410).json({ok:false,status:'restart',error:'El trabajo se perdió porque Render reinició la instancia. Reintenta con la URL de referencia.'});
+    }
+  }
   if(job.status==='processing')return res.status(202).json({ok:false,status:'processing',jobId:job.id,progress:job.progress});
   if(job.status==='error')return res.status(500).json({ok:false,status:'error',jobId:job.id,error:job.error});
   res.json({ok:true,status:'done',jobId:job.id,progress:100,reference:job.reference,referenceTitle:job.referenceTitle,
