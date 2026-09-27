@@ -1444,6 +1444,34 @@ async function generatePollinationsVideoClip(prompt,dir,options={}){
   }finally{clearTimeout(timer)}
 }
 
+async function generateGoalsaveLtxVideoClip(prompt,dir,options={}) {
+  const {Client}=require('@gradio/client');
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const app=await Client.connect('Goalsave/ltx-2-5-studio',token?{token}:undefined);
+  const duration=Math.max(0.3,Math.min(8.5,Number(options.durationSeconds)||4));
+  const width=Math.max(256,Math.min(1280,Math.round((Number(options.width)||704)/32)*32));
+  const height=Math.max(256,Math.min(1280,Math.round((Number(options.height)||400)/32)*32));
+  const seed=Math.floor(Math.random()*4294967295);
+  const result=await app.predict('/text_to_video',[
+    String(prompt||'').trim(),
+    String(options.negativePrompt||'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos, watermark'),
+    null,null,height,width,'text-to-video',duration,9,seed,true,Number(options.guidanceScale||3),Boolean(options.improveTexture??false)
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!url)throw new Error('Goalsave LTX no devolvió el vídeo.');
+  const response=await fetch(String(url));
+  if(!response.ok)throw new Error('Goalsave LTX no pudo descargar el vídeo ('+response.status+').');
+  const outputPath=path.join(dir,'goalsave-ltx-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  const dataBuf=Buffer.from(await response.arrayBuffer());
+  if(!dataBuf.length)throw new Error('Goalsave LTX devolvió un vídeo vacío.');
+  await fs.writeFile(outputPath,dataBuf);
+  const stat=await fs.stat(outputPath);
+  if(!stat.size)throw new Error('Goalsave LTX devolvió un vídeo vacío.');
+  return{outputPath,bytes:stat.size,provider:'Hugging Face · Goalsave LTX',model:'Goalsave/ltx-2-5-studio',durationSeconds:duration,status:'complete'};
+}
+
 async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   const {Client}=require('@gradio/client');
   const space=String(process.env.LTX_SPACE||'Lightricks/ltx-video-distilled').trim();
@@ -2083,47 +2111,43 @@ async function executeUrlToVideo(reference,jobId,options={}){
         '16:9, high-detail cinematic AI video, coherent continuous motion, original material, no watermark.'
       ].join('\\n');
       let generatedVideo=null;
-      try{
-        generatedVideo=await Promise.race([
-          generateFreeLtxVideoClip(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false}),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('LTX timeout after 90000 ms')),90000))
-        ]);
-        console.log('AUTOTUBE URL->AI LTX VIDEO DONE',generatedVideo?.provider||'unknown');
-      }catch(ltxErr){
-        console.warn('AUTOTUBE URL->AI LTX FAILED',ltxErr?.message||String(ltxErr));
+      const videoProviderErrors=[];
+      for(const provider of ['goalsave','ltx','pollinations']){
         try{
-          generatedVideo=await generatePollinationsVideoClip(prompt,dir,{durationSeconds:4});
-          console.log('AUTOTUBE URL->AI POLLINATIONS VIDEO DONE',generatedVideo?.provider||'unknown');
-        }catch(videoErr){
-          throw new Error('No hay proveedor de vídeo IA disponible para esta referencia: '+(videoErr?.message||String(videoErr)));
+          const fn=provider==='goalsave'?generateGoalsaveLtxVideoClip:(provider==='ltx'?generateFreeLtxVideoClip:generatePollinationsVideoClip);
+          generatedVideo=await Promise.race([
+            fn(prompt,dir,{durationSeconds:4,width:704,height:400,improveTexture:false}),
+            new Promise((_,reject)=>setTimeout(()=>reject(new Error(provider+' timeout')),90000))
+          ]);
+          if(generatedVideo?.outputPath)break;
+        }catch(err){
+          videoProviderErrors.push(provider+': '+String(err?.message||err));
+          console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));
         }
       }
+      if(!generatedVideo?.outputPath){
+        throw new Error('No hay un proveedor de vídeo IA disponible para esta referencia. '+videoProviderErrors.join(' | '));
+      }
+      console.log('AUTOTUBE URL->AI VIDEO DONE',generatedVideo.provider||'unknown');
       const audioProfile=visualReferenceAnalysis?.audioProfile||{};
-      let generatedAudio=null;
-      try{
-        generatedAudio=await generateMusicBuffer({
-          topic:aiReferenceTitle,
-          mood:String(audioProfile.musicMood||'original music matching the reference mood'),
-          audioProfile:{
-            ...audioProfile,
-            hasMusic:audioProfile.hasMusic===true,
-            hasSpeech:audioProfile.hasSpeech===true,
-            hasAmbience:audioProfile.hasAmbience===true,
-            hasSoundEffects:audioProfile.hasSoundEffects===true
-          },
-          durationSeconds:4
-        });
-      }catch(audioErr){
-        console.warn('AUTOTUBE URL->AI ORIGINAL AUDIO FAILED; using reference audio',audioErr?.message||String(audioErr));
+      const audioProfile=visualReferenceAnalysis?.audioProfile||{};
+      const generatedAudio=await generateMusicBuffer({
+        topic:aiReferenceTitle,
+        mood:String(audioProfile.musicMood||'original music matching the reference mood'),
+        audioProfile:{
+          ...audioProfile,
+          hasMusic:audioProfile.hasMusic===true,
+          hasSpeech:audioProfile.hasSpeech===true,
+          hasAmbience:audioProfile.hasAmbience===true,
+          hasSoundEffects:audioProfile.hasSoundEffects===true
+        },
+        durationSeconds:4
+      });
+      if(!generatedAudio?.buffer||!generatedAudio.buffer.length){
+        throw new Error('El proveedor de audio original no produjo audio válido.');
       }
       const audioPath=path.join(dir,'reference-matched-original-audio.wav');
-      if(generatedAudio?.buffer){
-        await fs.writeFile(audioPath,generatedAudio.buffer);
-      }else if(referenceDownloaded?.file){
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',referenceDownloaded.file ,'-vn','-sn','-dn','-t','4','-ac','2','-ar','48000','-c:a','pcm_s16le',audioPath]);
-      }else{
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000','-t','4','-c:a','pcm_s16le',audioPath]);
-      }
+      await fs.writeFile(audioPath,generatedAudio.buffer);
       const outputPath=path.join(renderJobDir,jobId+'.mp4');
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',generatedVideo.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf','scale=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath]);
       const validation=await validateRenderedMp4(outputPath,4);
