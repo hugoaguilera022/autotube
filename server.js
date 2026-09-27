@@ -2167,6 +2167,22 @@ async function generateGeminiOmniImageToVideoClip(imagePath,dir,options={}){
   return{outputPath,bytes:stat.size,provider:'Google Gemini Omni Flash',model:'gemini-omni-1.1-flash',referenceDriven:true,status:'complete'};
 }
 
+async function gradioPredictCompat(app,endpoint,args){
+  try{
+    return await app.predict(endpoint,args);
+  }catch(firstErr){
+    const message=String(firstErr?.message||firstErr);
+    if(!/job\\.result is not a function|result is not a function|submit/i.test(message))throw firstErr;
+    const submission=app.submit(endpoint,args);
+    let lastData=null;
+    for await(const event of submission){
+      if(event?.type==='data'&&event?.data!==undefined)lastData=event.data;
+    }
+    if(lastData!==null)return{data:lastData};
+    throw firstErr;
+  }
+}
+
 async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('Jiny34/Image-to-video');
