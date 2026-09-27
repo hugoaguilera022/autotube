@@ -1930,14 +1930,17 @@ async function executeUrlToVideo(reference,jobId){
     // streams are never copied into the alternative.
     const video=await getReferenceVideo(reference);
     if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
-
+    const referenceSourceDir=path.join(dir,'reference-source');
+    const referenceDownloaded=await downloadYoutubeReference(reference,referenceSourceDir);
+    const referenceProbe=referenceDownloaded.finalProbe||{};
+    if(!referenceDownloaded?.bytes)throw new Error('No se obtuvo una referencia MP4 validada.');
     const style=await analyzeYoutubeReferenceMedia(reference,video);
     if(job)job.progress=18;
 
     const referenceTitle=String(video.title||'Contenido original').slice(0,300);
     const visualReferenceAnalysis=style.visualAnalysis||{};
     const audioProfile={...(visualReferenceAnalysis.audioProfile||{})};
-    const durationSeconds=Math.max(1,Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis.videoProfile?.durationSeconds||60));
+    const durationSeconds=Math.max(1,Number(referenceProbe.durationSeconds)||Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis.videoProfile?.durationSeconds||60));
 
     const outlineResponse=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
       method:'POST',headers:{'Content-Type':'application/json'},
@@ -1986,16 +1989,19 @@ async function executeUrlToVideo(reference,jobId){
     }
     if(job)Object.assign(job,{progress:30,sceneCount:scenes.length,durationSeconds});
 
-    const mediaResponse=await fetch('http://127.0.0.1:'+PORT+'/api/media/search',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({scenes,referenceTopic:referenceTitle})
-    });
-    const mediaData=await mediaResponse.json();
-    if(!mediaResponse.ok)throw new Error(mediaData?.error||'No se pudieron buscar visuales originales.');
-    const mediaResults=Array.isArray(mediaData.results)?mediaData.results:[];
+    const aiMode=String(process.env.AUTOTUBE_URL_VIDEO_AI||'1')==='1';
+    let mediaResults=[];
+    if(!aiMode){
+      const mediaResponse=await fetch('http://127.0.0.1:'+PORT+'/api/media/search',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({scenes,referenceTopic:referenceTitle})
+      });
+      const mediaData=await mediaResponse.json();
+      if(!mediaResponse.ok)throw new Error(mediaData?.error||'No se pudieron buscar visuales originales.');
+      mediaResults=Array.isArray(mediaData.results)?mediaData.results:[];
+    }
     // AI mode: generate original visual assets from the reference-derived scene plan.
     // Keep the scene count bounded for Render while preserving the full timeline.
-    const aiMode=String(process.env.AUTOTUBE_URL_VIDEO_AI||'1')==='1';
     let aiClips=[];
     if(aiMode){
       const maxAiScenes=Math.max(1,Math.min(12,Number(process.env.AUTOTUBE_AI_MAX_SCENES)||12));
@@ -2028,11 +2034,13 @@ async function executeUrlToVideo(reference,jobId){
         if(job)job.progress=45+Math.round(((i+1)/scenes.length)*20);
       }
     }
-    const missing=scenes.filter((scene,i)=>{
-      const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
-      return !row?.media?.some(m=>m?.downloadUrl);
-    });
-    if(missing.length)throw new Error('No hay visuales descargables para '+missing.length+' escenas.');
+    if(!aiMode){
+      const missing=scenes.filter((scene,i)=>{
+        const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
+        return !row?.media?.some(m=>m?.downloadUrl);
+      });
+      if(missing.length)throw new Error('No hay visuales descargables para '+missing.length+' escenas.');
+    }
     if(job)job.progress=48;
 
     let narrationAudio=[];
