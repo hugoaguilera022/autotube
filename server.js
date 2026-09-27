@@ -562,7 +562,7 @@ async function generatePollinationsOriginalImage(prompt,dir,options={}) {
   const response=await fetch(url,{signal:AbortSignal.timeout(90000),headers:{Accept:'image/jpeg,image/png;q=0.9,*/*;q=0.1','User-Agent':'AutoTube/1.0'}});
   if(!response.ok)throw new Error('Pollinations image generation '+response.status);
   const bytes=Buffer.from(await response.arrayBuffer());
-  if(bytes.length<50000)throw new Error('Pollinations devolvió una imagen demasiado pequeña.');
+  if(bytes.length<10000)throw new Error('Pollinations devolvió una imagen demasiado pequeña.');
   const outputPath=path.join(dir,'pollinations-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.jpg');
   await fs.writeFile(outputPath,bytes);
   return{outputPath,bytes:bytes.length,provider:'Pollinations AI · Flux',model:'flux',status:'complete'};
