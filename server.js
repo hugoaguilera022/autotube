@@ -81,10 +81,21 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
       job.progress=30;
       let generated=null;
       const providerErrors=[];
-      try{generated=await generatePublicSvdImageToVideoClip(imagePath,dir,{prompt});}
-      catch(err){providerErrors.push('svd-space: '+String(err?.message||err));console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','svd-space',err?.message||String(err));}
-      if(!generated?.outputPath)try{generated=await generateWaveSpeedWanVideoClip(imagePath,dir,{prompt});}
-      catch(err){providerErrors.push('wan21-space: '+String(err?.message||err));console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','wan21-space',err?.message||String(err));}
+      try{
+        generated=await generateGeminiOmniImageToVideoClip(imagePath,dir,{
+          prompt,
+          referenceUrl:null
+        });
+      }catch(err){
+        providerErrors.push('gemini-omni: '+String(err?.message||err));
+        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','gemini-omni',err?.message||String(err));
+      }
+      if(!generated?.outputPath)try{
+        generated=await generateWaveSpeedWanVideoClip(imagePath,dir,{prompt});
+      }catch(err){
+        providerErrors.push('wan21-space: '+String(err?.message||err));
+        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','wan21-space',err?.message||String(err));
+      }
       if(!generated?.outputPath)throw new Error('No se pudo generar el MP4 IA condicionado por la referencia: '+providerErrors.join(' | '));
       job.progress=80;
       const outputPath=path.join(renderJobDir,jobId+'.mp4');
@@ -2179,30 +2190,31 @@ async function generateGeminiOmniImageToVideoClip(imagePath,dir,options={}){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY para generación de vídeo.');
   const image=await fs.readFile(imagePath);
-  const mime='image/jpeg';
-  const prompt=String(options.prompt||'Turn this reference image into NEW original cinematic footage. Preserve the observed subject, environment, composition, lighting and visual identity, but create a different shot with new motion and camera movement. Do not reproduce the source frame literally, do not copy text, logos or recordings.').slice(0,7000);
+  const prompt=String(options.prompt||'Create NEW original cinematic footage inspired by this reference image. Preserve the subject, environment, lighting, palette and audiovisual concept, but create different motion, camera movement, timing and details. Do not copy the source frame or any recording, logo, text, watermark or exact composition.').slice(0,12000);
   const response=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions?key='+encodeURIComponent(key),{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
       model:'gemini-omni-1.1-flash',
       input:[
-        {type:'image',data:image.toString('base64'),mime_type:mime},
-        {type:'text',text:prompt}
+        {type:'image',data:image.toString('base64'),mime_type:'image/jpeg'},
+        {type:'text',text:prompt+' Use the image only as a reference and generate a new video.'}
       ],
       generation_config:{video_config:{task:'image_to_video'}},
-      response_format:{type:'video',aspect_ratio:'16:9'}
+      response_format:{type:'video',aspect_ratio:'16:9',resolution:'720p'}
     }),
     signal:AbortSignal.timeout(600000)
   });
   const raw=await response.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}
-  if(!response.ok)throw new Error('Gemini vídeo HTTP '+response.status+': '+(data?.error?.message||raw.slice(0,500)));
-  const b64=data?.output_video?.data;
-  if(!b64)throw new Error('Gemini Omni no devolvió output_video.');
-  const outputPath=path.join(dir,'gemini-omni-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  if(!response.ok)throw new Error('Gemini Omni HTTP '+response.status+': '+(data?.error?.message||raw.slice(0,1000)));
+  const steps=Array.isArray(data?.steps)?data.steps:[];
+  const videoContent=steps.flatMap(x=>Array.isArray(x?.content)?x.content:[]).find(x=>x?.type==='video'&&x?.data);
+  const b64=data?.output_video?.data||videoContent?.data;
+  if(!b64)throw new Error('Gemini Omni no devolvió vídeo.');
+  const outputPath=path.join(dir,'gemini-omni-i2v-'+Date.now()+'.mp4');
   await fs.writeFile(outputPath,Buffer.from(b64,'base64'));
   const stat=await fs.stat(outputPath);
-  if(!stat.size)throw new Error('Gemini Omni devolvió un vídeo vacío.');
+  if(stat.size<10000)throw new Error('Gemini Omni devolvió un MP4 demasiado pequeño.');
   return{outputPath,bytes:stat.size,provider:'Google Gemini Omni Flash',model:'gemini-omni-1.1-flash',referenceDriven:true,status:'complete'};
 }
 
