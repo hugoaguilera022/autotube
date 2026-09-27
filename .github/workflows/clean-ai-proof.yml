@@ -49,6 +49,8 @@ jobs:
       - name: Download and validate MP4
         run: |
           set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
           curl -fsS --max-time 60 "https://autotube-ai-reference-proof.onrender.com/api/url-to-video/$JOB/download" -o autotube-reference-matched.mp4
           test -s autotube-reference-matched.mp4
           ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,codec_name,width,height,r_frame_rate -of json autotube-reference-matched.mp4 | tee validation.json
