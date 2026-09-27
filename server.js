@@ -2251,7 +2251,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
         }
         generatedVideo=await Promise.race([
           generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
-          new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),180000))
+          new Promise((_,reject)=>setTimeout(()=>reject(new Error('svd-space timeout')),300000))
         ]);
       }catch(err){
         videoProviderErrors.push('svd-space: '+String(err?.message||err));
