@@ -1,0 +1,51 @@
+name: Verify final animated MP4
+on:
+  push:
+    paths:
+      - .github/workflows/verify-final-animated.yml
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Render deploy
+        run: sleep 150
+      - name: Generate one MP4
+        env:
+          BASE: https://autotube-hfeu.onrender.com
+          REF: https://www.youtube.com/watch?v=P_iFWenf1VA
+        run: |
+          set -euo pipefail
+          curl -fsS -G --data-urlencode "reference=$REF" "$BASE/api/url-to-video" | tee start.json
+          python3 -c 'import json; print(json.load(open("start.json"))["jobId"])' > job.txt
+          for i in $(seq 1 120); do
+            job=$(cat job.txt)
+            curl -sS "$BASE/api/url-to-video/$job" -o status.json || true
+            cat status.json
+            grep -q '"status":"done"' status.json && exit 0
+            grep -q '"status":"error"' status.json && { cat status.json; exit 1; }
+            sleep 20
+          done
+          exit 1
+      - name: Download and inspect
+        env:
+          BASE: https://autotube-hfeu.onrender.com
+        run: |
+          set -euo pipefail
+          job=$(cat job.txt)
+          curl -fsSL "$BASE/api/url-to-video/$job/download" -o final.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height -of json final.mp4 | tee ffprobe.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('ffprobe.json')); s=d['streams']
+          assert any(x['codec_type']=='video' for x in s)
+          assert any(x['codec_type']=='audio' for x in s)
+          assert float(d['format']['duration'])>0
+          print('FINAL_MP4_VALID=1')
+          print('AUDIO_PRESENT=1')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-animated-mp4
+          path: |
+            final.mp4
+            ffprobe.json
