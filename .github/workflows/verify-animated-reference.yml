@@ -1,0 +1,85 @@
+name: Verify animated reference MP4
+on:
+  push:
+    branches: [main]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Render deploy
+        run: sleep 150
+      - name: Start one real URL-to-video generation
+        id: start
+        env:
+          BASE: https://autotube-studio-wfza.onrender.com
+          REF: https://www.youtube.com/watch?v=qMUk5jrgENE
+        run: |
+          set -euo pipefail
+          body=$(curl -fsS -G --data-urlencode "reference=$REF" "$BASE/api/url-to-video")
+          echo "$body" | tee start.json
+          job=$(python3 -c 'import json; print(json.load(open("start.json"))["jobId"])')
+          echo "job=$job" >> "$GITHUB_OUTPUT"
+      - name: Poll until MP4 is finished
+        env:
+          BASE: https://autotube-studio-wfza.onrender.com
+          JOB: ${{ steps.start.outputs.job }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 90); do
+            curl -sS -o status.json -w '%{http_code}' "$BASE/api/url-to-video/$JOB" || true
+            cat status.json
+            echo
+            if grep -q '"status":"done"' status.json; then exit 0; fi
+            if grep -q '"status":"error"' status.json; then exit 1; fi
+            sleep 20
+          done
+          exit 1
+      - name: Download and validate MP4
+        env:
+          BASE: https://autotube-studio-wfza.onrender.com
+          JOB: ${{ steps.start.outputs.job }}
+        run: |
+          set -euo pipefail
+          curl -fsSL "$BASE/api/url-to-video/$JOB/download" -o autotube-animated-reference.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate,duration -of json autotube-animated-reference.mp4 | tee ffprobe.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('ffprobe.json'))
+          streams=d.get('streams',[])
+          v=[s for s in streams if s.get('codec_type')=='video']
+          a=[s for s in streams if s.get('codec_type')=='audio']
+          assert v and a
+          assert v[0].get('width',0)>=640 and v[0].get('height',0)>=360
+          assert float(d['format']['duration'])>0
+          print('VALID_MP4=1')
+          print('HAS_AUDIO=1')
+          PY
+      - name: Validate animated DNA and motion
+        env:
+          BASE: https://autotube-studio-wfza.onrender.com
+          JOB: ${{ steps.start.outputs.job }}
+        run: |
+          set -euo pipefail
+          ffmpeg -v error -i autotube-animated-reference.mp4 -vf "fps=2,scale=320:-1,tblend=all_mode=difference" -frames:v 30 -f null -
+          curl -fsS "$BASE/api/url-to-video/$JOB" -o final-status.json
+          python3 - <<'PY'
+          import json
+          s=json.load(open('final-status.json'))
+          v=s.get('validation',{})
+          assert v.get('visualStyle')=='animated'
+          assert int(v.get('animatedSceneCount',0))>0
+          assert s.get('sceneCount',0)>0
+          assert s.get('referenceAudioVisualProfile')
+          print('ANIMATED_MODE=1')
+          print('ANIMATION_STYLE=',v.get('animationStyle'))
+          print('ANIMATED_SCENES=',v.get('animatedSceneCount'))
+          print('SCENE_COUNT=',s.get('sceneCount'))
+          print('REFERENCE_DNA=1')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autotube-animated-reference-mp4
+          path: |
+            autotube-animated-reference.mp4
+            ffprobe.json
+            final-status.json
