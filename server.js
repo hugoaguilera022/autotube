@@ -1265,10 +1265,11 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
     // Final safety pass: every AI scene must end as a standard 16:9 master.
     // Some image providers may ignore requested dimensions; normalize only when needed.
     const outProbe=await probeReferenceTechnical(out);
-    if(!((outProbe.width===1280&&outProbe.height===720)||(outProbe.width===1920&&outProbe.height===1080))){
+    const desiredW=Math.max(256,Math.round(Number(targetWidth)||1920)),desiredH=Math.max(256,Math.round(Number(targetHeight)||1080));
+    if(!(outProbe.width===desiredW&&outProbe.height===desiredH)){
       const normalized=path.join(dir,'autotube-final-normalized.mp4');
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',out,
-        '-vf','scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,format=yuv420p',
+        '-vf',`scale=${desiredW}:${desiredH}:force_original_aspect_ratio=increase,crop=${desiredW}:${desiredH},format=yuv420p`,
         '-map','0:v:0','-map','0:a:0?','-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p',
         '-c:a','aac','-b:a','192k','-ar','44100','-ac','2','-threads','1','-movflags','+faststart',normalized]);
       out=normalized;
@@ -1318,8 +1319,8 @@ async function validateRenderedMp4(file,expectedDuration=0){
   const width=Number(vm[1]),height=Number(vm[2]);
   const fps=fm?Number(fm[1]):0;
   const audioCodec=am?String(am[1]).toLowerCase():'';
-  const supportedResolution=(width===1280&&height===720)||(width===1920&&height===1080);
-  if(!supportedResolution)throw new Error('Resolución real del MP4: '+width+'x'+height+' (se esperaba 1280x720 o 1920x1080).');
+  const supportedResolution=(width===1280&&height===720)||(width===1920&&height===1080)||(width===720&&height===1280)||(width===1080&&height===1920)||(width===1080&&height===1080);
+  if(!supportedResolution)throw new Error('Resolución real del MP4: '+width+'x'+height+' (formato no compatible).');
   if(!fps||Math.abs(fps-30)>0.5)throw new Error('FPS reales del MP4: '+(fps||'desconocidos')+' (se esperaban 30).');  if(audioCodec!=='aac')throw new Error('Códec de audio real del MP4: '+(audioCodec||'desconocido')+' (se esperaba AAC).');
   return{width,height,fps,audioCodec,durationSeconds};
 }
@@ -1619,7 +1620,7 @@ async function executePreflight(){
         musicBuffer:null,
         onProgress:()=>{},
         finalOutputPath:output,
-        targetWidth:1920,targetHeight:1080,targetFps:30,targetDurationSeconds:durationSeconds
+        targetWidth:masterWidth,targetHeight:masterHeight,targetFps:30,targetDurationSeconds:durationSeconds
       });
       const validation=await validateRenderedMp4(output);
       if(!result?.size||!validation?.width)throw new Error('El pipeline de render no produjo un MP4 válido.');
@@ -2208,6 +2209,8 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(job)job.progress=68;
 
     const outputPath=path.join(renderJobDir,jobId+'.mp4');
+    const sourceWidth=Number(referenceProbe.width)||1920,sourceHeight=Number(referenceProbe.height)||1080,aspect=sourceWidth/Math.max(1,sourceHeight);
+    const masterWidth=aspect>1.15?1920:(aspect<0.87?1080:1080),masterHeight=aspect>1.15?1080:(aspect<0.87?1920:1080);
     const render=await renderAutotubeVideo({
       scenes,mediaResults,aiClips,narrationAudio,musicBuffer:music?.buffer||null,
       onProgress:p=>{if(job)job.progress=Math.min(96,68+Math.round(p*0.28));},
