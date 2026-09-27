@@ -1306,7 +1306,20 @@ async function executeUrlToVideo(reference,jobId,options={}){
         visualReferenceAnalysis,referenceStyle:style,language:'es',
         duration:String(Math.max(1,Math.round(durationSeconds/60))),
         title:outline?.title||referenceTitle,
-        outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
+        // Recreate the reference's narrative structure, but force the requested
+        // visual language to be animated original material.
+        script:String(outline?.script||outline?.customScript||'').trim(),
+        outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[],
+        creativeDirection:{
+          id:'autotube-animated-reference',
+          name:'Animación original basada en el guion',
+          visualStyle:'animación cinematográfica 2D/3D original',
+          animationStyle:'personajes y entornos animados, movimiento continuo, cámara cinematográfica, transiciones fluidas',
+          cameraLanguage:'travelling, paneo, zoom suave y movimientos de cámara animados',
+          motion:'movimiento visible en cada escena; evitar diapositivas estáticas',
+          transitions:'transiciones animadas coherentes con el ritmo del guion',
+          aspectRatio:'16:9'
+        }
       })
     });
     const planResponseData=await planResponse.json();
@@ -1440,7 +1453,11 @@ async function executeUrlToVideo(reference,jobId,options={}){
           audioHasMusic:Boolean(audioProfile.hasMusic),
           audioHasAmbience:Boolean(audioProfile.hasAmbience),
           visualContinuity:Boolean(visualReferenceAnalysis?.generationDirectives?.preserveVisualContinuity),
-          audioContinuity:Boolean(visualReferenceAnalysis?.generationDirectives?.preserveAudioContinuity)
+          audioContinuity:Boolean(visualReferenceAnalysis?.generationDirectives?.preserveAudioContinuity),
+          creativeDirection:planResponseData?.creativeDirection||null,
+          visualStyle:'animated',
+          animationStyle:planResponseData?.creativeDirection?.animationStyle||'animated cinematic 2D/3D',
+          animatedSceneCount:scenes.filter(s=>String(s.animationNotes||s.visualPrompt||'').match(/animat|2d|3d|motion|camera|movement|movimiento/i)).length
         }};
       job.finishedAt=Date.now();
     }
