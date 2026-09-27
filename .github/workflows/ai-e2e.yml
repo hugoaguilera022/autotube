@@ -1,26 +1,27 @@
 name: AI E2E verification
 on:
-  push:
-    branches: [e2e-stable]
+  workflow_dispatch:
+concurrency:
+  group: autotube-ai-e2e
+  cancel-in-progress: false
 jobs:
   ai-e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - name: Trigger real AI MP4 generation
-        shell: bash
+      - name: Trigger clean proof
         run: |
           set -euo pipefail
-          URL='https://autotube-verify.onrender.com/api/verify-ai-e2e?reference=https%3A%2F%2Fyoutu.be%2FFYPqzMoqa8s%3Fsi%3DrqhMotcUM6vq3yg7'
-          body="$(curl -fsS --retry 3 --retry-delay 5 "$URL")"
+          REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
+          body="$(curl -fsS --retry 3 --retry-delay 5 -X POST -H 'Content-Type: application/json' --data "{\"reference\":\"$REF\"}" https://autotube-verify.onrender.com/api/verify-ai-e2e)"
           echo "$body"
-          job="$(python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<<"$body")"
-          for i in $(seq 1 90); do
-            sleep 20
-            status="$(curl -fsS "https://autotube-verify.onrender.com/api/url-to-video/$job")"
+          JOB="$(python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<<"$body")"
+          for i in $(seq 1 135); do
+            sleep 10
+            status="$(curl -fsS --max-time 30 "https://autotube-verify.onrender.com/api/url-to-video/$JOB")"
             echo "$status"
-            python -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("status")=="done" else (2 if d.get("status")=="error" else 1))' <<<"$status" && exit 0
-            code=$?
-            if [ "$code" -eq 2 ]; then exit 1; fi
+            state="$(python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$status")"
+            if [ "$state" = "done" ]; then exit 0; fi
+            if [ "$state" = "error" ]; then exit 1; fi
           done
-          echo "AI E2E timed out"
           exit 1

@@ -1,55 +1,58 @@
 name: AutoTube E2E live regeneration test
 on:
-  workflow_dispatch:
   push:
+    branches: [e2e-stable]
+  workflow_dispatch:
+concurrency:
+  group: autotube-ai-e2e
+  cancel-in-progress: false
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - name: Wait for Render service
+      - name: Wait for Render
         run: |
           set -e
-          for i in $(seq 1 120); do
-            if curl --fail --silent --show-error https://autotube-hfeu.onrender.com/api/health -o health.json; then
-              cat health.json
+          for i in $(seq 1 90); do
+            curl -fsS --max-time 10 https://autotube-verify.onrender.com/api/health -o health.json && cat health.json && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Start one clean AI reference job
+        run: |
+          set -euo pipefail
+          REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
+          body="$(curl -fsS --retry 3 --retry-delay 5 -X POST -H 'Content-Type: application/json' --data "{\"reference\":\"$REF\"}" https://autotube-verify.onrender.com/api/verify-ai-e2e)"
+          echo "$body"
+          JOB="$(python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<<"$body")"
+          echo "JOB=$JOB" >> "$GITHUB_ENV"
+      - name: Poll and download MP4
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 135); do
+            sleep 10
+            status="$(curl -fsS --max-time 30 "https://autotube-verify.onrender.com/api/url-to-video/$JOB")"
+            echo "$status"
+            state="$(python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$status")"
+            if [ "$state" = "done" ]; then
+              curl -fsS --max-time 60 "https://autotube-verify.onrender.com/api/url-to-video/$JOB/download" -o autotube-reference-matched.mp4
+              test -s autotube-reference-matched.mp4
+              ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,codec_name,width,height,r_frame_rate -of json autotube-reference-matched.mp4 | tee validation.json
+              python - <<'PY'
+import json
+d=json.load(open("validation.json")); s=d.get("streams",[])
+assert any(x.get("codec_type")=="video" for x in s)
+assert any(x.get("codec_type")=="audio" for x in s), "audio stream missing"
+print("MP4 technical audiovisual validation: OK")
+PY
               exit 0
             fi
-            sleep 5
+            if [ "$state" = "error" ]; then exit 1; fi
           done
-          echo "Render service did not become healthy"
           exit 1
-      - name: Trigger regeneration
-        id: start
-        run: |
-          set -e
-          URL='https://autotube-hfeu.onrender.com/api/full-pipeline-test?reference=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dmh48xOkLhgU'
-          curl --fail --silent --show-error "$URL" -o start.json
-          cat start.json
-          JOB=$(python -c "import json; print(json.load(open('start.json'))['jobId'])")
-          echo "JOB=$JOB" >> "$GITHUB_ENV"
-      - name: Poll result
-        run: |
-          set -e
-          URL='https://autotube-hfeu.onrender.com/api/full-pipeline-test?reference=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dmh48xOkLhgU'
-          for i in $(seq 1 180); do
-            curl --silent --show-error --max-time 30 "https://autotube-hfeu.onrender.com/api/full-pipeline-test/$JOB" -o result.json || true
-            cat result.json || true
-            STATUS=$(python -c "import json; print(json.load(open('result.json')).get('status',''))" 2>/dev/null || true)
-            if [ "$STATUS" = "done" ]; then exit 0; fi
-            if [ "$STATUS" = "failed" ]; then exit 1; fi
-            if [ -z "$STATUS" ] || grep -qi 'Trabajo no encontrado\|servidor se reinició' result.json 2>/dev/null; then
-              for h in $(seq 1 30); do curl --fail --silent --show-error https://autotube-hfeu.onrender.com/api/health -o health.json && break || true; sleep 5; done
-              curl --fail --silent --show-error "$URL" -o start.json
-              JOB=$(python -c "import json; print(json.load(open('start.json'))['jobId'])")
-              echo "RESTARTED_JOB=$JOB"
-              sleep 5
-              continue
-            fi
-            sleep 5
-          done
-          echo "Timed out"
-          exit 1
-
-# live target verification pass
-
-# rerun verification
+      - name: Upload validated MP4
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-ai-reference-mp4
+          path: autotube-reference-matched.mp4
