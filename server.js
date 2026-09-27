@@ -1046,13 +1046,9 @@ async function executeFullPipelineTest(reference,testId=null){
     }
 
     await run('visual-sources-all-scenes',async()=>{
-      const r=await fetch('http://127.0.0.1:'+PORT+'/api/media/search',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({scenes:plan.scenes,referenceTopic:referenceTitle})
-      });
-      const d=await r.json();
-      if(!r.ok)throw new Error(d?.error||'Media search '+r.status);
-      mediaResults=Array.isArray(d.results)?d.results:[];
+      // Prefer original AI video generation first. This avoids making the E2E depend
+      // on third-party media-search providers that may return HTML/403/429.
+      mediaResults=plan.scenes.map(scene=>({number:scene.number,query:scene.searchQuery||scene.title||referenceTitle,media:[]}));
       // Generate original motion clips sequentially when LTX is available. Never run
       // scene generations concurrently on Render Free; that would spike memory/CPU.
       if(!style.constantImage){
