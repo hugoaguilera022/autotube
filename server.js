@@ -2007,8 +2007,8 @@ function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
 
 async function downloadReferenceDirectForAiE2E(url,dir){
   await fs.mkdir(dir,{recursive:true});
-  const downloader=global.__autotubeDownloadExactYoutube;
-  if(typeof downloader!=='function')throw new Error('El descargador exacto no está disponible.');
+  const downloader=global.__autotubeDownloadReferenceFast||global.__autotubeDownloadExactYoutube;
+  if(typeof downloader!=='function')throw new Error('El descargador de referencia no está disponible.');
   const downloaded=await downloader(url,dir);
   const sourcePath=String(downloaded?.source||'');
   if(!sourcePath)throw new Error('El descargador exacto no devolvió el archivo.');
