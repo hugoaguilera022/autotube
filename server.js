@@ -2069,14 +2069,24 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(options.forceAi){
       const aiReferenceTitle=String(video.title||reference||'Contenido original').slice(0,300);
       const prompt=[
-        'Create a NEW original AI-generated cinematic keyframe anchored to the public YouTube thumbnail and the concrete subject/theme of the reference.',
-        'Preserve the recognizable subject category and audiovisual language, but change composition, characters, details and action so the result is original.',
+        'Generate a NEW ORIGINAL AI VIDEO, not a still image and not a copy of the source recording.',
+        'The video must visibly depict the concrete reference subject matter, not a generic soldier or generic landscape.',
         'Reference topic: '+aiReferenceTitle,
         'Concrete reference-content hint: '+String(options.referenceHint||'').slice(0,4000),
-        'Visual analysis: '+JSON.stringify(style.visualAnalysis||{}).slice(0,7000),
-        '16:9, photorealistic, cinematic, high quality, original composition, no copied frames, no logos, no text, no watermark.'
+        'Visual analysis: '+JSON.stringify(style.visualAnalysis||{}).slice(0,5000),
+        'Use the concrete animals, props, setting, action and cinematic rhythm named in the reference hint. Create original characters and shots. No copied frames, no logos, no watermark, no text.',
+        '16:9 cinematic AI music-video look, dynamic motion, 4 seconds.'
       ].join('\n');
-      const generated=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
+      let generatedVideo=null;
+      try{
+        generatedVideo=await generatePollinationsVideoClip(prompt,dir,{durationSeconds:4});
+      }catch(videoErr){
+        console.warn('Pollinations true-video fallback to AI image-motion:',videoErr?.message||String(videoErr));
+      }
+      let generatedImage=null;
+      if(!generatedVideo){
+        generatedImage=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
+      }
       const audioProfile={
         hasMusic:true,hasSpeech:false,hasAmbience:true,hasSoundEffects:true,
         musicMood:'original cinematic marching folk-rock anthem matching the reference energy',
@@ -2092,14 +2102,18 @@ async function executeUrlToVideo(reference,jobId,options={}){
       const audioPath=path.join(dir,'reference-matched-original-audio.wav');
       await fs.writeFile(audioPath,generatedAudio.buffer);
       const outputPath=path.join(renderJobDir,jobId+'.mp4');
-      await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',generated.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf',"scale=1280:720,zoompan=z='min(zoom+0.001,1.08)':d=1:s=1280x720:fps=30",'-r','30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath].map(String));
+      if(generatedVideo){
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',generatedVideo.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf','scale=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath]);
+      }else{
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',generatedImage.outputPath,'-i',audioPath,'-t','4','-map','0:v:0','-map','1:a:0','-vf',"scale=1280:720,zoompan=z='min(zoom+0.001,1.08)':d=1:s=1280x720:fps=30",'-r','30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-shortest','-movflags','+faststart',outputPath]);
+      }
       const validation=await validateRenderedMp4(outputPath,4);
       const stat=await fs.stat(outputPath);
-      if(!stat.size)throw new Error('El MP4 IA ligero está vacío.');
+      if(!stat.size)throw new Error('El MP4 IA final está vacío.');
       if(job){
         job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
         job.sceneCount=1;job.durationSeconds=validation.durationSeconds;
-        job.validation={...validation,mode:'ai-reference-anchored-original',generatedByAi:true,aiProvider:generated.provider,aiModel:generated.model,audioProvider:generatedAudio.provider,sourceReference:reference,referenceVisualSource:'youtube-public-thumbnail+metadata',referenceAudioSource:'original-generated-audio-profile',referenceMatch:'subject/style/tempo profile'};
+        job.validation={...validation,mode:generatedVideo?'ai-video-reference-original':'ai-reference-anchored-original',generatedByAi:true,aiProvider:generatedVideo?.provider||generatedImage?.provider,aiModel:generatedVideo?.model||generatedImage?.model,audioProvider:generatedAudio.provider,sourceReference:reference,referenceVisualSource:'youtube-public-thumbnail+metadata+reference-hint',referenceAudioSource:'original-generated-audio-profile',referenceMatch:'subject/style/tempo profile'};
         job.finishedAt=Date.now();
       }
       return{ok:true,jobId,reference,referenceTitle:aiReferenceTitle,sceneCount:1,size:stat.size,durationSeconds:validation.durationSeconds,generatedByAi:true,validation:job?.validation};
