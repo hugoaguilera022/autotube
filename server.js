@@ -1333,26 +1333,70 @@ async function executeUrlToVideo(reference,jobId,options={}){
     }
     if(job)Object.assign(job,{progress:30,sceneCount:scenes.length,durationSeconds});
 
+    // Generate each scene strictly from the analyzed DNA. Providers are tried one at a time
+    // so a quota failure never creates overlapping generation jobs or aborts the whole render.
     for(let i=0;i<scenes.length;i++){
       const scene=scenes[i];
-      if(style.constantImage)continue;
-      const clip=await generateFreeLtxVideoClip(
-        String(scene.visualPrompt||scene.title||referenceTitle)+'; '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3200)+'; '+String(scene.animationNotes||'').slice(0,1200)+'; ORIGINAL MATERIAL ONLY.',
-        dir,
-        {durationSeconds:Math.min(8.5,Math.max(3,Number(scene.duration)||5)),width:704,height:396,improveTexture:false}
-      );
-      await validateGeneratedVideoClip(clip.outputPath);
-      aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model};
-    }
-    if(style.constantImage){
-      for(let i=0;i<scenes.length;i++){
-        const scene=scenes[i];
+      const dnaPrompt=[
+        String(scene.visualPrompt||scene.title||referenceTitle),
+        'REFERENCE DNA (style only, create original material): '+JSON.stringify({
+          videoProfile:visualReferenceAnalysis?.videoProfile||{},
+          animationProfile:visualReferenceAnalysis?.animationProfile||{},
+          structureProfile:visualReferenceAnalysis?.structureProfile||{},
+          segment:scene.referenceSegment||null
+        }).slice(0,7000),
+        String(scene.animationNotes||''),
+        String(scene.cameraMovement||''),
+        'ORIGINAL MATERIAL ONLY. Do not reproduce faces, characters, logos, text, frames, exact shots, recordings or copyrighted audio.'
+      ].filter(Boolean).join('; ');
+      if(style.constantImage){
         const imageDir=await fs.mkdtemp(path.join(dir,'scene-image-'));
-        const generated=await generateGeminiOriginalImage(
-          String(scene.visualPrompt||scene.searchQuery||scene.title||referenceTitle)+'; preserve the reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3500)+'. Create original material, no logos, no copied characters or frames, cinematic 16:9.',
-          imageDir,{model:'gemini-2.5-flash-image'}
-        );
+        let generated=null,lastError='';
+        for(const provider of ['gemini','pollinations']){
+          try{
+            generated=provider==='gemini'
+              ?await generateGeminiOriginalImage(dnaPrompt,imageDir,{model:'gemini-2.5-flash-image'})
+              :await generatePollinationsOriginalImage(dnaPrompt,imageDir,{width:1280,height:720});
+            break;
+          }catch(err){lastError=err?.message||String(err);}
+        }
+        if(!generated)throw new Error('No se pudo generar el visual IA de la escena '+scene.number+': '+lastError);
         mediaResults[i]={number:scene.number,media:[{provider:generated.provider,id:'generated-'+scene.number,title:'Original AI visual',duration:0,downloadUrl:generated.outputPath,mediaType:'image'}],generatedAsset:true};
+        continue;
+      }
+      let clip=null,lastError='';
+      try{
+        clip=await generateFreeLtxVideoClip(dnaPrompt,dir,{durationSeconds:Math.min(8.5,Math.max(3,Number(scene.duration)||5)),width:704,height:396,improveTexture:false});
+        await validateGeneratedVideoClip(clip.outputPath);
+      }catch(err){lastError=err?.message||String(err);console.warn('LTX unavailable for scene '+scene.number+':',lastError);}
+      if(clip){
+        aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model};
+        continue;
+      }
+      // Video-AI quota can be temporarily exhausted on Render Free. Fall back to a
+      // newly generated image with the same DNA and let FFmpeg animate it (Ken Burns).
+      const imageDir=await fs.mkdtemp(path.join(dir,'scene-image-fallback-'));
+      let generated=null;
+      for(const provider of ['gemini','pollinations']){
+        try{
+          generated=provider==='gemini'
+            ?await generateGeminiOriginalImage(dnaPrompt,imageDir,{model:'gemini-2.5-flash-image'})
+            :await generatePollinationsOriginalImage(dnaPrompt,imageDir,{width:1280,height:720});
+          break;
+        }catch(err){lastError=err?.message||String(err);}
+      }
+      if(generated){
+        mediaResults[i]={number:scene.number,media:[{provider:generated.provider,id:'generated-'+scene.number,title:'Original AI visual fallback',duration:0,downloadUrl:generated.outputPath,mediaType:'image'}],generatedAsset:true};
+      }else{
+        // Final non-AI visual fallback keeps the job renderable when all image/video
+        // providers are rate-limited. The scene prompt/DNA still controls the search.
+        const q=String(scene.searchQuery||scene.title||referenceTitle).slice(0,180);
+        let rows=[];
+        try{rows=await searchPexels(q)}catch{}
+        if(!rows.length){try{rows=await searchPixabay(q)}catch{}}
+        const selected=rows.find(x=>x?.url||x?.downloadUrl);
+        if(!selected)throw new Error('No hay proveedor visual disponible para la escena '+scene.number+'. Último error IA: '+lastError);
+        mediaResults[i]={number:scene.number,media:[{...selected,downloadUrl:selected.downloadUrl||selected.url,mediaType:selected.mediaType||'video'}],fallbackReason:lastError};
       }
     }
     if(job)job.progress=48;
