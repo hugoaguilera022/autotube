@@ -2248,8 +2248,12 @@ async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
   try{await app.predict('/switch_i2v_tab');}catch{}
   const submitResult=await app.predict('/i2v_generation_async',[prompt,handle_file(imagePath),false,-1]);
   const submitData=Array.isArray(submitResult?.data)?submitResult.data:[];
-  const taskId=String(submitData[0]||'').trim();
-  if(!taskId)throw new Error('Wan2.1 no devolvió task_id.');
+  const rawTask=submitData[0];
+  const taskId=String(
+    typeof rawTask==='string' ? rawTask :
+    rawTask?.task_id||rawTask?.taskId||rawTask?.id||rawTask?.value||''
+  ).trim();
+  if(!taskId)throw new Error('Wan2.1 no devolvió task_id: '+JSON.stringify(rawTask).slice(0,1200));
   const started=Date.now();
   let lastStatus='';
   for(let i=0;i<150;i++){
