@@ -82,16 +82,16 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
       let generated=null;
       const providerErrors=[];
       try{
-        generated=await generateWaveSpeedWanVideoClip(imagePath,dir,{prompt});
-      }catch(err){
-        providerErrors.push('wan21-space: '+String(err?.message||err));
-        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','wan21-space',err?.message||String(err));
-      }
-      if(!generated?.outputPath)try{
         generated=await generatePublicSvdImageToVideoClip(imagePath,dir,{prompt});
       }catch(err){
         providerErrors.push('svd-space: '+String(err?.message||err));
         console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','svd-space',err?.message||String(err));
+      }
+      if(!generated?.outputPath)try{
+        generated=await generateWaveSpeedWanVideoClip(imagePath,dir,{prompt});
+      }catch(err){
+        providerErrors.push('wan21-space: '+String(err?.message||err));
+        console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','wan21-space',err?.message||String(err));
       }
       if(!generated?.outputPath)try{
         generated=await generateGeminiOmniImageToVideoClip(imagePath,dir,{prompt,referenceUrl:null});
