@@ -7,6 +7,8 @@ const {spawn}=require('child_process');
 const youtubedl=require('youtube-dl-exec');
 const ffmpegPath=require('ffmpeg-static');
 const jobs=new Map();
+const renderJobDir=process.env.AUTOTUBE_RENDER_JOB_DIR||path.join(os.tmpdir(),'autotube-render-jobs');
+fs.mkdir(renderJobDir,{recursive:true}).catch(()=>{});
 function extractYoutubeVideoId(input){try{const u=new URL(String(input||'').trim()),h=u.hostname.toLowerCase();if(h==='youtu.be')return u.pathname.split('/').filter(Boolean)[0]||'';if(h==='youtube.com'||h==='www.youtube.com'||h.endsWith('.youtube.com')){const v=u.searchParams.get('v');if(v)return v;const p=u.pathname.split('/').filter(Boolean);if((p[0]==='shorts'||p[0]==='embed'||p[0]==='live')&&p[1])return p[1]} }catch{} return ''}
 function validYoutubeUrl(input){try{const u=new URL(String(input||'').trim()),h=u.hostname.toLowerCase();if(u.protocol!=='http:'&&u.protocol!=='https:')return false;if(h==='youtu.be')return /^\/[A-Za-z0-9_-]{6,20}$/.test(u.pathname);if(h==='youtube.com'||h==='www.youtube.com'||h.endsWith('.youtube.com'))return(u.pathname==='/watch'&&!!u.searchParams.get('v'))||/^\/shorts\/[A-Za-z0-9_-]{6,20}/.test(u.pathname)||/^\/embed\/[A-Za-z0-9_-]{6,20}/.test(u.pathname);return /\.(mp4|m4v|mov|webm|mkv)(?:$|\?)/i.test(u.pathname+u.search)}catch{}return false}
 function runFfmpeg(args){return new Promise((resolve,reject)=>{const p=spawn(ffmpegPath,args,{stdio:['ignore','ignore','pipe']});let e='';p.stderr.on('data',d=>{e+=d.toString();if(e.length>12000)e=e.slice(-12000)});p.on('error',reject);p.on('close',c=>c===0?resolve():reject(new Error('FFmpeg '+c+': '+e.slice(-2500))))})}
