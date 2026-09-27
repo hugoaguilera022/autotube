@@ -1389,7 +1389,11 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
         }
       }else{console.warn('OpenAI image fallback unavailable:',response.status,raw.slice(0,400));}
     }
-    throw new Error('No hay proveedor de imagen IA disponible (Gemini, Pollinations u OpenAI).');
+    try{
+      return await generatePollinationsOriginalImage(prompt,dir,options);
+    }catch(pollErr){
+      throw new Error('No hay proveedor de imagen IA disponible (Gemini, Pollinations u OpenAI): '+String(pollErr?.message||pollErr));
+    }
   }
   const model=String(options.model||'gemini-2.5-flash-image').trim();
   const controller=new AbortController();
@@ -1455,6 +1459,27 @@ async function generateChopperBluLtxVideoClip(prompt,dir,options={}) {
   await fs.writeFile(outputPath,dataBuf);
   const stat=await fs.stat(outputPath);
   return{outputPath,bytes:stat.size,provider:'Hugging Face · ChopperBlu LTX-2.5',model:'ChopperBlu/ltx-2-5-demo',durationSeconds:duration,status:'complete'};
+}
+
+async function generatePollinationsOriginalImage(prompt,dir,options={}){
+  const promptText=encodeURIComponent(String(prompt||'').slice(0,7000));
+  const urls=[
+    'https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true&model=flux',
+    'https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true'
+  ];
+  let lastErr=null;
+  for(const url of urls){
+    try{
+      const response=await fetch(url,{headers:{'User-Agent':'AutoTube/1.0 AI reference generator'},signal:AbortSignal.timeout(90000)});
+      if(!response.ok)throw new Error('Pollinations image '+response.status);
+      const data=Buffer.from(await response.arrayBuffer());
+      if(data.length<10000)throw new Error('Pollinations image too small');
+      const outputPath=path.join(dir,'pollinations-ai-frame-'+Date.now()+'-'+crypto.randomBytes(3).toString('hex')+'.jpg');
+      await fs.writeFile(outputPath,data);
+      return{outputPath,bytes:data.length,provider:'Pollinations AI image',model:'flux',status:'complete'};
+    }catch(err){lastErr=err;console.warn('Pollinations AI image fallback failed:',String(err?.message||err));}
+  }
+  throw lastErr||new Error('Pollinations image unavailable');
 }
 
 async function generatePollinationsVideoClip(prompt,dir,options={}){
@@ -2162,49 +2187,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       const visualReferenceAnalysis=style.visualAnalysis||{};
       const segments=Array.isArray(visualReferenceAnalysis?.structureProfile?.sceneSegments)
         ? visualReferenceAnalysis.structureProfile.sceneSegments : [];
-      // If YouTube blocks the MP4 download, create an AI-video fallback from
-      // the public thumbnail/metadata analysis. This keeps the pipeline generic:
-      // the subject comes from THIS URL, never from a hard-coded test video.
-      if(!referenceDownloaded?.file){
-        const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
-        if(!thumb)throw new Error('La referencia de YouTube no expone una miniatura pública utilizable.');
-        const profile=style.visualAnalysis||{};
-        const audioProfile=profile.audioProfile||{};
-        const fallbackTitle=String(video.title||reference||'Contenido de referencia').slice(0,300);
-        const imageCount=4;
-        const imagePaths=[];
-        for(let i=0;i<imageCount;i++){
-          const segment=profile?.structureProfile?.sceneSegments?.[Math.min(
-            Math.max(0,(profile?.structureProfile?.sceneSegments?.length||1)-1),
-            Math.floor(i*(profile?.structureProfile?.sceneSegments?.length||1)/imageCount)
-          )]||{};
-          const imagePrompt=[
-            'Generate a NEW ORIGINAL 16:9 cinematic frame for an AI-generated video based on this specific YouTube reference.',
-            'Preserve the concrete subject/theme visibly established by the public thumbnail and metadata. Do not switch to an unrelated generic topic.',
-            'Use the reference only as visual guidance. Do not copy the exact thumbnail, text, logo, face, or composition.',
-            'Create a coherent continuation frame with the same broad subject, setting, palette, lighting and visual language.',
-            'Temporal section '+(i+1)+' of '+imageCount+': '+String(segment.summary||segment.subject||fallbackTitle),
-            'Composition: '+String(segment.composition||profile?.videoProfile?.composition||'16:9 cinematic'),
-            'Lighting: '+String(segment.lighting||profile?.videoProfile?.lighting||'coherent lighting'),
-            'Palette: '+String(segment.palette||profile?.videoProfile?.palette||'reference-derived palette'),
-            'Motion intention: '+String(segment.cameraMovement||profile?.animationProfile?.cameraMotion||'subtle cinematic movement'),
-            'Original material only, no watermark, no copied footage, no text unless naturally required by the subject.'
-          ].join('\\n');
-          const generated=await generateGeminiOriginalImage(imagePrompt,dir,{model:'gemini-2.5-flash-image',referenceImageUrl:thumb});
-          imagePaths.push(generated.outputPath);
-        }
-        const fallbackVideoPath=path.join(dir,'ai-reference-motion-fallback.mp4');
-        const inputs=[];
-        for(const imagePath of imagePaths)inputs.push('-loop','1','-t','1','-i',imagePath);
-        const filters=imagePaths.map((_,i)=>`[${i}:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,zoompan=z='min(zoom+0.0015,1.06)':d=30:s=1280x720:fps=30,format=yuv420p[v${i}]`).join(';');
-        const concat=imagePaths.map((_,i)=>`[v${i}]`).join('')+`concat=n=${imagePaths.length}:v=1:a=0[outv]`;
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error',...inputs,'-filter_complex',filters+';'+concat,'-map','[outv]','-t','4','-an','-c:v','libx264','-preset','veryfast','-crf','22','-pix_fmt','yuv420p',fallbackVideoPath]);
-        generatedVideo={outputPath:fallbackVideoPath,provider:'Gemini image-to-motion fallback',model:'gemini-2.5-flash-image',referenceDriven:true};
-        // No source audio is available in this mode. Generate original audio
-        // only from the profile inferred from the URL's public metadata.
-        console.log('AUTOTUBE AI VIDEO FALLBACK READY',JSON.stringify({reference,strategy:'thumbnail-metadata->Gemini-images->FFmpeg-motion',audioProfile}));
-      }
-
+      // If the reference MP4 is unavailable, the generic visual profile and public thumbnail remain valid inputs.
       let generatedVideo=null;
       const prompt=[
         'Create NEW ORIGINAL AI-generated video material from this specific YouTube reference.',
@@ -2246,27 +2229,25 @@ async function executeUrlToVideo(reference,jobId,options={}){
           if(generatedVideo?.outputPath)break;
         }catch(err){videoProviderErrors.push(provider+': '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));}
       }
-      if(!generatedVideo?.outputPath && referenceDownloaded?.file){
-        const fallbackSegments=Array.isArray(segments)&&segments.length ? segments : [{startSeconds:0,endSeconds:Number(referenceDownloaded.probe?.durationSeconds)||4,summary:aiReferenceTitle}];
+      if(!generatedVideo?.outputPath){
+        const fallbackSegments=Array.isArray(segments)&&segments.length ? segments : [{startSeconds:0,endSeconds:4,summary:aiReferenceTitle}];
         const count=Math.max(2,Math.min(6,fallbackSegments.length));
         const imagePaths=[];
         for(let n=0;n<count;n++){
           const seg=fallbackSegments[Math.min(fallbackSegments.length-1,Math.floor(n*fallbackSegments.length/count))]||{};
-          const startSeconds=Math.max(0,Number(seg.startSeconds)||0);
-          const sourceFrame=path.join(dir,'reference-segment-'+n+'.jpg');
-          await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss',String(startSeconds),'-i',referenceDownloaded.file,'-frames:v','1','-q:v','2',sourceFrame]);
           const imagePrompt=[
-            'Create an ORIGINAL AI-generated cinematic frame conditioned on the REAL FRAME from this exact YouTube reference segment.',
-            'Preserve the concrete subject(s), setting, action, shot scale, composition, lighting, palette and visual continuity visible in the supplied frame and described below.',
-            'Do not substitute the subject with a generic theme or unrelated content.',
-            'Create new original material; do not copy the exact frame, face, logo, text, watermark, recording or copyrighted footage.',
-            'REFERENCE TITLE: '+aiReferenceTitle,
-            'SEGMENT: '+JSON.stringify(seg).slice(0,5000),
-            'GLOBAL VISUAL PROFILE: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,2500),
-            'MOTION PROFILE: '+JSON.stringify(visualReferenceAnalysis?.animationProfile||{}).slice(0,1800),
-            '16:9, high-detail cinematic AI image, coherent original visual continuity, no watermark.'
-          ].join('\n');
-          const generatedImage=await generateGeminiOriginalImage(imagePrompt,dir,{referenceImagePath:sourceFrame,referenceImageUrl:video?.thumbnail||video?.thumbnails?.[0]||''});
+            'Create an ORIGINAL AI-generated cinematic frame for a new video based on the specific YouTube reference analyzed by AutoTube.',
+            'Keep the SAME concrete subject, setting, action, composition, lighting, palette, animation language and visual rhythm described by the reference profile.',
+            'Do not switch to a generic unrelated topic. Do not copy the source frame, logo, text, face, watermark or exact composition.',
+            'Reference title: '+aiReferenceTitle,
+            'Reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3000),
+            'Reference animation profile: '+JSON.stringify(visualReferenceAnalysis?.animationProfile||{}).slice(0,2200),
+            'Reference segment: '+JSON.stringify(seg).slice(0,4000),
+            'Reference generation directives: '+JSON.stringify(visualReferenceAnalysis?.generationDirectives||{}).slice(0,1800),
+            'Create coherent original 16:9 cinematic material, high detail, natural continuity, no watermark.',
+            'This is scene '+(n+1)+' of '+count+'; preserve continuity with the reference across scenes.'
+          ].join('\\n');
+          const generatedImage=await generateGeminiOriginalImage(imagePrompt,dir,{model:'gemini-2.5-flash-image',referenceImageUrl:video?.thumbnail||video?.thumbnails?.[0]||''});
           imagePaths.push(generatedImage.outputPath);
         }
         const montagePath=path.join(dir,'ai-reference-frame-conditioned.mp4');
@@ -2275,12 +2256,12 @@ async function executeUrlToVideo(reference,jobId,options={}){
         const lines=[];
         for(const p of imagePaths){lines.push('file '+JSON.stringify(p));lines.push('duration '+durationPer);}
         lines.push('file '+JSON.stringify(imagePaths[imagePaths.length-1]));
-        await fs.writeFile(concatList,lines.join('\n')+'\n');
-        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',concatList,'-vf',"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.001,1.06)':d=120:s=1280x720:fps=30",'-t','4','-c:v','libx264','-preset','veryfast','-crf','22','-pix_fmt','yuv420p','-an',montagePath]);
+        await fs.writeFile(concatList,lines.join('\\n')+'\\n');
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',concatList,'-vf',"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0012,1.05)':d=120:s=1280x720:fps=30",'-t','4','-c:v','libx264','-preset','veryfast','-crf','22','-pix_fmt','yuv420p','-an',montagePath]);
         const st=await fs.stat(montagePath);
-        if(!st.size)throw new Error('El fallback IA condicionado por fotogramas produjo un MP4 vacío.');
-        generatedVideo={outputPath:montagePath,bytes:st.size,provider:'AI frame-conditioned montage',model:'AI image generation + FFmpeg motion',status:'complete',referenceDriven:true};
-        console.log('AUTOTUBE URL->AI FRAME-CONDITIONED MONTAGE DONE',JSON.stringify({reference,bytes:st.size,count}));
+        if(!st.size)throw new Error('El fallback IA condicionado produjo un MP4 vacío.');
+        generatedVideo={outputPath:montagePath,bytes:st.size,provider:'AI image-conditioned montage',model:'Pollinations/Imagen + FFmpeg motion',status:'complete',referenceDriven:true};
+        console.log('AUTOTUBE URL->AI IMAGE-CONDITIONED MONTAGE DONE',JSON.stringify({reference,bytes:st.size,count}));
       }
       if(!generatedVideo?.outputPath){
         throw new Error('No hay proveedor de vídeo IA disponible tras '+videoProviderErrors.join(' | '));
