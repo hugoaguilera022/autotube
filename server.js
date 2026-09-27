@@ -36,24 +36,42 @@ function parseJsonResponse(text){
   throw new Error('Respuesta JSON inválida de Gemini: '+(lastError?.message||'formato no recuperable'));
 }
 const app=express();
+function findActiveUrlVideoJob(){
+  if(activeUrlVideoJobId){const active=urlVideoJobs.get(activeUrlVideoJobId);if(active&&['queued','processing'].includes(active.status))return active;}
+  return [...urlVideoJobs.values()].find(j=>['queued','processing'].includes(j.status))||null;
+}
+function pumpUrlVideoQueue(){
+  if(activeUrlVideoJobId)return;
+  const jobId=queuedUrlVideoJobs.shift();
+  if(!jobId)return;
+  const job=urlVideoJobs.get(jobId);
+  if(!job||job.status!=='queued'){setImmediate(pumpUrlVideoQueue);return;}
+  activeUrlVideoJobId=jobId;
+  job.status='processing';job.startedAt=Date.now();job.progress=Math.max(1,Number(job.progress)||1);
+  executeUrlToVideo(job.reference,jobId,job.options||{})
+    .then(result=>{if(job.status==='processing'){job.status=result?.ok?'done':'error';job.result=result;job.progress=result?.ok?100:job.progress;job.finishedAt=Date.now();}})
+    .catch(err=>{job.status='error';job.progress=100;job.error=err?.message||String(err);job.finishedAt=Date.now();console.error('AUTOTUBE URL-TO-VIDEO QUEUE FAILED',jobId,err?.stack||String(err));})
+    .finally(()=>{if(activeUrlVideoJobId===jobId)activeUrlVideoJobId=null;setImmediate(pumpUrlVideoQueue);});
+}
+function enqueueUrlVideoJob(reference,options={}){
+  const normalized=String(reference||'').trim();
+  const existing=findActiveUrlVideoJob();
+  if(existing)return{job:existing,queued:false,existing:true};
+  const same=[...urlVideoJobs.values()].find(j=>j.reference===normalized&&['queued','processing'].includes(j.status));
+  if(same)return{job:same,queued:false,existing:true};
+  const jobId='urlvideo_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  const job={id:jobId,reference:normalized,status:'queued',progress:0,createdAt:Date.now(),outputPath:null,error:null,options};
+  urlVideoJobs.set(jobId,job);queuedUrlVideoJobs.push(jobId);pumpUrlVideoQueue();
+  return{job,queued:true,existing:false};
+}
 app.post('/api/verify-ai-e2e',async(req,res)=>{
   const reference=String(req.body?.reference||req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({error:'reference requerida'});
   const videoId=extractYoutubeVideoId(reference);
   if(!videoId)return res.status(400).json({error:'URL de YouTube no válida'});
-  const active=activeUrlVideoJobId&&urlVideoJobs.get(activeUrlVideoJobId);
-  if(active&&['processing','queued'].includes(active.status)){
-    return res.status(202).json({ok:false,status:'queued',jobId:active.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(active.id),reference:active.reference,queuePosition:1});
-  }
-  const jobId='ai-e2e-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex');
-  const job={id:jobId,reference,status:'processing',progress:1,outputPath:null,error:null,startedAt:Date.now(),queue:'single-reference-generation'};
-  urlVideoJobs.set(jobId,job);
-  activeUrlVideoJobId=jobId;
-  executeUrlToVideo(reference,jobId,{referenceTitle:'AI reference',forceAi:true})
-    .then(result=>{if(job.status==='processing'){job.status=result?.ok?'done':'error';job.result=result;job.finishedAt=Date.now();}})
-    .catch(err=>{job.status='error';job.progress=100;job.error=err?.message||String(err);job.finishedAt=Date.now();console.error('AUTOTUBE AI E2E FAILED',err?.stack||String(err));})
-    .finally(()=>{if(activeUrlVideoJobId===jobId)activeUrlVideoJobId=null;});
-  res.status(202).json({ok:false,status:'processing',jobId,statusUrl:'/api/url-to-video/'+encodeURIComponent(jobId),reference});
+  const result=enqueueUrlVideoJob(reference,{referenceTitle:'AI reference',forceAi:true});
+  const job=result.job;
+  return res.status(result.queued?202:202).json({ok:false,status:job.status,jobId:job.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(job.id),reference,queuePosition:job.status==='queued'?queuedUrlVideoJobs.indexOf(job.id)+1:0,existing:result.existing||false});
 });
 
 async function geminiYoutubeUrlAnalysis(reference){
