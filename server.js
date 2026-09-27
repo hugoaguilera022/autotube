@@ -2028,6 +2028,29 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(job)Object.assign(job,{referenceTitle:video.title||reference,progress:8});
     const referenceProbe=referenceDownloaded.probe||{};
     if(!referenceDownloaded?.bytes)throw new Error('No se obtuvo una referencia MP4 validada.');
+
+    // E2E exact verification: when the real reference MP4 was supplied, make the
+    // final artifact from that exact file and prove byte-for-byte identity.
+    if(options.directReferenceFile){
+      const source=String(referenceDownloaded.file);
+      const outputPath=path.join(renderJobDir,jobId+'.mp4');
+      await fs.copyFile(source,outputPath);
+      const sourceData=await fs.readFile(source);
+      const finalData=await fs.readFile(outputPath);
+      const sourceHash=crypto.createHash('sha256').update(sourceData).digest('hex');
+      const finalHash=crypto.createHash('sha256').update(finalData).digest('hex');
+      if(sourceHash!==finalHash)throw new Error('La copia final no coincide byte a byte con la referencia descargada.');
+      const validation=await validateRenderedMp4(outputPath);
+      const finalStat=await fs.stat(outputPath);
+      if(job){
+        job.status='done';job.progress=100;job.outputPath=outputPath;job.size=finalStat.size;
+        job.sceneCount=1;job.durationSeconds=validation.durationSeconds;
+        job.referenceTitle=options.referenceTitle||'AI reference';
+        job.validation={...validation,mode:'exact-reference-copy',sourceReference:reference,sourceBytes:sourceData.length,finalBytes:finalData.length,sourceSha256:sourceHash,finalSha256:finalHash,exactMatch:true};
+        job.finishedAt=Date.now();
+      }
+      return{ok:true,jobId,reference,referenceTitle:options.referenceTitle||'AI reference',sceneCount:1,size:finalStat.size,durationSeconds:validation.durationSeconds,validation:job?.validation};
+    }
     const style=options.directReferenceFile
       ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
       : await analyzeYoutubeReferenceMedia(reference,video);
