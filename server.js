@@ -447,9 +447,9 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
     for(let i=0;i<sceneInputs.length;i++){
       const x=sceneInputs[i];
       if(x.aiClip?.path||x.aiClip?.buffer||!x.media?.downloadUrl)continue;
-      const p=path.join(dir,'pre-'+i+'.mp4');
-      await downloadToFile(x.media.downloadUrl,p);
-      preparedInputs[i]=p;
+      const source=String(x.media.downloadUrl||'');
+      if(path.isAbsolute(source)){preparedInputs[i]=source;}
+      else{const p=path.join(dir,'pre-'+i+'.mp4');await downloadToFile(source,p);preparedInputs[i]=p;}
     }
     for(let i=0;i<total;i++){
       const{scene,found,aiClip,media,audio}=sceneInputs[i];
