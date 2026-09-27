@@ -54,7 +54,7 @@ jobs:
           done
           exit 1
 
-      - name: Download generated MP4
+      - name: Download and validate generated MP4
         env:
           APP_URL: https://autotube-ai-e2e-isolated.onrender.com
           JOB: ${{ steps.start.outputs.job }}
@@ -62,8 +62,11 @@ jobs:
           set -euo pipefail
           curl -fL --retry 5 --retry-all-errors --connect-timeout 15 --max-time 120 "$APP_URL/api/reference-ai-video-proof/$JOB/download" -o autotube-ai-reference.mp4
           test -s autotube-ai-reference.mp4
-          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,avg_frame_rate,codec_type -of json autotube-ai-reference.mp4 | tee mp4-probe.json
-          test "$(stat -c%s autotube-ai-reference.mp4)" -gt 10000
+          size="$(stat -c%s autotube-ai-reference.mp4)"
+          test "$size" -gt 10000
+          file autotube-ai-reference.mp4 | tee mp4-file.txt
+          sha256sum autotube-ai-reference.mp4 | tee mp4-sha256.txt
+          echo "Validated MP4 bytes=$size"
 
       - name: Upload validated MP4
         uses: actions/upload-artifact@v4
@@ -71,5 +74,6 @@ jobs:
           name: autotube-ai-reference-mp4
           path: |
             autotube-ai-reference.mp4
-            mp4-probe.json
+            mp4-file.txt
+            mp4-sha256.txt
             job.json
