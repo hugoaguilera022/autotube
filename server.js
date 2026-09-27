@@ -532,7 +532,7 @@ async function validateAnimatedMotion(file){
     p.on('error',reject);
     p.on('close',code=>code===0?resolve(out):reject(new Error('No se pudo comprobar el movimiento del MP4: '+err.slice(-800))));
   });
-  const hashes=String(result).split(/\r?\n/).filter(x=>/^[0-9]+,\s*[0-9]+,\s*[0-9]+,\s*[0-9]+,\s*[0-9a-f]{32}$/i.test(x)).map(x=>x.split(',').pop().trim());
+  const hashes=String(result).split(/\r?\n/).map(x=>x.trim()).filter(x=>/[0-9a-f]{32}$/i.test(x)).map(x=>x.split(',').pop().trim()).filter(x=>/^[0-9a-f]{32}$/i.test(x));
   const uniqueHashes=[...new Set(hashes)];
   if(hashes.length<2||uniqueHashes.length<2)throw new Error('El MP4 final no presenta movimiento real entre frames; se detectó una imagen estática.');
   return{motionDetected:true,sampledFrames:hashes.length,uniqueFrames:uniqueHashes.length};
