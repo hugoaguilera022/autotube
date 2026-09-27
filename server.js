@@ -1347,6 +1347,9 @@ async function executeUrlToVideo(reference,jobId,options={}){
     }
     if(job)Object.assign(job,{progress:30,sceneCount:scenes.length,durationSeconds});
 
+    const mediaResults=scenes.map((scene)=>({number:scene.number,media:[]}));
+    const aiClips=[];
+
     // Generate each scene strictly from the analyzed DNA. Providers are tried one at a time
     // so a quota failure never creates overlapping generation jobs or aborts the whole render.
     for(let i=0;i<scenes.length;i++){
