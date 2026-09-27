@@ -1999,6 +1999,36 @@ async function executeUrlToVideo(reference,jobId,options={}){
       : await analyzeYoutubeReferenceMedia(reference,video);
     if(job)job.progress=18;
 
+    // Lightweight proof path: create one original AI visual from the reference
+    // and turn it into a short, technically validated MP4. This avoids LTX/ZeroGPU
+    // memory spikes on constrained Render instances while keeping the media original.
+    if(options.forceAi){
+      const aiReferenceTitle=String(video.title||reference||'Contenido original').slice(0,300);
+      const prompt=[
+        'Create a NEW original AI-generated cinematic video keyframe inspired only by the reference style.',
+        'Reference topic: '+aiReferenceTitle,
+        'Visual analysis: '+JSON.stringify(visualReferenceAnalysis).slice(0,5000),
+        '16:9, photorealistic, high quality, original composition, no copied frames, no logos, no text, no watermark.'
+      ].join('\n');
+      const generated=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
+      const outputPath=path.join(renderJobDir,jobId+'.mp4');
+      await new Promise((resolve,reject)=>{
+        const p=spawn(ffmpegPath,['-y','-loop','1','-i',generated.outputPath,'-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000','-t','4','-vf','scale=1280:720,zoompan=z=1.0+0.0008*on:d=1:s=1280x720:fps=30','-r','30','-c:v','libx264','-preset','veryfast','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-shortest',outputPath],{stdio:['ignore','pipe','pipe']});
+        let err=''; p.stderr.on('data',x=>{err+=x.toString();if(err.length>12000)err=err.slice(-12000);});
+        p.on('error',reject); p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg AI MP4 failed: '+err.slice(-2000))));
+      });
+      const validation=await validateRenderedMp4(outputPath,4);
+      const stat=await fs.stat(outputPath);
+      if(!stat.size)throw new Error('El MP4 IA ligero está vacío.');
+      if(job){
+        job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
+        job.sceneCount=1;job.durationSeconds=validation.durationSeconds;
+        job.validation={...validation,mode:'ai-image-motion-original',generatedByAi:true,aiProvider:generated.provider,aiModel:generated.model,sourceReference:reference,referenceVisualSource:'youtube-reference-analysis'};
+        job.finishedAt=Date.now();
+      }
+      return{ok:true,jobId,reference,referenceTitle:aiReferenceTitle,sceneCount:1,size:stat.size,durationSeconds:validation.durationSeconds,generatedByAi:true,validation:job?.validation};
+    }
+
     const referenceTitle=String(video.title||'Contenido original').slice(0,300);
     const visualReferenceAnalysis=style.visualAnalysis||{};
     const audioProfile={...(visualReferenceAnalysis.audioProfile||{})};
