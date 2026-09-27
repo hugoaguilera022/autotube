@@ -430,61 +430,6 @@ async function analyzeYoutubeReferenceMedia(url,video){
       return analyzed;
     }catch(downloadErr){
       throw new Error('REFERENCIA_REAL_OBLIGATORIA: no se obtuvieron los bytes del MP4 de YouTube. '+String(downloadErr?.message||downloadErr));
-    }
-      const vp=analysis?.videoProfile||{};
-      const ap={...(analysis?.audioProfile||{})};
-      const an=analysis?.animationProfile||{};
-      const sp=analysis?.structureProfile||{};
-      const gd=analysis?.generationDirectives||{};
-      vp.durationSeconds=Number(vp.durationSeconds||durationSeconds)||durationSeconds;
-      vp.constantImage=Boolean(vp.constantImage);
-      const titleText=(String(video?.title||'')+' '+String(video?.description||'')+' '+(Array.isArray(video?.tags)?video.tags.join(' '):'')).toLowerCase();
-      const speechLikely=/documentary|documental|story|historia|explained|explain|tutorial|review|news|noticias|podcast|interview|entrevista|guide|guía|top \d|10 lugares|lugares|how to|como hacer/.test(titleText);
-      const musicLikely=/music|música|song|canción|mix|remix|dj|beats|lofi|ambient|soundtrack|instrumental/.test(titleText);
-      if(ap.hasSpeech===null||ap.hasSpeech===undefined)ap.hasSpeech=speechLikely;
-      if(ap.hasMusic===null||ap.hasMusic===undefined)ap.hasMusic=!speechLikely||musicLikely;
-      if(ap.hasAmbience===null||ap.hasAmbience===undefined)ap.hasAmbience=true;
-      if(ap.hasSoundEffects===null||ap.hasSoundEffects===undefined)ap.hasSoundEffects=false;
-      if(!ap.language)ap.language='es';
-      if(!ap.voiceStyle)ap.voiceStyle='Natural y cercana';
-      if(!ap.musicMood)ap.musicMood='Original cinematográfico coherente con el tema';
-      if(!ap.energy)ap.energy='media';
-      if(!sp.segmentCount)sp.segmentCount=Math.max(1,Math.ceil(durationSeconds/20));
-      if(!Array.isArray(sp.sceneSegments)||!sp.sceneSegments.length){
-        sp.sceneSegments=Array.from({length:sp.segmentCount},(_,i)=>{
-          const start=(durationSeconds/sp.segmentCount)*i;
-          const end=(durationSeconds/sp.segmentCount)*(i+1);
-          return{startSeconds:Math.round(start*10)/10,endSeconds:Math.round(end*10)/10,summary:String(video?.title||'Tema de referencia'),subject:String(video?.title||'Tema de referencia'),shotScale:'cinematic',composition:vp.composition||'horizontal 16:9',cameraMovement:vp.cameraMovement||'subtle',motionIntensity:an.motionIntensity||'medium',lighting:vp.lighting||'coherente',palette:vp.palette||'coherente',transitionIn:i?'smooth':'opening',transitionOut:i<sp.segmentCount-1?'smooth':'ending',audioRole:'continuous',narrationRole:ap.hasSpeech?'narration':'none',continuityAnchor:String(video?.title||'tema principal'),generationPrompt:String(video?.title||'')+'; original audiovisual treatment'
-          };
-        });
-      }
-      gd.useSingleContinuousVisual=Boolean(gd.useSingleContinuousVisual||vp.constantImage);
-      gd.preferredSceneCount=gd.useSingleContinuousVisual?1:Math.max(1,Number(gd.preferredSceneCount||sp.segmentCount||1));
-      gd.preserveVisualContinuity=true;
-      gd.preserveAudioContinuity=true;
-      analysis.videoProfile=vp;
-      analysis.audioProfile=ap;
-      analysis.animationProfile=an;
-      analysis.structureProfile=sp;
-      analysis.generationDirectives=gd;
-      return{
-        visualAnalysis:analysis,
-        visualSource:'youtube-metadata+public-thumbnails',
-        analysisSource:'Thumbnail/metadata fallback (YouTube media download unavailable)',
-        thumbnailCount:images.length,
-        referenceFileBytes:0,
-        hasFullVideoAnalysis:false,
-        hasAudioAnalysis:false,
-        audioAnalysisSource:'metadata inference only; original audio not downloaded',
-        hasAnimationAnalysis:true,
-        hasStructureAnalysis:true,
-        measuredVisualContinuity:{source:'public thumbnails',constantImage:Boolean(vp.constantImage)},
-        constantImage:Boolean(vp.constantImage),
-        estimatedSceneCount:Number(vp.estimatedSceneCount||sp.segmentCount||1),
-        preferredSceneCount:Number(gd.preferredSceneCount||1),
-        fallbackReason:String(downloadErr?.message||downloadErr||'YouTube media download unavailable').slice(0,1000)
-      };
-    }
   }finally{
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
