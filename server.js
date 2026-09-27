@@ -1345,6 +1345,24 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
       return{outputPath,bytes:stat.size,mediaType:'image',provider:'Pollinations AI · Flux',model:'flux',status:'complete'};
     }catch(err){console.warn('Pollinations image fallback failed:',err?.message||String(err));}
     finally{clearTimeout(timer)}
+    const hfToken=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+    if(hfToken){
+      try{
+        const response=await fetch('https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','Authorization':'Bearer '+hfToken},
+          body:JSON.stringify({inputs:String(prompt||'').trim(),parameters:{width:1280,height:720,num_inference_steps:4}}),
+          signal:AbortSignal.timeout(90000)
+        });
+        const raw=Buffer.from(await response.arrayBuffer());
+        if(response.ok&&raw.length>10000){
+          const outputPath=path.join(dir,'hf-flux-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.jpg');
+          await fs.writeFile(outputPath,raw);
+          const stat=await fs.stat(outputPath);
+          if(stat.size)return{outputPath,bytes:stat.size,mediaType:'image',provider:'Hugging Face Inference',model:'black-forest-labs/FLUX.1-schnell',status:'complete'};
+        }else console.warn('Hugging Face image fallback unavailable:',response.status,raw.toString('utf8').slice(0,500));
+      }catch(err){console.warn('Hugging Face image fallback failed:',err?.message||String(err));}
+    }
     const openaiKey=String(process.env.OPENAI_API_KEY||'').trim();
     if(openaiKey){
       const response=await fetch('https://api.openai.com/v1/images/generations',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+openaiKey},body:JSON.stringify({model:'gpt-image-2',prompt:String(prompt||'').trim(),size:'1536x1024',quality:'high',n:1,response_format:'b64_json'})});
