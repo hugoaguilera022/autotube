@@ -91,14 +91,14 @@ async function geminiYoutubeUrlAnalysis(reference){
   let parsed=null; try{parsed=JSON.parse(textOut)}catch{}
   return {raw:textOut,profile:parsed||{generation_prompt:textOut},interactionId:data?.id||null};
 }
-async function generateGeminiOmniFromImage(imagePath,dir,prompt){
+async function generateGeminiOmniFromImage(imagePath,dir,prompt,options={}){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('GEMINI_API_KEY no configurada para generación de vídeo.');
   const imageBytes=(await fs.readFile(imagePath)).toString('base64');
   const body={model:'gemini-omni-1.1-flash',input:[
     {type:'image',data:imageBytes,mime_type:'image/jpeg'},
     {type:'text',text:String(prompt).slice(0,12000)}
-  ],generation_config:{video_config:{task:'image_to_video'}}};
+  ],generation_config:{video_config:{task:'image_to_video'}},response_format:{type:'video',aspect_ratio:'16:9',duration:String(Math.max(3,Math.min(10,Number(options.durationSeconds)||8)))+'s',resolution:'720p'}};
   const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
     method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body),signal:AbortSignal.timeout(600000)
   });
