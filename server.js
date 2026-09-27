@@ -1329,22 +1329,26 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
   const referenceImageUrl=String(options.referenceImageUrl||'').trim();
   if(!key){
     const promptText=encodeURIComponent(String(prompt||'').replace(/\s+/g,' ').trim().slice(0,2400));
-    const pollModel=referenceImageUrl?'kontext':'flux';
-    const refParam=referenceImageUrl?'&image='+encodeURIComponent(referenceImageUrl):'';
-    const url='https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true&model='+encodeURIComponent(pollModel)+refParam;
-    const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),90000);
-    try{
-      const response=await fetch(url,{signal:controller.signal});
-      if(!response.ok)throw new Error('Pollinations image '+response.status);
-      const data=Buffer.from(await response.arrayBuffer());
-      if(!data.length)throw new Error('Pollinations devolvió una imagen vacía.');
-      const outputPath=path.join(dir,'ai-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.jpg');
-      await fs.writeFile(outputPath,data);
-      const stat=await fs.stat(outputPath);
-      if(!stat.size)throw new Error('La imagen IA está vacía.');
-      return{outputPath,bytes:stat.size,mediaType:'image',provider:'Pollinations AI · Flux',model:'flux',status:'complete'};
-    }catch(err){console.warn('Pollinations image fallback failed:',err?.message||String(err));}
-    finally{clearTimeout(timer)}
+    const pollUrls=[
+      'https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true&model=flux',
+      'https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true',
+      'https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true&model=stable-diffusion'
+    ];
+    for(const url of pollUrls){
+      const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),60000);
+      try{
+        const response=await fetch(url,{signal:controller.signal,headers:{Accept:'image/*'}});
+        if(!response.ok)throw new Error('Pollinations image '+response.status);
+        const data=Buffer.from(await response.arrayBuffer());
+        if(data.length<10000)throw new Error('Pollinations devolvió una imagen demasiado pequeña.');
+        const outputPath=path.join(dir,'ai-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.jpg');
+        await fs.writeFile(outputPath,data);
+        const stat=await fs.stat(outputPath);
+        if(!stat.size)throw new Error('La imagen IA está vacía.');
+        return{outputPath,bytes:stat.size,mediaType:'image',provider:'Pollinations AI',model:'flux',status:'complete'};
+      }catch(err){console.warn('Pollinations image attempt failed:',url,String(err?.message||err));}
+      finally{clearTimeout(timer)}
+    }
     const hfToken=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
     if(hfToken){
       try{
