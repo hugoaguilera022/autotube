@@ -368,13 +368,15 @@ async function analyzeDownloadedReferenceMedia(file,video){
   }
 }
 
-async function analyzeYoutubeReferenceMedia(url,video){
+async function analyzeYoutubeReferenceMedia(url,video,options={}){
   const referenceUrl=String(url||'').trim();
   if(!referenceUrl)throw new Error('Falta la URL de YouTube.');
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-download-'));
   try{
     try{
-      const downloaded=process.env.AUTOTUBE_REFERENCE_FULL_DOWNLOAD==='1'
+      const downloaded=options.skipFullDownload
+        ? (()=>{throw new Error('Full reference download skipped for bounded AI URL proof.')})()
+        : process.env.AUTOTUBE_REFERENCE_FULL_DOWNLOAD==='1'
         ? await downloadYoutubeReference(referenceUrl,dir)
         : (()=>{throw new Error('Full YouTube reference download disabled on constrained Render; using public thumbnail/metadata fallback.')})();
       const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
@@ -1999,7 +2001,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       return{ok:true,jobId,reference,referenceTitle:options.referenceTitle||'AI reference',sceneCount:1,size:finalStat.size,durationSeconds:validation.durationSeconds,validation:job?.validation};
     }
     const style=options.forceAi
-      ? await analyzeYoutubeReferenceMedia(reference,video)
+      ? await analyzeYoutubeReferenceMedia(reference,video,{skipFullDownload:true})
       : (options.directReferenceFile
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
         : await analyzeYoutubeReferenceMedia(reference,video));
