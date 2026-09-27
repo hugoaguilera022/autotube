@@ -523,6 +523,21 @@ app.post('/api/render',upload.fields([{name:'narration'},{name:'music',maxCount:
 app.get('/api/render/:jobId',async(req,res)=>{const job=renderJobs.get(String(req.params.jobId||''));if(!job)return res.status(404).json({error:'Render no encontrado. El servicio puede haberse reiniciado; inicia un nuevo render.'});if(job.status==='processing')return res.json({ok:true,status:'processing',progress:job.progress||0});if(job.status==='error')return res.json({ok:false,status:'error',error:job.error||'No se pudo renderizar el vídeo.'});try{const stat=await fs.stat(job.outputPath);if(!stat.size)throw new Error('MP4 vacío');res.json({ok:true,status:'done',progress:100,size:stat.size,validation:job.validation||null,downloadUrl:'/api/render/'+encodeURIComponent(req.params.jobId)+'/download'})}catch{return res.status(404).json({error:'El vídeo renderizado ya no está disponible. Inicia un nuevo render.'})}});
 app.get('/api/render/:jobId/download',async(req,res)=>{const job=renderJobs.get(String(req.params.jobId||''));if(!job)return res.status(404).json({error:'Render no encontrado.'});if(job.status!=='done')return res.status(409).json({error:'El render todavía no está listo.'});try{await fs.stat(job.outputPath);res.download(job.outputPath,'autotube-final.mp4')}catch{res.status(404).json({error:'El vídeo renderizado ya no está disponible.'})}});
 
+async function validateAnimatedMotion(file){
+  const result=await new Promise((resolve,reject)=>{
+    const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-i',file,'-vf','fps=2,scale=160:-1','-frames:v','24','-f','framemd5','-'],{stdio:['ignore','pipe','pipe']});
+    let out='',err='';
+    p.stdout.on('data',x=>out+=x.toString());
+    p.stderr.on('data',x=>err+=x.toString());
+    p.on('error',reject);
+    p.on('close',code=>code===0?resolve(out):reject(new Error('No se pudo comprobar el movimiento del MP4: '+err.slice(-800))));
+  });
+  const hashes=String(result).split(/\r?\n/).filter(x=>/^[0-9]+,\s*[0-9]+,\s*[0-9]+,\s*[0-9]+,\s*[0-9a-f]{32}$/i.test(x)).map(x=>x.split(',').pop().trim());
+  const uniqueHashes=[...new Set(hashes)];
+  if(hashes.length<2||uniqueHashes.length<2)throw new Error('El MP4 final no presenta movimiento real entre frames; se detectó una imagen estática.');
+  return{motionDetected:true,sampledFrames:hashes.length,uniqueFrames:uniqueHashes.length};
+}
+
 async function validateRenderedMp4(file,expectedDuration=0){
   const probe=await new Promise((resolve,reject)=>{
     const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-map','0:a:0','-c','copy','-f','null','-'],{stdio:['ignore','pipe','pipe']});
