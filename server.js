@@ -2008,18 +2008,9 @@ async function executeUrlToVideo(reference,jobId,options={}){
     if(options.forceAi){
       const videoId=extractYoutubeVideoId(reference);
       if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
-      video={
-        videoId,
-        title:'YouTube AI reference '+videoId,
-        channelTitle:'',
-        description:'',
-        duration:'PT60S',
-        thumbnail:'https://img.youtube.com/vi/'+videoId+'/hqdefault.jpg',
-        thumbnails:[
-          'https://img.youtube.com/vi/'+videoId+'/maxresdefault.jpg',
-          'https://img.youtube.com/vi/'+videoId+'/hqdefault.jpg'
-        ]
-      };
+      referenceDownloaded=await downloadReferenceDirectForAiE2E(reference,referenceSourceDir);
+      video=await getReferenceVideo(reference);
+      video.videoId=video.videoId||videoId;
     }else{
       referenceDownloaded=options.directReferenceFile
         ? {file:options.directReferenceFile,bytes:(await fs.stat(options.directReferenceFile)).size,probe:await probeReferenceTechnical(options.directReferenceFile),strategy:'direct-e2e'}
@@ -2057,7 +2048,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       return{ok:true,jobId,reference,referenceTitle:options.referenceTitle||'AI reference',sceneCount:1,size:finalStat.size,durationSeconds:validation.durationSeconds,validation:job?.validation};
     }
     const style=options.forceAi
-      ? await analyzeYoutubeReferenceMedia(reference,video,{skipFullDownload:true})
+      ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
       : (options.directReferenceFile
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
         : await analyzeYoutubeReferenceMedia(reference,video));
@@ -2068,14 +2059,16 @@ async function executeUrlToVideo(reference,jobId,options={}){
     // memory spikes on constrained Render instances while keeping the media original.
     if(options.forceAi){
       const aiReferenceTitle=String(video.title||reference||'Contenido original').slice(0,300);
+      const segments=Array.isArray(style?.visualAnalysis?.structureProfile?.sceneSegments)?style.visualAnalysis.structureProfile.sceneSegments:[];
       const prompt=[
-        'ORIGINAL AI MUSIC VIDEO SHOT, 16:9, photorealistic surreal cinema.',
-        'MANDATORY: a giant anthropomorphic Canadian Mountie bear wearing a red serge uniform and playing BAGPIPES in the foreground.',
-        'Also clearly visible: two battle-ready beavers, a moose, a grizzly bear and porcupines.',
-        'Canadian wilderness, pine forest and snowy mountains, humorous heroic military-march formation, cinematic dramatic lighting.',
-        'The animals are the main characters; no generic human soldier, no empty landscape, no unrelated animals.',
-        'Create a NEW original shot, not a copy of any source frame. No text, captions, logos or watermark.',
-        'Reference title: Canadian Resistance Army - Trade War. Reference hint: Canadian AI music video with Mountie bears, bagpipes, beavers, moose, grizzlies and porcupines; marching folk-rock energy around 86 BPM.'
+        'Create a NEW ORIGINAL AI-generated cinematic video scene based on the REAL DOWNLOADED YouTube reference analysis.',
+        'Preserve the concrete subjects, environment, composition, camera movement, lighting, palette and motion rhythm observed in the sampled frames.',
+        'Reference title: '+String(video.title||reference).slice(0,300),
+        'Concrete sampled-frame structure: '+JSON.stringify(segments.slice(0,12)).slice(0,7000),
+        'Visual profile: '+JSON.stringify(style?.visualAnalysis?.videoProfile||{}).slice(0,3500),
+        'Animation profile: '+JSON.stringify(style?.visualAnalysis?.animationProfile||{}).slice(0,2500),
+        'Create original material only: do not copy frames, faces, logos, text, lyrics, recordings or exact shots.',
+        '16:9, high-detail cinematic AI video, coherent continuous motion, no watermark.'
       ].join('\n');
       let generatedVideo=null;
       try{
