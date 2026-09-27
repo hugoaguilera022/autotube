@@ -2608,7 +2608,7 @@ app.get('/api/url-to-video/:jobId',async(req,res)=>{
   let job=urlVideoJobs.get(jobId);
   if(!job){
     const reference=String(req.query?.reference||'').trim();
-    if(reference && /^https?:\\/\\/(www\\.)?(youtube\\.com|youtu\\.be)\\//i.test(reference)){
+    if(reference && /^https?:\/\/(www\.)?youtube\.com\//i.test(reference) || reference && /^https?:\/\/youtu\.be\//i.test(reference)){
       job={id:jobId,reference,status:'processing',progress:1,createdAt:Date.now(),outputPath:null,error:null,restartedCount:1};
       urlVideoJobs.set(jobId,job);
       executeUrlToVideo(reference,jobId).catch(err=>console.error('AI URL job resurrection error:',err));
