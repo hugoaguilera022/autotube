@@ -384,19 +384,19 @@ async function downloadReferenceFast(url,dir){
   }
   const attempts=[];
   const mirror=String(process.env.AUTOTUBE_REFERENCE_MIRROR_URL||'').trim();
-  if(mirror)attempts.push(['mirror-rumble',downloadViaRumble]);
+  if(mirror)attempts.push(['mirror-rumble',downloadViaRumble,mirror]);
   attempts.push(
-    ['yt5s',downloadViaYt5sProxy],
-    ['piped',downloadViaPiped],
-    ['cobalt',downloadViaCobalt],
-    ['alldl',downloadViaAllDL],
-    ['ytdl-api',downloadViaYtdlApi],
+    ['yt5s',downloadViaYt5sProxy,url],
+    ['piped',downloadViaPiped,url],
+    ['cobalt',downloadViaCobalt,url],
+    ['alldl',downloadViaAllDL,url],
+    ['ytdl-api',downloadViaYtdlApi,url],
     ['invidious',downloadViaInvidious]
   ]);
   let last='';
-  for(const [name,fn] of attempts){
+  for(const [name,fn,target] of attempts){
     try{
-      const result=await fn(url,dir);
+      const result=await fn(target||url,dir);
       return await validateExactCandidate({...result,strategy:'reference-fast:'+name});
     }catch(e){
       last=name+': '+String(e?.message||e);
