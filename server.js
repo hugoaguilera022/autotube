@@ -47,7 +47,44 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
       .catch(err=>{job.status='error';job.error=err?.message||String(err);console.error('AUTOTUBE AI E2E FAILED',err?.stack||err);});
     res.json({ok:true,jobId,status:'processing',bytes:ref.bytes,probe:ref.probe});
   }catch(err){res.status(500).json({error:err?.message||String(err)});}
-});app.get('/api/verify-ai-e2e',async(req,res)=>{
+});async function geminiYoutubeUrlAnalysis(reference){
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('GEMINI_API_KEY no configurada para análisis audiovisual directo de YouTube.');
+  const body={model:'gemini-3.8-flash',input:[
+    {type:'text',text:'Analyze this public YouTube AI-generated video exhaustively for recreation. Return ONLY JSON with keys: summary, subjects, setting, visual_style, palette, lighting, camera, motion, scene_count, scene_segments (array with start/end seconds, subject, action, shot, camera, lighting, transition), pacing, audio (music, speech, ambience, sfx, rhythm), narrative_structure, generation_prompt. Do not identify the exact video or reproduce copyrighted wording. The future generated video must tell a different story while preserving the same audiovisual structure, subject category, environment, pacing, camera language, lighting, palette and audio character.'},
+    {type:'video',uri:reference}
+  ]};
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
+    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body),signal:AbortSignal.timeout(300000)
+  });
+  const raw=await r.text(); let data=null; try{data=raw?JSON.parse(raw):null}catch{}
+  if(!r.ok)throw new Error('Gemini YouTube analysis HTTP '+r.status+': '+(data?.error?.message||raw.slice(0,1000)));
+  const textOut=String(data?.output_text||data?.steps?.find(s=>s?.type==='model_output')?.content?.map(x=>x?.text||'').join(' ')||'').trim();
+  if(!textOut)throw new Error('Gemini no devolvió análisis audiovisual de la URL.');
+  let parsed=null; try{parsed=JSON.parse(textOut)}catch{}
+  return {raw:textOut,profile:parsed||{generation_prompt:textOut},interactionId:data?.id||null};
+}
+async function generateGeminiOmniFromImage(imagePath,dir,prompt){
+  const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(!key)throw new Error('GEMINI_API_KEY no configurada para generación de vídeo.');
+  const imageBytes=(await fs.readFile(imagePath)).toString('base64');
+  const body={model:'gemini-omni-1.1-flash',input:[
+    {type:'image',data:imageBytes,mime_type:'image/jpeg'},
+    {type:'text',text:String(prompt).slice(0,12000)}
+  ],generation_config:{video_config:{task:'image_to_video'}}};
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{
+    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body),signal:AbortSignal.timeout(600000)
+  });
+  const raw=await r.text();let data=null;try{data=raw?JSON.parse(raw):null}catch{}
+  if(!r.ok)throw new Error('Gemini Omni video HTTP '+r.status+': '+(data?.error?.message||raw.slice(0,1000)));
+  const b64=data?.output_video?.data;
+  if(!b64)throw new Error('Gemini Omni no devolvió MP4.');
+  const outputPath=path.join(dir,'gemini-omni-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  const buf=Buffer.from(b64,'base64'); if(buf.length<10000)throw new Error('Gemini Omni devolvió un vídeo vacío.');
+  await fs.writeFile(outputPath,buf); return{outputPath,bytes:buf.length,provider:'Google Gemini Omni Flash',model:'gemini-omni-1.1-flash',referenceDriven:true,status:'complete'};
+}
+
+app.get('/api/verify-ai-e2e',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'reference requerida'});
   const videoId=extractYoutubeVideoId(reference);
