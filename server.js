@@ -2118,12 +2118,13 @@ async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const app=await Client.connect('Jiny34/Image-to-video');
   const prompt=String(options.prompt||'Generate original natural camera motion from this reference image, preserve the main subject and setting.').trim();
-  const result=await app.predict('/make_video',[[handle_file(imagePath)],prompt]);
+  const job=app.submit('/make_video',[[handle_file(imagePath)],prompt]);
+  const result=await job.result(90);
   const data=Array.isArray(result?.data)?result.data:[];
   const output=data[0];
   const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
   if(!url)throw new Error('SVD public Space no devolvió un vídeo.');
-  const response=await fetch(String(url));
+  const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
   if(!response.ok)throw new Error('SVD public Space no pudo descargar el vídeo ('+response.status+').');
   const outputPath=path.join(dir,'svd-public-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
   await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
@@ -2133,21 +2134,25 @@ async function generatePublicSvdImageToVideoClip(imagePath,dir,options={}){
 }
 
 async function generateWaveSpeedWanVideoClip(imagePath,dir,options={}){
+  // Use the current public Wan2.1 I2V endpoint. The previous WaveSpeed Space
+  // exposed a /generate endpoint that no longer exists and could crash Node.
   const {Client,handle_file}=require('@gradio/client');
-  const app=await Client.connect('wavespeed/wan-2-1-i2v-480p-ultra-fast');
+  const app=await Client.connect('Wan-AI/Wan2.1');
   const prompt=String(options.prompt||'Generate original natural cinematic motion while preserving the main subject, setting and visual identity of the reference image.').slice(0,4000);
-  const result=await app.predict('/generate',[handle_file(imagePath),prompt,5,42]);
+  try{await app.predict('/switch_i2v_tab');}catch{}
+  const job=app.submit('/i2v_generation',[prompt,handle_file(imagePath),false,-1]);
+  const result=await job.result(420);
   const data=Array.isArray(result?.data)?result.data:[];
   const output=data[0];
   const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
-  if(!url)throw new Error('Wan 2.1 public Space no devolvió un vídeo.');
+  if(!url)throw new Error('Wan2.1 I2V no devolvió un vídeo.');
   const response=await fetch(String(url),{signal:AbortSignal.timeout(120000)});
-  if(!response.ok)throw new Error('Wan 2.1 public Space no pudo descargar el vídeo ('+response.status+').');
-  const outputPath=path.join(dir,'wan21-public-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  if(!response.ok)throw new Error('Wan2.1 I2V no pudo descargar el vídeo ('+response.status+').');
+  const outputPath=path.join(dir,'wan21-i2v-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
   await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
   const stat=await fs.stat(outputPath);
-  if(!stat.size)throw new Error('Wan 2.1 public Space devolvió un vídeo vacío.');
-  return{outputPath,bytes:stat.size,provider:'Hugging Face public Wan 2.1 I2V',model:'Wan2.1-I2V-480p',referenceDriven:true,status:'complete'};
+  if(!stat.size)throw new Error('Wan2.1 I2V devolvió un vídeo vacío.');
+  return{outputPath,bytes:stat.size,provider:'Hugging Face Wan-AI/Wan2.1',model:'Wan2.1 I2V',referenceDriven:true,status:'complete'};
 }
 
 async function getPublicYoutubeReferenceFallback(reference){
