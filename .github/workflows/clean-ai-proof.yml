@@ -20,11 +20,11 @@ jobs:
             sleep 5
           done
           exit 1
-      - name: Start unique URL to AI job
+      - name: Start unique URL to AI job (forceAi)
         run: |
           set -euo pipefail
           REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
-          body="$(curl -fsS --retry 3 --retry-delay 5 -X POST -H 'Content-Type: application/json' --data "{\"reference\":\"$REF\"}" https://autotube-ai-e2e-isolated.onrender.com/api/verify-ai-e2e)"
+          body="$(curl -fsS --retry 3 --retry-delay 5 \"https://autotube-ai-e2e-isolated.onrender.com/api/url-to-video?reference=$(python -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.stdin.read().strip(), safe=\"\"))' <<<\"$REF\")\")"
           echo "$body"
           JOB="$(python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<<"$body")"
           echo "JOB=$JOB" >> "$GITHUB_ENV"
