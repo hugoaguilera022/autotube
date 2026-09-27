@@ -79,7 +79,13 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
         '16:9, cinematic, high detail, original material.'
       ].join('\\n');
       job.progress=30;
-      const generated=await generateGeminiOmniImageToVideoClip(imagePath,dir,{prompt});
+      let generated=null;
+      const providerErrors=[];
+      try{generated=await generatePublicSvdImageToVideoClip(imagePath,dir,{prompt});}
+      catch(err){providerErrors.push('svd-space: '+String(err?.message||err));console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','svd-space',err?.message||String(err));}
+      if(!generated?.outputPath)try{generated=await generateWaveSpeedWanVideoClip(imagePath,dir,{prompt});}
+      catch(err){providerErrors.push('wan21-space: '+String(err?.message||err));console.warn('AUTOTUBE AI DIRECT PROVIDER FAILED','wan21-space',err?.message||String(err));}
+      if(!generated?.outputPath)throw new Error('No se pudo generar el MP4 IA condicionado por la referencia: '+providerErrors.join(' | '));
       job.progress=80;
       const outputPath=path.join(renderJobDir,jobId+'.mp4');
       await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',generated.outputPath,'-vf','scale=1280:720,fps=30','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-movflags','+faststart',outputPath]);
