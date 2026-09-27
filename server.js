@@ -1252,7 +1252,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
 
     let style;
     try { style=await analyzeYoutubeReferenceMediaDirect(reference,video); if(!style?.hasFullVideoAnalysis) throw new Error('Gemini no devolvió análisis completo.'); }
-    catch(directErr){ console.warn('Direct Gemini YouTube analysis failed; real-media fallback:',directErr.message||String(directErr)); style=await analyzeYoutubeReferenceMedia(reference,video); }
+    catch(directErr){ throw new Error('El análisis directo de Gemini del vídeo de YouTube falló: '+(directErr.message||String(directErr))); }
     if(job)job.progress=18;
 
     const referenceTitle=String(video.title||'Contenido original').slice(0,300);
@@ -1307,18 +1307,28 @@ async function executeUrlToVideo(reference,jobId,options={}){
     }
     if(job)Object.assign(job,{progress:30,sceneCount:scenes.length,durationSeconds});
 
-    const mediaResponse=await fetch('http://127.0.0.1:'+PORT+'/api/media/search',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({scenes,referenceTopic:referenceTitle})
-    });
-    const mediaData=await mediaResponse.json();
-    if(!mediaResponse.ok)throw new Error(mediaData?.error||'No se pudieron buscar visuales originales.');
-    const mediaResults=Array.isArray(mediaData.results)?mediaData.results:[];
-    const missing=scenes.filter((scene,i)=>{
-      const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
-      return !row?.media?.some(m=>m?.downloadUrl);
-    });
-    if(missing.length)throw new Error('No hay visuales descargables para '+missing.length+' escenas.');
+    for(let i=0;i<scenes.length;i++){
+      const scene=scenes[i];
+      if(style.constantImage)continue;
+      const clip=await generateFreeLtxVideoClip(
+        String(scene.visualPrompt||scene.title||referenceTitle)+'; '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3200)+'; '+String(scene.animationNotes||'').slice(0,1200)+'; ORIGINAL MATERIAL ONLY.',
+        dir,
+        {durationSeconds:Math.min(8.5,Math.max(3,Number(scene.duration)||5)),width:704,height:396,improveTexture:false}
+      );
+      await validateGeneratedVideoClip(clip.outputPath);
+      aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model};
+    }
+    if(style.constantImage){
+      for(let i=0;i<scenes.length;i++){
+        const scene=scenes[i];
+        const imageDir=await fs.mkdtemp(path.join(dir,'scene-image-'));
+        const generated=await generateGeminiOriginalImage(
+          String(scene.visualPrompt||scene.searchQuery||scene.title||referenceTitle)+'; preserve the reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3500)+'. Create original material, no logos, no copied characters or frames, cinematic 16:9.',
+          imageDir,{model:'gemini-2.5-flash-image'}
+        );
+        mediaResults[i]={number:scene.number,media:[{provider:generated.provider,id:'generated-'+scene.number,title:'Original AI visual',duration:0,downloadUrl:generated.outputPath,mediaType:'image'}],generatedAsset:true};
+      }
+    }
     if(job)job.progress=48;
 
     let narrationAudio=[];
