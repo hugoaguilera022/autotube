@@ -2221,11 +2221,27 @@ async function executeUrlToVideo(reference,jobId,options={}){
         if(referenceDownloaded?.file){
           await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss','0','-i',referenceDownloaded.file,'-frames:v','1','-q:v','2',publicReferenceImage]);
         }else{
-          const thumb=video?.thumbnail||video?.thumbnails?.[0]||'';
-          if(!thumb)throw new Error('No hay miniatura pública para el proveedor SVD.');
-          const image=await fetchImageForGemini(thumb);
-          if(!image?.inlineData?.data)throw new Error('No se pudo descargar la miniatura pública.');
-          await fs.writeFile(publicReferenceImage,Buffer.from(image.inlineData.data,'base64'));
+          const videoId=extractYoutubeVideoId(reference);
+          const candidates=[video?.thumbnail,...(Array.isArray(video?.thumbnails)?video.thumbnails:[])].filter(Boolean);
+          if(videoId){
+            for(const name of ['maxresdefault.jpg','sddefault.jpg','hqdefault.jpg','mqdefault.jpg','0.jpg','1.jpg','2.jpg','3.jpg']){
+              candidates.push('https://i.ytimg.com/vi/'+videoId+'/'+name);
+            }
+          }
+          let imageBuffer=null;
+          let selected='';
+          for(const thumb of [...new Set(candidates)]){
+            try{
+              const response=await fetch(String(thumb),{headers:{'User-Agent':'Mozilla/5.0 AutoTube/1.0','Accept':'image/avif,image/webp,image/jpeg,image/*'},signal:AbortSignal.timeout(20000)});
+              const raw=Buffer.from(await response.arrayBuffer());
+              if(response.ok&&raw.length>5000&&raw.slice(0,2).toString('hex')==='ffd8'){
+                imageBuffer=raw;selected=String(thumb);break;
+              }
+            }catch{}
+          }
+          if(!imageBuffer)throw new Error('No se pudo descargar ninguna miniatura pública de YouTube para el proveedor SVD.');
+          await fs.writeFile(publicReferenceImage,imageBuffer);
+          console.log('AUTOTUBE SVD REFERENCE IMAGE READY',selected);
         }
         generatedVideo=await Promise.race([
           generatePublicSvdImageToVideoClip(publicReferenceImage,dir,{prompt}),
