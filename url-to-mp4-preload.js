@@ -469,7 +469,10 @@ async function validateExpectedReference(candidate){
 }
 async function downloadReferenceViaLocalYtdlp(url,dir){
   const out=path.join(dir,'source.%(ext)s');
+  const trusted=await getTrustedYoutubeSession();
+  const trustedArgs=trusted?`youtube:player_client=web;po_token=web+${trusted.po};visitor_data=${trusted.vd}`:'';
   const strategies=[
+    ...(trustedArgs?[{name:'trusted-session',format:'bestvideo*+bestaudio/best',extractorArgs:trustedArgs}]:[]),
     {name:'android-vr-direct',format:'bestvideo*+bestaudio/best',extractorArgs:'youtube:player_client=android_vr'},
     {name:'tv-direct',format:'bestvideo*+bestaudio/best',extractorArgs:'youtube:player_client=tv'},
     {name:'web-safari-direct',format:'bestvideo*+bestaudio/best',extractorArgs:'youtube:player_client=web_safari,android_vr,tv'},
