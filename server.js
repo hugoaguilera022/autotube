@@ -1326,9 +1326,12 @@ async function validateRenderedMp4(file,expectedDuration=0){
 
 async function generateGeminiOriginalImage(prompt,dir,options={}) {
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  const referenceImageUrl=String(options.referenceImageUrl||'').trim();
   if(!key){
-    const promptText=encodeURIComponent(String(prompt||'').replace(/\s+/g,' ').trim().slice(0,1800));
-    const url='https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true&model=flux';
+    const promptText=encodeURIComponent(String(prompt||'').replace(/\s+/g,' ').trim().slice(0,2400));
+    const pollModel=referenceImageUrl?'kontext':'flux';
+    const refParam=referenceImageUrl?'&image='+encodeURIComponent(referenceImageUrl):'';
+    const url='https://image.pollinations.ai/prompt/'+promptText+'?width=1280&height=720&nologo=true&model='+encodeURIComponent(pollModel)+refParam;
     const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),90000);
     try{
       const response=await fetch(url,{signal:controller.signal});
@@ -1363,7 +1366,10 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
   const timer=setTimeout(()=>controller.abort(),45000);
   try{
     const body={
-      contents:[{parts:[{text:String(prompt||'').trim()}]}],
+      contents:[{parts:[
+        {text:String(prompt||'').trim()},
+        ...(referenceImageUrl?[(await fetchImageForGemini(referenceImageUrl))].filter(Boolean):[])
+      ]}],
       generationConfig:{
         responseModalities:['IMAGE'],
         responseFormat:{image:{aspectRatio:'16:9'}}
