@@ -13,7 +13,7 @@ jobs:
         run: |
           set -e
           sleep 90
-          BASE="https://autotube-verify-clean3.onrender.com"
+          BASE="https://autotube-verify.onrender.com"
           REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
           R=$(curl -fsS --max-time 30 --get "$BASE/api/verify-ai-e2e" --data-urlencode "reference=$REF")
           echo "$R"
