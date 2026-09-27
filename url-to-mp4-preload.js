@@ -442,7 +442,7 @@ async function downloadReferenceFast(url,dir){
 global.__autotubeDownloadReferenceFast=downloadReferenceFast;
 global.__autotubeDownloadExactYoutube=downloadExactYoutube;
 async function validateProviderCandidate(result){const source=String(result?.source||'');if(!source)throw new Error('El proveedor no devolvió ruta de archivo.');const st=await fs.stat(source);if(!st.size)throw new Error('El proveedor devolvió un archivo vacío.');try{const p=await probe(source);if(!p.duration||!p.width||!p.height)throw new Error('FFmpeg no detectó duración/vídeo válidos.');return{...result,bytes:st.size,probe:p}}catch(err){await fs.rm(source,{force:true}).catch(()=>{});throw new Error('El proveedor devolvió un MP4 incompleto o inválido: '+String(err?.message||err))}}
-async function validateExactCandidate(candidate){
+async function validateExactCandidateInternal(candidate){
   const source=String(candidate?.source||'');
   if(!source)throw new Error('El proveedor no devolvió ruta de archivo.');
   const st=await fs.stat(source);
@@ -451,8 +451,10 @@ async function validateExactCandidate(candidate){
   if(!p?.duration||!p?.width||!p?.height)throw new Error('FFmpeg no detectó duración/vídeo válidos.');
   return {...candidate,bytes:st.size,probe:p};
 }
+
+const validateExactCandidate=async candidate=>validateExactCandidateInternal(candidate);
 async function validateExpectedReference(candidate){
-  const checked=await validateExactCandidate(candidate);
+  const checked=await validateExactCandidateInternal(candidate);
   const expected=Number(process.env.AUTOTUBE_REFERENCE_EXPECTED_DURATION||0);
   if(expected>0&&checked?.source){
     const p=await probe(checked.source);
