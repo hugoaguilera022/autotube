@@ -1803,7 +1803,26 @@ async function executeFullPipelineTest(reference){
     const referenceDuration=Math.max(3,Math.min(30,Number(parseIsoDurationSeconds(video.duration)||videoProfile.durationSeconds||10)));
     const visualStyle=JSON.stringify({visual:profile,structure:style?.structureProfile||{},audio:audioProfile}).slice(0,9000);
     const prompt='Create a completely ORIGINAL AI-generated video inspired only by this audiovisual profile. Preserve the general visual language, pacing, camera language, color mood and subject category, but do not copy footage, frames, people, logos, text, music, or exact compositions from the reference. Reference profile: '+visualStyle+' ORIGINAL SCENE: cinematic, coherent motion, high detail, natural lighting, no text, no logos, no watermark.';
-    const generated=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:Math.min(8,Math.max(4,referenceDuration)),width:704,height:400,improveTexture:false});
+    let generated;
+    try{
+      console.log('AUTOTUBE AI E2E LTX START');
+      generated=await Promise.race([
+        generateFreeLtxVideoClip(prompt,dir,{durationSeconds:Math.min(8,Math.max(4,referenceDuration)),width:704,height:400,improveTexture:false}),
+        new Promise((_,reject)=>setTimeout(()=>reject(new Error('LTX timeout after 90000 ms')),90000))
+      ]);
+      console.log('AUTOTUBE AI E2E LTX DONE',generated?.provider||'unknown');
+    }catch(ltxErr){
+      console.warn('AUTOTUBE AI E2E LTX FALLBACK',ltxErr?.message||String(ltxErr));
+      const image=await generateGeminiOriginalImage(prompt+' ORIGINAL AI FRAME for a cinematic motion video.',dir,{});
+      const motionPath=path.join(dir,'ai-motion-fallback.mp4');
+      await new Promise((resolve,reject)=>{
+        const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-loop','1','-i',image.outputPath,'-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000','-t',String(Math.min(8,Math.max(4,referenceDuration))),'-vf','scale=1280:720,zoompan=z=1.0+0.0008*on:d=1:s=1280x720:fps=30','-r','30','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-shortest',motionPath],{stdio:['ignore','ignore','pipe']});
+        let err='';p.stderr.on('data',x=>err+=x.toString());p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg AI motion fallback: '+err.slice(-1800))));
+      });
+      const st=await fs.stat(motionPath);
+      generated={outputPath:motionPath,bytes:st.size,provider:image.provider+' → FFmpeg AI motion',model:image.model+' + motion',status:'complete'};
+      console.log('AUTOTUBE AI E2E IMAGE MOTION DONE',st.size);
+    }
     const clipValidation=await validateGeneratedVideoClip(generated.outputPath);
     const sceneDuration=Math.max(3,Math.min(8,clipValidation.durationSeconds));
     const scenes=[{number:1,title:'Original AI scene',duration:sceneDuration,mediaType:'video',visualPrompt:prompt}];
