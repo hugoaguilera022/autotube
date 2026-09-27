@@ -2390,7 +2390,7 @@ if(options.forceAi){
     const style=options.forceAi
       ? (referenceDownloaded?.file
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
-        : await analyzeYoutubeReferenceMedia(reference,video))
+        : await analyzeYoutubeReferenceMedia(reference,video,{skipFullDownload:true}))
       : (options.directReferenceFile
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
         : await analyzeYoutubeReferenceMedia(reference,video));
