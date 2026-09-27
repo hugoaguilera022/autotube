@@ -16,7 +16,7 @@ jobs:
         run: |
           set -e
           for i in $(seq 1 90); do
-            curl -fsS --max-time 10 https://autotube-verify.onrender.com/api/health -o health.json && cat health.json && exit 0
+            curl -fsS --max-time 10 https://autotube-ai-e2e-isolated.onrender.com/api/health -o health.json && cat health.json && exit 0
             sleep 5
           done
           exit 1
@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
-          body="$(curl -fsS --retry 3 --retry-delay 5 -X POST -H 'Content-Type: application/json' --data "{\"reference\":\"$REF\"}" https://autotube-verify.onrender.com/api/verify-ai-e2e)"
+          body="$(curl -fsS --retry 3 --retry-delay 5 -X POST -H 'Content-Type: application/json' --data "{\"reference\":\"$REF\"}" https://autotube-ai-e2e-isolated.onrender.com/api/verify-ai-e2e)"
           echo "$body"
           JOB="$(python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<<"$body")"
           echo "JOB=$JOB" >> "$GITHUB_ENV"
@@ -33,7 +33,7 @@ jobs:
           set -euo pipefail
           for i in $(seq 1 135); do
             sleep 10
-            status="$(curl -fsS --max-time 30 "https://autotube-verify.onrender.com/api/url-to-video/$JOB")"
+            status="$(curl -fsS --max-time 30 "https://autotube-ai-e2e-isolated.onrender.com/api/url-to-video/$JOB")"
             echo "$status"
             state="$(python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$status")"
             if [ "$state" = "done" ]; then
@@ -46,7 +46,7 @@ jobs:
       - name: Download and validate MP4
         run: |
           set -euo pipefail
-          curl -fsS --max-time 60 "https://autotube-verify.onrender.com/api/url-to-video/$JOB/download" -o autotube-reference-matched.mp4
+          curl -fsS --max-time 60 "https://autotube-ai-e2e-isolated.onrender.com/api/url-to-video/$JOB/download" -o autotube-reference-matched.mp4
           test -s autotube-reference-matched.mp4
           ffprobe -v error -show_entries format=duration -show_entries stream=codec_type,codec_name,width,height,r_frame_rate -of json autotube-reference-matched.mp4 | tee validation.json
           python -c 'import json; d=json.load(open("validation.json")); s=d.get("streams",[]); v=[x for x in s if x.get("codec_type")=="video"]; a=[x for x in s if x.get("codec_type")=="audio"]; assert v and a, "video/audio missing"; assert v[0].get("codec_name")=="h264"; assert a[0].get("codec_name")=="aac"; print("VALID MP4: H.264 + AAC")'
