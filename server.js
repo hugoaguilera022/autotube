@@ -1282,7 +1282,7 @@ app.get('/api/render/:jobId/download',async(req,res)=>{const job=renderJobs.get(
 
 async function validateRenderedMp4(file,expectedDuration=0){
   const probe=await new Promise((resolve,reject)=>{
-    const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-map','0:a:0','-c','copy','-f','null','-'],{stdio:['ignore','pipe','pipe']});
+    const p=spawn(ffmpegPath,['-hide_banner','-loglevel','info','-i',file,'-f','null','-'],{stdio:['ignore','pipe','pipe']});
     let stderr='';
     p.stderr.on('data',x=>{stderr+=x.toString()});
     p.on('error',reject);
