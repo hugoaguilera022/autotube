@@ -2431,14 +2431,6 @@ if(options.forceAi){
       if(!videoId)throw new Error('La URL de referencia de YouTube no es válida.');
       let publicTitle=`YouTube AI reference ${videoId}`;
       let publicDescription='';
-      try{
-        const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(reference)+'&format=json',{signal:AbortSignal.timeout(12000)});
-        if(oembed.ok){
-          const meta=await oembed.json();
-          publicTitle=String(meta?.title||publicTitle);
-          publicDescription=String(meta?.author_name||'');
-        }
-      }catch(err){console.warn('YouTube oEmbed unavailable:',err?.message||String(err));}
       // Reference-recreation mode must work even when YouTube blocks server-side
       // media downloads. Use only public URL metadata + the public thumbnail as
       // conditioning input; never copy the source video.
