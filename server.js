@@ -2178,7 +2178,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       scenes,mediaResults,aiClips,narrationAudio,musicBuffer:music?.buffer||null,
       onProgress:p=>{if(job)job.progress=Math.min(96,68+Math.round(p*0.28));},
       finalOutputPath:outputPath,
-      targetWidth:1280,targetHeight:720,targetFps:30,targetDurationSeconds:durationSeconds
+      targetWidth:1920,targetHeight:1080,targetFps:30,targetDurationSeconds:durationSeconds
     });
     const validation=await validateRenderedMp4(outputPath,durationSeconds);
     const stat=await fs.stat(outputPath);
