@@ -2216,6 +2216,15 @@ app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
 const httpServer=app.listen(PORT,'0.0.0.0',()=>console.log(`AutoTube listening on ${PORT}`));
 
 
+const startupAiE2EReference=String(process.env.AUTOTUBE_RUN_AI_E2E_REFERENCE||'').trim();
+if(startupAiE2EReference){
+  setTimeout(()=>{
+    if([...fullPipelineTestJobs.values()].some(j=>j.status==='running'))return;
+    const id='startup-fulltest_'+Date.now();
+    fullPipelineTestJobs.set(id,{id,reference:startupAiE2EReference,status:'running',startedAt:Date.now(),result:null});
+    executeFullPipelineTest(startupAiE2EReference).then(result=>{const j=fullPipelineTestJobs.get(id);if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}}).catch(err=>{const j=fullPipelineTestJobs.get(id);if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}});
+  },7000);
+}
 httpServer.keepAliveTimeout=120000;
 httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
