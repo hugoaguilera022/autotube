@@ -1994,43 +1994,60 @@ async function executeUrlToVideo(reference,jobId,options={}){
     const audioProfile={...(visualReferenceAnalysis.audioProfile||{})};
     const durationSeconds=Math.max(1,Number(referenceProbe.durationSeconds)||Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis.videoProfile?.durationSeconds||60));
 
-    const outlineResponse=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        topic:referenceTitle,reference,referenceTopic:referenceTitle,
-        referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
-        visualReferenceAnalysis,referenceStyle:style,language:'es',
-        duration:String(Math.max(1,Math.round(durationSeconds/60)))
-      })
-    });
-    const outline=await outlineResponse.json();
-    if(!outlineResponse.ok)throw new Error(outline?.error||'No se pudo crear la estructura de la referencia.');
+    let outline={title:referenceTitle,outline:[],visualIdeas:[]};
+    let scenes=[];
+    const hasGeminiKey=Boolean(String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim());
+    if(hasGeminiKey){
+      const outlineResponse=await fetch('http://127.0.0.1:'+PORT+'/api/ai/outline',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          topic:referenceTitle,reference,referenceTopic:referenceTitle,
+          referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
+          visualReferenceAnalysis,referenceStyle:style,language:'es',
+          duration:String(Math.max(1,Math.round(durationSeconds/60)))
+        })
+      });
+      outline=await outlineResponse.json();
+      if(!outlineResponse.ok)throw new Error(outline?.error||'No se pudo crear la estructura de la referencia.');
 
-    const planResponse=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        topic:referenceTitle,reference,referenceTopic:referenceTitle,
-        referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
-        visualReferenceAnalysis,referenceStyle:style,language:'es',
-        duration:String(Math.max(1,Math.round(durationSeconds/60))),
-        title:outline?.title||referenceTitle,
-        outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
-      })
-    });
-    const planResponseData=await planResponse.json();
-    if(!planResponse.ok||!Array.isArray(planResponseData?.scenes)||!planResponseData.scenes.length){
-      throw new Error(planResponseData?.error||'No se pudo crear el plan de producción.');
+      const planResponse=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          topic:referenceTitle,reference,referenceTopic:referenceTitle,
+          referenceData:{title:referenceTitle,videoId:video.videoId||'',channelTitle:video.channelTitle||''},
+          visualReferenceAnalysis,referenceStyle:style,language:'es',
+          duration:String(Math.max(1,Math.round(durationSeconds/60))),
+          title:outline?.title||referenceTitle,
+          outline:outline?.outline||[],visualIdeas:outline?.visualIdeas||[]
+        })
+      });
+      const planResponseData=await planResponse.json();
+      if(!planResponse.ok||!Array.isArray(planResponseData?.scenes)||!planResponseData.scenes.length){
+        throw new Error(planResponseData?.error||'No se pudo crear el plan de producción.');
+      }
+      scenes=planResponseData.scenes.map((scene,i)=>({...scene,number:i+1}));
+    }else{
+      const segments=Array.isArray(visualReferenceAnalysis?.structureProfile?.sceneSegments)?visualReferenceAnalysis.structureProfile.sceneSegments:[];
+      const count=Math.max(1,Math.min(12,Number(style.preferredSceneCount||style.estimatedSceneCount||segments.length||6)));
+      for(let i=0;i<count;i++){
+        const seg=segments[Math.min(Math.max(segments.length-1,0),Math.floor(i*Math.max(segments.length,1)/count))]||{};
+        const title=String(seg.summary||seg.subject||referenceTitle).slice(0,180);
+        scenes.push({
+          number:i+1,
+          title:title||referenceTitle,
+          narration:'Contenido original sobre '+referenceTitle+' correspondiente a esta parte del vídeo.',
+          visualPrompt:String(seg.generationPrompt||seg.subject||referenceTitle)+'; '+String(seg.composition||'16:9 cinematic')+'; '+String(seg.lighting||'coherent lighting')+'; '+String(seg.palette||'natural palette')+'; original high-quality visual',
+          searchQuery:String(seg.subject||referenceTitle),
+          duration:Math.max(2,durationSeconds/count),
+          transition:String(seg.transitionOut||'smooth'),
+          mediaType:'image',
+          constantImage:Boolean(visualReferenceAnalysis?.videoProfile?.constantImage),
+          animationNotes:String(seg.cameraMovement||'subtle cinematic camera movement'),
+          referenceSegment:seg
+        });
+      }
+      outline={title:referenceTitle,outline:scenes.map(s=>s.title),visualIdeas:scenes.map(s=>s.visualPrompt)};
     }
-
-    let scenes=planResponseData.scenes.map((scene,i)=>({...scene,number:i+1}));
-    const preferred=Math.max(1,Number(style.preferredSceneCount||style.estimatedSceneCount||scenes.length||1));
-    if(!style.constantImage && preferred>scenes.length){
-      try{
-        const blueprint=await buildReferenceBlueprint({referenceTitle,transcript:'',visualReferenceAnalysis,referenceStyle:style});
-        if(blueprint?.sections?.length)scenes=applyReferenceBlueprint(scenes,blueprint,durationSeconds);
-      }catch(err){console.warn('Reference blueprint failed; keeping production plan:',err.message||String(err));}
-    }
-    if(style.constantImage)scenes=scenes.slice(0,1).map(x=>({...x,duration:durationSeconds,constantImage:true,mediaType:'image'}));
     if(!scenes.length)throw new Error('La estructura de escenas quedó vacía.');
 
     scenes=scenes.map((scene,i)=>({...scene,number:i+1,duration:Number(scene.duration)>0?Number(scene.duration):durationSeconds/scenes.length}));
