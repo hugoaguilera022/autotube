@@ -34,6 +34,21 @@ function parseJsonResponse(text){
   throw new Error('Respuesta JSON inválida de Gemini: '+(lastError?.message||'formato no recuperable'));
 }
 const app=express();
+app.post('/api/verify-ai-e2e',async(req,res)=>{
+  const reference=String(req.body?.reference||'').trim();
+  if(!reference)return res.status(400).json({error:'reference requerida'});
+  try{
+    const jobId='ai-e2e-'+Date.now();
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-'));
+    const ref=await downloadReferenceDirectForAiE2E(reference,path.join(dir,'reference'));
+    const job={id:jobId,reference,status:'processing',progress:1};
+    urlVideoJobs.set(jobId,job);
+    executeUrlToVideo(reference,jobId,{directReferenceFile:ref.file,referenceTitle:'AI reference'})
+      .catch(err=>{job.status='error';job.error=err?.message||String(err);console.error('AUTOTUBE AI E2E FAILED',err?.stack||err);});
+    res.json({ok:true,jobId,status:'processing',bytes:ref.bytes,probe:ref.probe});
+  }catch(err){res.status(500).json({error:err?.message||String(err)});}
+});
+
 // Brief creation mode: inputs may include topic, visual references, custom script and optional sample media.
 let youtubeTokens=null,youtubeProfileCache=null,youtubeLoaded=false;
 function cleanEnvValue(value){return String(value||'').replace(/\s+/g,'').replace(/^(['"])(.*)\\1$/,'$2').trim();}
@@ -2196,12 +2211,4 @@ if(String(process.env.AUTOTUBE_E2E_REFERENCE||'').trim() && String(process.env.A
 if(String(process.env.AUTOTUBE_ENABLE_AI_E2E||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_ONCE||'')==='1'&&String(process.env.AUTOTUBE_AI_E2E_REFERENCE||'').trim()){
   const aiReference=String(process.env.AUTOTUBE_AI_E2E_REFERENCE).trim();
   setTimeout(async()=>{console.log('AUTOTUBE AI E2E START',aiReference);try{const jobId='ai-e2e-'+Date.now();urlVideoJobs.set(jobId,{id:jobId,reference:aiReference,status:'processing',progress:1});const directDir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-ai-e2e-ref-')); const direct=await downloadReferenceDirectForAiE2E(aiReference,directDir); const result=await executeUrlToVideo(aiReference,jobId,{directReferenceFile:direct.file,referenceTitle:'AI reference'});console.log('AUTOTUBE AI E2E RESULT',JSON.stringify(result));}catch(err){console.error('AUTOTUBE AI E2E FAILED',err?.stack||err?.message||String(err));}},25000);
-}
-if(String(process.env.AUTOTUBE_VERIFY_FORCE_E2E||'')==='1'){
-  const verifyReference='https://youtu.be/mh48xOkLhgU?si=FxdwPeg3v2TMmo_H';
-  setTimeout(async()=>{
-    console.log('AUTOTUBE VERIFY FORCE E2E START',verifyReference);
-    try{const result=await executeFullPipelineTest(verifyReference);console.log('AUTOTUBE VERIFY FORCE E2E RESULT',JSON.stringify(result));}
-    catch(err){console.error('AUTOTUBE VERIFY FORCE E2E FAILED',err?.stack||err?.message||String(err));}
-  },20000);
 }
