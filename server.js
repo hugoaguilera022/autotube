@@ -35,7 +35,7 @@ function parseJsonResponse(text){
 }
 const app=express();
 app.post('/api/verify-ai-e2e',async(req,res)=>{
-  const reference=String(req.body?.reference||'').trim();
+  const reference=String(req.body?.reference||req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({error:'reference requerida'});
   const videoId=extractYoutubeVideoId(reference);
   if(!videoId)return res.status(400).json({error:'URL de YouTube no válida'});
