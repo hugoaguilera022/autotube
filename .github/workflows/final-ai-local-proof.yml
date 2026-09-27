@@ -1,0 +1,77 @@
+name: Final AI reference MP4 proof
+on:
+  push:
+    branches: [e2e-stable]
+    paths: ['.github/workflows/final-ai-local-proof.yml']
+  workflow_dispatch:
+concurrency:
+  group: autotube-final-local-proof
+  cancel-in-progress: true
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout frozen AutoTube
+        uses: actions/checkout@v4
+        with:
+          ref: final-ai-proof-stable
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: npm install
+      - name: Start AutoTube locally
+        run: |
+          PORT=10000 npm start > server.log 2>&1 &
+          echo $! > server.pid
+      - name: Wait for local server
+        run: |
+          set -e
+          for i in $(seq 1 90); do
+            curl -fsS --max-time 5 http://127.0.0.1:10000/api/health && exit 0
+            sleep 2
+          done
+          cat server.log
+          exit 1
+      - name: Generate AI MP4 from YouTube reference
+        run: |
+          set -euo pipefail
+          REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
+          body="$(curl -fsS --retry 3 --retry-delay 3 -G --data-urlencode "reference=$REF" http://127.0.0.1:10000/api/url-to-video)"
+          echo "$body"
+          JOB="$(python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])' <<<"$body")"
+          echo "JOB=$JOB" >> "$GITHUB_ENV"
+          for i in $(seq 1 150); do
+            sleep 10
+            status="$(curl -fsS --max-time 30 "http://127.0.0.1:10000/api/url-to-video/$JOB")"
+            echo "$status"
+            state="$(python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$status")"
+            if [ "$state" = "done" ]; then
+              echo "$status" > result.json
+              exit 0
+            fi
+            if [ "$state" = "error" ]; then
+              cat server.log
+              exit 1
+            fi
+          done
+          cat server.log
+          exit 1
+      - name: Download and validate MP4
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 120 "http://127.0.0.1:10000/api/url-to-video/$JOB/download" -o autotube-ai-reference.mp4
+          test -s autotube-ai-reference.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_type,codec_name,width,height,r_frame_rate -of json autotube-ai-reference.mp4 | tee validation.json
+          python -c 'import json; d=json.load(open("validation.json")); s=d.get("streams",[]); v=[x for x in s if x.get("codec_type")=="video"]; a=[x for x in s if x.get("codec_type")=="audio"]; assert v and a, "video/audio missing"; assert v[0].get("codec_name")=="h264"; assert a[0].get("codec_name")=="aac"; print("VALID AI MP4: H.264 + AAC")'
+      - name: Upload verified MP4
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-final-ai-reference-mp4
+          path: |
+            autotube-ai-reference.mp4
+            result.json
+            validation.json
+            server.log
