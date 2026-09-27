@@ -1,6 +1,7 @@
 name: AI E2E verification
 on:
-  workflow_dispatch:
+  push:
+    branches: [e2e-stable]
 concurrency:
   group: autotube-ai-e2e
   cancel-in-progress: false
