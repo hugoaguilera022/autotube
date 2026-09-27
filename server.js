@@ -1303,7 +1303,10 @@ async function validateRenderedMp4(file,expectedDuration=0){
 
 async function generateGeminiOriginalImage(prompt,dir,options={}) {
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
-  if(!key)throw new Error('Falta GEMINI_API_KEY.');
+  if(!key){
+    const fallback=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:Math.min(8.5,Math.max(4,Number(options.durationSeconds)||8.5)),width:704,height:396,guidanceScale:3,improveTexture:true});
+    return{...fallback,mediaType:'video',provider:'Hugging Face ZeroGPU · LTX Video fallback'};
+  }
   const model=String(options.model||'gemini-2.5-flash-image').trim();
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),45000);
