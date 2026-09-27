@@ -12,7 +12,7 @@ global.setTimeout=function(callback,delay,...args){
   }catch{}
   return originalSetTimeout(callback,delay,...args);
 };
-if(process.env.AUTOTUBE_E2E_ON_START==='1'){
+if(process.env.AUTOTUBE_E2E_ON_START==='1' || process.env.AUTOTUBE_FORCE_ONE_SHOT_E2E==='1'){
   originalSetTimeout(async()=>{
     const base='http://127.0.0.1:'+String(process.env.PORT||10000);
     const reference='https://www.youtube.com/watch?v=lnCZPPhAEwM';
