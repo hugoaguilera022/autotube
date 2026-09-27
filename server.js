@@ -77,8 +77,8 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
 async function downloadYoutubeViaHfProxy(reference,dir){
   const {Client}=require('@gradio/client');
   const app=await Promise.race([Client.connect('HeshamHaroon/yt-proxy'),new Promise((_,reject)=>setTimeout(()=>reject(new Error('HF YouTube proxy connect timeout')),30000))]);
-  const result=await Promise.race([app.predict('/download_video',[reference]),new Promise((_,reject)=>setTimeout(()=>reject(new Error('HF YouTube proxy timeout')),360000))]);
-  const data=Array.isArray(result?.data)?result.data:[result?.data??result];
+  let result;try{result=await Promise.race([app.predict('/download_video',[reference]),new Promise((_,reject)=>setTimeout(()=>reject(new Error('HF YouTube proxy timeout')),360000))]);}catch(e){throw new Error('HF YouTube proxy predict failed: '+JSON.stringify(e?.message||e).slice(0,2000));}
+  const data=Array.isArray(result?.data)?result.data:[result?.data??result];console.log('AUTOTUBE HF YT PROXY RESULT',JSON.stringify(data).slice(0,5000));
   const pick=x=>typeof x==='string'?x:(x?.path||x?.url||x?.video?.path||x?.video?.url||x?.value||'');
   const source=data.map(pick).find(Boolean); if(!source)throw new Error('HF YouTube proxy no devolvió archivo.');
   const outputPath=path.join(dir,'reference-proxy.mp4');
