@@ -74,6 +74,27 @@ app.post('/api/verify-ai-e2e',async(req,res)=>{
   return res.status(result.queued?202:202).json({ok:false,status:job.status,jobId:job.id,statusUrl:'/api/url-to-video/'+encodeURIComponent(job.id),reference,queuePosition:job.status==='queued'?queuedUrlVideoJobs.indexOf(job.id)+1:0,existing:result.existing||false});
 });
 
+async function downloadYoutubeViaHfProxy(reference,dir){
+  const {Client}=require('@gradio/client');
+  const app=await Promise.race([Client.connect('HeshamHaroon/yt-proxy'),new Promise((_,reject)=>setTimeout(()=>reject(new Error('HF YouTube proxy connect timeout')),30000))]);
+  const result=await Promise.race([app.predict('/download_video',[reference]),new Promise((_,reject)=>setTimeout(()=>reject(new Error('HF YouTube proxy timeout')),360000))]);
+  const data=Array.isArray(result?.data)?result.data:[result?.data??result];
+  const pick=x=>typeof x==='string'?x:(x?.path||x?.url||x?.video?.path||x?.video?.url||x?.value||'');
+  const source=data.map(pick).find(Boolean); if(!source)throw new Error('HF YouTube proxy no devolvió archivo.');
+  const outputPath=path.join(dir,'reference-proxy.mp4');
+  if(/^https?:/i.test(source)){const rr=await fetch(source,{signal:AbortSignal.timeout(180000)});if(!rr.ok)throw new Error('Descarga del resultado HF HTTP '+rr.status);await fs.writeFile(outputPath,Buffer.from(await rr.arrayBuffer()));}else await fs.copyFile(source,outputPath);
+  const st=await fs.stat(outputPath);if(st.size<10000)throw new Error('Referencia descargada por HF demasiado pequeña.');
+  return outputPath;
+}
+async function analyzeVideoWithPublicHfSpace(videoPath){
+  const {Client,handle_file}=require('@gradio/client');
+  const app=await Promise.race([Client.connect('lixin4ever/VideoLLaMA3'),new Promise((_,reject)=>setTimeout(()=>reject(new Error('VideoLLaMA3 connect timeout')),60000))]);
+  const prompt='Analyze this video for original recreation. Return concise JSON with keys summary, subjects, setting, visual_style, palette, lighting, camera, motion, scene_count, scene_segments, pacing, audio, narrative_structure. scene_segments must contain start,end,subject,action,shot,camera,lighting,transition. Describe audiovisual structure and audio character, not exact wording.';
+  const attempts=[['/chat',[handle_file(videoPath),prompt]],['/describe_video',[handle_file(videoPath),prompt]],['/predict',[handle_file(videoPath),prompt]],['/video_chat',[handle_file(videoPath),prompt]]];
+  let last='';
+  for(const [endpoint,args] of attempts){try{const result=await Promise.race([app.predict(endpoint,args),new Promise((_,reject)=>setTimeout(()=>reject(new Error(endpoint+' timeout')),300000))]);const data=Array.isArray(result?.data)?result.data:[result?.data??result];const textOut=data.map(x=>typeof x==='string'?x:(x?.text||x?.value||'')).filter(Boolean).join('\n').trim();if(textOut){let profile=null;try{profile=JSON.parse(textOut);}catch{}return{raw:textOut,profile:profile||{summary:textOut,generation_prompt:textOut}};}}catch(e){last=String(e?.message||e);}}
+  throw new Error('VideoLLaMA3 no pudo analizar el vídeo: '+last);
+}
 async function geminiYoutubeUrlAnalysis(reference){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||process.env.GOOGLE_API_KEY||'').trim();
   if(!key)throw new Error('GEMINI_API_KEY no configurada para análisis audiovisual directo de YouTube.');
