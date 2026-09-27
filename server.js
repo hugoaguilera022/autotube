@@ -2128,7 +2128,9 @@ async function executeUrlToVideo(reference,jobId,options={}){
       return{ok:true,jobId,reference,referenceTitle:options.referenceTitle||'AI reference',sceneCount:1,size:finalStat.size,durationSeconds:validation.durationSeconds,validation:job?.validation};
     }
     const style=options.forceAi
-      ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
+      ? (referenceDownloaded?.file
+        ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
+        : await analyzeYoutubeReferenceMedia(reference,video))
       : (options.directReferenceFile
         ? await analyzeDownloadedReferenceMedia(referenceDownloaded.file,{...video,duration:String(referenceDownloaded.probe?.durationSeconds||video.duration||'')})
         : await analyzeYoutubeReferenceMedia(reference,video));
@@ -2184,6 +2186,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
         console.log('AUTOTUBE AI VIDEO FALLBACK READY',JSON.stringify({reference,strategy:'thumbnail-metadata->Gemini-images->FFmpeg-motion',audioProfile}));
       }
 
+      let generatedVideo=null;
       const prompt=[
         'Create NEW ORIGINAL AI-generated video material from this specific YouTube reference.',
         'The reference is the REAL DOWNLOADED MP4 analyzed frame-by-frame. Reproduce its concrete visible subjects, setting, composition, camera language, lighting, palette, motion rhythm and visual continuity.',
@@ -2197,7 +2200,6 @@ async function executeUrlToVideo(reference,jobId,options={}){
         'Reference audio profile for pacing only: '+JSON.stringify(visualReferenceAnalysis?.audioProfile||{}).slice(0,1800),
         '16:9, high-detail cinematic AI video, coherent continuous motion, original material, no watermark.'
       ].join('\\n');
-      let generatedVideo=null;
       const videoProviderErrors=[];
       for(const provider of ['chopperblu','goalsave','ltx','pollinations']){
         try{
@@ -2206,8 +2208,44 @@ async function executeUrlToVideo(reference,jobId,options={}){
           if(generatedVideo?.outputPath)break;
         }catch(err){videoProviderErrors.push(provider+': '+String(err?.message||err));console.warn('AUTOTUBE URL->AI VIDEO PROVIDER FAILED',provider,err?.message||String(err));}
       }
+      if(!generatedVideo?.outputPath && referenceDownloaded?.file){
+        const fallbackSegments=Array.isArray(segments)&&segments.length ? segments : [{startSeconds:0,endSeconds:Number(referenceDownloaded.probe?.durationSeconds)||4,summary:aiReferenceTitle}];
+        const count=Math.max(2,Math.min(6,fallbackSegments.length));
+        const imagePaths=[];
+        for(let n=0;n<count;n++){
+          const seg=fallbackSegments[Math.min(fallbackSegments.length-1,Math.floor(n*fallbackSegments.length/count))]||{};
+          const startSeconds=Math.max(0,Number(seg.startSeconds)||0);
+          const sourceFrame=path.join(dir,'reference-segment-'+n+'.jpg');
+          await runFfmpeg(['-y','-hide_banner','-loglevel','error','-ss',String(startSeconds),'-i',referenceDownloaded.file,'-frames:v','1','-q:v','2',sourceFrame]);
+          const imagePrompt=[
+            'Create an ORIGINAL AI-generated cinematic frame conditioned on the REAL FRAME from this exact YouTube reference segment.',
+            'Preserve the concrete subject(s), setting, action, shot scale, composition, lighting, palette and visual continuity visible in the supplied frame and described below.',
+            'Do not substitute the subject with a generic theme or unrelated content.',
+            'Create new original material; do not copy the exact frame, face, logo, text, watermark, recording or copyrighted footage.',
+            'REFERENCE TITLE: '+aiReferenceTitle,
+            'SEGMENT: '+JSON.stringify(seg).slice(0,5000),
+            'GLOBAL VISUAL PROFILE: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,2500),
+            'MOTION PROFILE: '+JSON.stringify(visualReferenceAnalysis?.animationProfile||{}).slice(0,1800),
+            '16:9, high-detail cinematic AI image, coherent original visual continuity, no watermark.'
+          ].join('\n');
+          const generatedImage=await generateGeminiOriginalImage(imagePrompt,dir,{referenceImagePath:sourceFrame,referenceImageUrl:video?.thumbnail||video?.thumbnails?.[0]||''});
+          imagePaths.push(generatedImage.outputPath);
+        }
+        const montagePath=path.join(dir,'ai-reference-frame-conditioned.mp4');
+        const concatList=path.join(dir,'ai-reference-frame-conditioned.txt');
+        const durationPer=4/count;
+        const lines=[];
+        for(const p of imagePaths){lines.push('file '+JSON.stringify(p));lines.push('duration '+durationPer);}
+        lines.push('file '+JSON.stringify(imagePaths[imagePaths.length-1]));
+        await fs.writeFile(concatList,lines.join('\n')+'\n');
+        await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',concatList,'-vf',"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.001,1.06)':d=120:s=1280x720:fps=30",'-t','4','-c:v','libx264','-preset','veryfast','-crf','22','-pix_fmt','yuv420p','-an',montagePath]);
+        const st=await fs.stat(montagePath);
+        if(!st.size)throw new Error('El fallback IA condicionado por fotogramas produjo un MP4 vacío.');
+        generatedVideo={outputPath:montagePath,bytes:st.size,provider:'AI frame-conditioned montage',model:'AI image generation + FFmpeg motion',status:'complete',referenceDriven:true};
+        console.log('AUTOTUBE URL->AI FRAME-CONDITIONED MONTAGE DONE',JSON.stringify({reference,bytes:st.size,count}));
+      }
       if(!generatedVideo?.outputPath){
-        throw new Error('No hay proveedor de vídeo IA disponible tras Goalsave LTX, LTX y Pollinations: '+videoProviderErrors.join(' | '));
+        throw new Error('No hay proveedor de vídeo IA disponible tras '+videoProviderErrors.join(' | '));
       }
       const audioProfile=visualReferenceAnalysis?.audioProfile||{};
       let generatedAudio=null;
