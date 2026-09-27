@@ -1072,7 +1072,7 @@ async function executeFullPipelineTest(reference,testId=null){
     }
 
     await run('render-all-scenes',async()=>{
-      const output=path.join(dir,'full-test.mp4');
+      const output=path.join(renderJobDir,String(testId||('fulltest_'+Date.now()))+'.mp4');
       render=await renderAutotubeVideo({
         scenes:plan.scenes,
         mediaResults,
@@ -1083,7 +1083,7 @@ async function executeFullPipelineTest(reference,testId=null){
       });
       validation=await validateRenderedMp4(output,durationSeconds);
       const st=await fs.stat(output);
-      return{bytes:st.size,sceneCount:plan.scenes.length,...validation};
+      return{bytes:st.size,sceneCount:plan.scenes.length,...validation,downloadPath:output};
     });
 
     return{
