@@ -411,9 +411,7 @@ async function analyzeYoutubeReferenceMedia(url,video){
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-download-'));
   try{
     try{
-      const downloaded=process.env.AUTOTUBE_REFERENCE_FULL_DOWNLOAD==='1'
-        ? await downloadYoutubeReference(referenceUrl,dir)
-        : (()=>{throw new Error('Full YouTube reference download disabled on constrained Render; using public thumbnail/metadata fallback.')})();
+      const downloaded=await downloadYoutubeReference(referenceUrl,dir);
       const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
       const analyzed=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
       analyzed.referenceFileBytes=downloaded.bytes;
@@ -431,47 +429,8 @@ async function analyzeYoutubeReferenceMedia(url,video){
       }
       return analyzed;
     }catch(downloadErr){
-      if(process.env.AUTOTUBE_REFERENCE_FULL_DOWNLOAD==='1'){
-        throw new Error('REFERENCIA_REAL_OBLIGATORIA: no se obtuvieron los bytes del MP4 de YouTube. '+String(downloadErr?.message||downloadErr));
-      }
-      console.warn('YouTube media download unavailable; using thumbnail/metadata fallback:',downloadErr?.message||String(downloadErr));
-      const thumbs=Array.isArray(video?.thumbnails)?video.thumbnails:[video?.thumbnail].filter(Boolean);
-      const images=[];
-      for(const thumb of thumbs.slice(0,2)){
-        const image=await fetchImageForGemini(thumb);
-        if(image)images.push(image);
-      }
-      if(!images.length)throw downloadErr;
-      const durationSeconds=Math.max(4,parseIsoDurationSeconds(video?.duration)||60);
-      let analysis=null;
-      try{
-        const text=await callGemini({
-          system:'Eres un analista audiovisual. La descarga del vídeo de referencia no está disponible, así que usa SOLO las miniaturas públicas y los metadatos suministrados. Extrae tema, sujeto, composición, paleta, iluminación, estilo y ritmo visual general. No inventes escenas concretas que no sean visibles.',
-          user:'Analiza estas miniaturas de una referencia de YouTube y sus metadatos. Devuelve SOLO JSON válido con videoProfile, animationProfile, audioProfile, structureProfile y generationDirectives. videoProfile: durationSeconds,constantImage,estimatedSceneCount,sceneChangeRate,cameraMovement,composition,palette,lighting,visualStyle,continuity. animationProfile: cameraMotion,zoomStyle,panStyle,overlays,textAnimation,effects,transitionStyle,motionIntensity,visualRhythm. audioProfile: hasSpeech,language,speechRate,pauses,emotion,hasMusic,hasAmbience,hasSoundEffects,musicMood,energy,dynamics,instrumentation,voiceStyle,bpmEstimate,voiceMusicBalance,audioContinuity. Si el audio no puede observarse, marca hasSpeech y hasMusic como null y no afirmes que has escuchado el original. structureProfile: opening,pacing,transitions,segmentCount,segmentDurations,visualContinuity,timestamps,sceneSegments. generationDirectives: useSingleContinuousVisual,preferredSceneCount,preserveVisualContinuity,preserveAudioContinuity,visualSearchStrategy,musicStrategy,narrationStrategy,animationStrategy. Metadatos: '+JSON.stringify({title:video?.title||'',description:String(video?.description||'').slice(0,6000),channelTitle:video?.channelTitle||'',tags:Array.isArray(video?.tags)?video.tags.slice(0,30):[],duration:video?.duration||''}),
-          images,
-          temperature:0.2,
-          maxOutputTokens:2600,
-          json:true
-        });
-        analysis=parseJsonResponse(text);
-      }catch(aiErr){
-        // Reference analysis must not become a hard dependency on Gemini quota.
-        // Metadata + thumbnails are enough to anchor an original production plan.
-        console.warn('Thumbnail Gemini analysis unavailable; using deterministic metadata fallback:',aiErr?.message||String(aiErr));
-        const title=String(video?.title||'Tema de referencia').trim();
-        const description=String(video?.description||'').replace(/\s+/g,' ').trim();
-        const tags=Array.isArray(video?.tags)?video.tags.slice(0,12):[];
-        const subject=[title,...tags].filter(Boolean).join(' · ').slice(0,500);
-        analysis={
-          videoProfile:{durationSeconds,constantImage:false,estimatedSceneCount:Math.max(1,Math.ceil(durationSeconds/20)),sceneChangeRate:'moderate',cameraMovement:'cinematic subtle movement',composition:'16:9 horizontal composition',palette:'palette derived from public thumbnail',lighting:'lighting derived from public thumbnail',visualStyle:'cinematic original treatment based on public thumbnail and metadata',continuity:'coherent thematic continuity'},
-          animationProfile:{cameraMotion:'subtle push-in and lateral movement',zoomStyle:'slow cinematic zoom',panStyle:'gentle pan',overlays:'none unless generated by the production plan',textAnimation:'minimal',effects:'natural cinematic effects',transitionStyle:'smooth',motionIntensity:'medium',visualRhythm:'steady'},
-          audioProfile:{hasSpeech:/documentary|documental|story|historia|explained|tutorial|review|news|noticias|podcast|interview|entrevista|guide|guía|top \d|lugares|how to|como hacer/i.test(title+' '+description),language:'es',speechRate:'natural',pauses:'natural',emotion:'appropriate to topic',hasMusic:true,hasAmbience:true,hasSoundEffects:false,musicMood:'original cinematic instrumental',energy:'medium',dynamics:'medium',instrumentation:'cinematic ambient instrumentation',voiceStyle:'Natural y cercana',bpmEstimate:'90-110',voiceMusicBalance:'voice clear over music',audioContinuity:'continuous'},
-          structureProfile:{opening:'strong thematic opening',pacing:'steady',transitions:'smooth',segmentCount:Math.max(1,Math.ceil(durationSeconds/20)),segmentDurations:[],visualContinuity:'thematic continuity',timestamps:[],sceneSegments:[]},
-          generationDirectives:{useSingleContinuousVisual:false,preferredSceneCount:Math.max(1,Math.ceil(durationSeconds/20)),preserveVisualContinuity:true,preserveAudioContinuity:true,visualSearchStrategy:'search by exact reference topic and concrete subjects',musicStrategy:'original instrumental bed',narrationStrategy:'original narration when topic suggests speech',animationStrategy:'cinematic subtle motion'},
-          metadataFallback:true,
-          metadataSubject:subject
-        };
-      }
+      throw new Error('REFERENCIA_REAL_OBLIGATORIA: no se obtuvieron los bytes del MP4 de YouTube. '+String(downloadErr?.message||downloadErr));
+    }
       const vp=analysis?.videoProfile||{};
       const ap={...(analysis?.audioProfile||{})};
       const an=analysis?.animationProfile||{};
