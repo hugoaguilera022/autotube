@@ -1708,7 +1708,9 @@ async function executeFullPipelineTest(reference){
       const referenceDownloadDir=path.join(dir,'reference-source');
       const downloaded=await downloadYoutubeReference(reference,referenceDownloadDir);
       const measured=await measureReferenceVisualContinuity(downloaded.file).catch(err=>({durationSeconds:0,frozenSeconds:0,freezeRatio:0,constantImage:false,error:err.message||String(err)}));
-      style=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:video?.duration||String(measured.durationSeconds||'')});
+      const referenceDuration=Number(downloaded.finalProbe?.duration||measured.durationSeconds||Number(video?.duration||0));
+      if(referenceDuration>0)video.duration=String(referenceDuration);
+      style=await analyzeDownloadedReferenceMedia(downloaded.file,{...video,duration:referenceDuration>0?String(referenceDuration):String(video?.duration||measured.durationSeconds||'')});
       style.referenceFileBytes=downloaded.bytes;
       style.downloadStrategy=downloaded.strategy;
       style.measuredVisualContinuity={...(style.measuredVisualContinuity||{}),...measured,source:'FFmpeg + Gemini sampled frames'};
