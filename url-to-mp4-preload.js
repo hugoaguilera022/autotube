@@ -12,6 +12,23 @@ function runFfmpeg(args){return new Promise((resolve,reject)=>{const p=spawn(ffm
 async function sha256File(file){const h=crypto.createHash('sha256');const stream=require('fs').createReadStream(file);for await(const chunk of stream)h.update(chunk);return h.digest('hex')}
 async function streamHash(file,map){return new Promise((resolve,reject)=>{const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-i',file,'-map',map,'-c','copy','-f','hash','-'],{stdio:['ignore','pipe','pipe']});let out='',err='';p.stdout.on('data',d=>{out+=d.toString()});p.stderr.on('data',d=>{err+=d.toString()});p.on('error',reject);p.on('close',c=>{if(c!==0)return reject(new Error('No se pudo calcular la huella del stream '+map+': '+err.slice(-1200)));const m=out.match(/SHA256=([0-9a-f]+)/i);if(!m)return reject(new Error('FFmpeg no devolvió una huella SHA-256 para '+map+'.'));resolve(m[1].toLowerCase())})})}
 async function probe(file){const out=await new Promise((resolve,reject)=>{const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-map','0:a:0?','-c','copy','-f','null','-'],{stdio:['ignore','pipe','pipe']});let e='';p.stderr.on('data',d=>{e+=d.toString();if(e.length>30000)e=e.slice(-30000)});p.on('error',reject);p.on('close',c=>c===0?resolve(e):reject(new Error('No se pudo validar el vídeo descargado: '+e.slice(-1800))))});const t=String(out),dm=t.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i),duration=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0,vl=t.split(/\r?\n/).find(x=>/Video:/i.test(x))||'',al=t.split(/\r?\n/).find(x=>/Audio:/i.test(x))||'',vm=vl.match(/(\d{2,5})x(\d{2,5})/),fm=vl.match(/(\d+(?:\.\d+)?)\s*fps/i),ac=(al.match(/Audio:\s*([a-z0-9_]+)/i)||[])[1]||'';return{duration,width:vm?Number(vm[1]):0,height:vm?Number(vm[2]):0,fps:fm?Number(fm[1]):0,videoLine:vl,audioLine:al,audioCodec:ac}}
+let trustedSessionCache={value:null,expires:0};
+async function getTrustedYoutubeSession(){
+  const base=String(process.env.AUTOTUBE_YOUTUBE_SESSION_URL||'').trim().replace(/\/$/,'');
+  if(!base)return null;
+  if(trustedSessionCache.value&&Date.now()<trustedSessionCache.expires)return trustedSessionCache.value;
+  try{
+    const r=await fetch(base+'/token',{headers:{Accept:'application/json'}});
+    if(!r.ok)throw new Error('session HTTP '+r.status);
+    const j=await r.json();
+    const d=j?.data||j;
+    const po=String(d?.poToken||d?.po_token||'').trim();
+    const vd=String(d?.visitorData||d?.visitor_data||'').trim();
+    if(!po||!vd)throw new Error('session sin poToken/visitorData');
+    trustedSessionCache={value:{po,vd},expires:Date.now()+20000};
+    return trustedSessionCache.value;
+  }catch(e){console.error('AUTOTUBE TRUSTED SESSION FAILED',e?.message||e);return null}
+}
 async function downloadViaExternalProvider(url,dir){
   const base=String(process.env.AUTOTUBE_EXTERNAL_DOWNLOADER_URL||'').trim().replace(/\/$/,'');
   const key=String(process.env.AUTOTUBE_EXTERNAL_DOWNLOADER_KEY||'').trim();
