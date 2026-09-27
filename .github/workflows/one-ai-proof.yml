@@ -1,0 +1,73 @@
+name: One AI reference MP4 proof
+
+on:
+  push:
+    branches: [ai-proof-run-20260927]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Start one URL-to-AI-MP4 job
+        id: start
+        env:
+          APP_URL: https://autotube-ai-e2e-isolated.onrender.com
+          REFERENCE: https://www.youtube.com/watch?v=6SUAdxU9CDE
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, urllib.parse, urllib.request, json
+          url=os.environ["APP_URL"]+"/api/url-to-video?reference="+urllib.parse.quote(os.environ["REFERENCE"], safe="")
+          with urllib.request.urlopen(url, timeout=60) as r:
+              body=json.load(r)
+          print(json.dumps(body, indent=2))
+          if not body.get("jobId"): raise SystemExit("No jobId returned")
+          with open(os.environ["GITHUB_OUTPUT"],"a") as f: f.write("job="+body["jobId"]+"\n")
+          PY
+
+      - name: Wait for generated MP4
+        env:
+          APP_URL: https://autotube-ai-e2e-isolated.onrender.com
+          JOB: ${{ steps.start.outputs.job }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 180); do
+            body="$(curl -fsS --retry 3 --retry-all-errors --connect-timeout 15 --max-time 30 "$APP_URL/api/url-to-video/$JOB")" || body='{"status":"retry"}'
+            echo "$body"
+            status="$(python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$body" 2>/dev/null || true)"
+            if [ "$status" = "done" ]; then echo "$body" > job.json; exit 0; fi
+            if [ "$status" = "error" ]; then echo "$body" > job.json; exit 1; fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Download and validate MP4
+        env:
+          APP_URL: https://autotube-ai-e2e-isolated.onrender.com
+          JOB: ${{ steps.start.outputs.job }}
+        run: |
+          set -euo pipefail
+          curl -fL --retry 5 --retry-all-errors --connect-timeout 15 --max-time 120 "$APP_URL/api/url-to-video/$JOB/download" -o autotube-ai-reference.mp4
+          test -s autotube-ai-reference.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,avg_frame_rate,codec_type -of json autotube-ai-reference.mp4 | tee mp4-probe.json
+          python - <<'PY'
+          import json
+          d=json.load(open("mp4-probe.json"))
+          assert d["format"]["size"] > 10000
+          vs=[s for s in d["streams"] if s["codec_type"]=="video"]
+          assert vs and vs[0]["width"]>=640 and vs[0]["height"]>=360
+          print("VALIDATED_AI_MP4", d)
+          PY
+
+      - name: Upload validated MP4
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-autotube-ai-mp4
+          path: |
+            autotube-ai-reference.mp4
+            mp4-probe.json
+            job.json
