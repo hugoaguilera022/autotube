@@ -2,7 +2,7 @@
 // currently running public Wan 2.2 ZeroGPU Space. This keeps the existing pipeline
 // unchanged while providing a genuinely AI-generated MP4 without a paid API balance.
 const originalFetch=global.fetch;
-const target='https://alexcheng0072-wan27-free-video-generator.hf.space';
+const target=String(process.env.WAN22_ZEROGPU_SPACE_URL||'https://alexcheng0072-wan27-free-video-generator.hf.space').trim().replace(/\/$/,'');
 const eventMap=new Map();
 
 function isLegacyLtx(url){
@@ -27,7 +27,7 @@ async function bridge(url,options={}){
   try{payload=typeof body==='string'?JSON.parse(body):null}catch{}
   const data=Array.isArray(payload?.data)?payload.data:[];
   const prompt=String(data[0]||'').trim();
-  const duration=Math.max(2,Math.min(5,Number(data[7])||3));
+  const duration=Math.max(3,Math.min(5,Number(data[3])||3));
   const response=await originalFetch(target+'/gradio_api/call/generate_video',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
