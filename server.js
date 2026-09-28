@@ -1408,10 +1408,8 @@ async function generateWan22RestVideoClip(prompt,dir,options={}) {
     const width=832,height=480,frames=Math.max(49,Math.min(97,Math.round(duration*24)));
     data=[String(prompt||'').trim(),fileData,width,height,frames,8,5.0,Math.floor(Math.random()*2147483647)];
   }else{
-    const ratio=String(options.aspectRatio||'16:9');
-    const aspectRatio=ratio==='9:16'?'480x832':ratio==='1:1'?'640x640':'832x480';
-    const duration=Math.max(2,Math.min(5,Number(options.durationSeconds)||3));
-    data=[fileData,String(prompt||'').trim(),aspectRatio,duration];
+    const duration=Math.max(3,Math.min(5,Number(options.durationSeconds)||3));
+    data=[fileData,String(prompt||'').trim(),4,String(options.negativePrompt||'static, blurry, distorted, text, watermark').trim(),duration,1,1,Math.floor(Math.random()*2147483647),true];
   }
   const endpoint='/generate_video';
   const headers={'Content-Type':'application/json'};if(token)headers.Authorization='Bearer '+token;
