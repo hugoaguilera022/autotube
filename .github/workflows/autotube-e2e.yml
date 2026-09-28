@@ -114,6 +114,14 @@ jobs:
                         if [ "$has_video" -ge 1 ] && [ "$has_audio" -ge 1 ] &&                            awk "BEGIN {exit !($duration > 0)}" &&                            awk "BEGIN {exit !($size > 10000)}"; then
                           echo "Basic MP4 container validation passed."
 
+                          reference_ok="$(jq -r '.result.validation.referenceSimilarityValidation.accepted // false' status.json 2>/dev/null || echo false)"
+                          if [ "$reference_ok" != "true" ]; then
+                            last_error="Final MP4 did not pass audiovisual similarity validation against the YouTube reference"
+                            echo "$last_error"
+                            continue
+                          fi
+                          echo "REFERENCE VALIDATION PASSED: generated MP4 matches the reference audiovisual profile."
+
                           # Require measurable frame-to-frame visual change.
                           motion="$(ffmpeg -hide_banner -loglevel error                             -i autotube-final.mp4                             -vf "select='gt(scene,0.003)',metadata=print:file=motion.txt"                             -an -f null - 2>&1 || true)"
                           frames="$(grep -c "lavfi.scene_score" motion.txt 2>/dev/null || true)"
