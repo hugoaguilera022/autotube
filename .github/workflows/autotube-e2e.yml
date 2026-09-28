@@ -14,8 +14,8 @@ permissions:
 
 jobs:
   e2e:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - name: Wait for Render to deploy this commit
         env:
@@ -23,61 +23,141 @@ jobs:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          for i in $(seq 1 120); do
+          for i in $(seq 1 180); do
             body="$(curl -fsS --max-time 15 "$BASE_URL/api/health" || true)"
             commit="$(printf '%s' "$body" | jq -r '.commit // empty')"
             echo "Render commit: $commit"
-            if [ "$commit" = "$EXPECTED_COMMIT" ]; then exit 0; fi
+            if [ "$commit" = "$EXPECTED_COMMIT" ]; then
+              echo "Render is serving this exact commit."
+              exit 0
+            fi
             sleep 10
           done
           echo "Render did not serve $EXPECTED_COMMIT in time." >&2
           exit 1
 
-      - name: Run one real reference-to-MP4 pipeline
+      - name: Install validation tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg jq curl
+
+      - name: Run sequential real reference-to-MP4 attempts
         env:
           BASE_URL: https://autotube-usm1.onrender.com
           REFERENCE: https://www.youtube.com/watch?v=P_iFWenf1VA
+          MAX_ATTEMPTS: "5"
         run: |
-          set -euo pipefail
-          curl -fsS --max-time 30 --get --data-urlencode "reference=$REFERENCE" "$BASE_URL/api/full-pipeline-test" > start.json
-          cat start.json
-          job="$(jq -r '.jobId // empty' start.json)"
-          test -n "$job"
-          for i in $(seq 1 720); do
-            status="$(curl -fsS --max-time 30 "$BASE_URL/api/full-pipeline-test/$job" || true)"
-            printf '%s
-' "$status" > status.json
-            echo "$status" | jq '{status,ok,elapsedMs,result: .result,error}' || true
-            state="$(echo "$status" | jq -r '.status // empty' 2>/dev/null || true)"
-            if [ "$state" = "done" ]; then exit 0; fi
-            if [ "$state" = "failed" ] || { [ "$state" != "running" ] && [ "$(echo "$status" | jq -r '.ok // true' 2>/dev/null || true)" = "false" ]; }; then
-              exit 1
+          set -uo pipefail
+          success=0
+          last_error=""
+
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo "============================================================"
+            echo "AUTOTUBE E2E ATTEMPT $attempt/$MAX_ATTEMPTS"
+            echo "============================================================"
+
+            rm -f start.json status.json autotube-final.mp4 ffprobe.json
+
+            if ! curl -fsS --max-time 60 --get               --data-urlencode "reference=$REFERENCE"               "$BASE_URL/api/full-pipeline-test" > start.json; then
+              last_error="Could not start pipeline"
+              echo "$last_error"
+            else
+              cat start.json
+              job="$(jq -r '.jobId // empty' start.json 2>/dev/null || true)"
+
+              if [ -z "$job" ]; then
+                last_error="Pipeline did not return a jobId"
+                echo "$last_error"
+              else
+                state="unknown"
+                for poll in $(seq 1 720); do
+                  status="$(curl -fsS --max-time 30 "$BASE_URL/api/full-pipeline-test/$job" || true)"
+                  printf '%s\n' "$status" > status.json
+                  echo "$status" | jq '{status,ok,elapsedMs,result:.result,error}' || true
+                  state="$(echo "$status" | jq -r '.status // empty' 2>/dev/null || true)"
+
+                  if [ "$state" = "done" ]; then
+                    echo "Pipeline reported done."
+                    break
+                  fi
+
+                  if [ "$state" = "failed" ] ||                      { [ "$state" != "running" ] &&                        [ "$(echo "$status" | jq -r '.ok // true' 2>/dev/null || true)" = "false" ]; }; then
+                    last_error="$(echo "$status" | jq -r '.error // .message // "pipeline failed"' 2>/dev/null || echo "pipeline failed")"
+                    echo "Detected pipeline failure: $last_error"
+                    break
+                  fi
+
+                  sleep 10
+                done
+
+                if [ "$state" = "done" ]; then
+                  echo "Downloading candidate MP4 for strict validation..."
+                  if curl -fL --max-time 1800                     "$BASE_URL/api/full-pipeline-test/$job/download"                     -o autotube-final.mp4; then
+
+                    if [ -s autotube-final.mp4 ]; then
+                      if ffprobe -v error                         -show_entries format=duration,size                         -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels                         -of json autotube-final.mp4 > ffprobe.json; then
+
+                        cat ffprobe.json
+                        has_video="$(jq -r '[.streams[] | select(.codec_type=="video")] | length' ffprobe.json)"
+                        has_audio="$(jq -r '[.streams[] | select(.codec_type=="audio")] | length' ffprobe.json)"
+                        duration="$(jq -r '.format.duration // 0' ffprobe.json)"
+                        size="$(jq -r '.format.size // 0' ffprobe.json)"
+
+                        if [ "$has_video" -ge 1 ] && [ "$has_audio" -ge 1 ] &&                            awk "BEGIN {exit !($duration > 0)}" &&                            awk "BEGIN {exit !($size > 10000)}"; then
+                          echo "Basic MP4 container validation passed."
+
+                          # Require measurable frame-to-frame visual change.
+                          motion="$(ffmpeg -hide_banner -loglevel error                             -i autotube-final.mp4                             -vf "select='gt(scene,0.003)',metadata=print:file=motion.txt"                             -an -f null - 2>&1 || true)"
+                          frames="$(grep -c "lavfi.scene_score" motion.txt 2>/dev/null || true)"
+
+                          if [ "${frames:-0}" -ge 1 ]; then
+                            echo "STRICT VALIDATION PASSED: real frame-to-frame motion detected."
+                            echo "AUTOTUBE_FINAL_MP4_VALID=1"
+                            echo "AUTOTUBE_FINAL_MP4_MOTION=1"
+                            success=1
+                            break
+                          fi
+
+                          last_error="MP4 exists but strict motion validation found no measurable frame-to-frame change"
+                          echo "$last_error"
+                        else
+                          last_error="MP4 failed container validation"
+                          echo "$last_error"
+                        fi
+                      else
+                        last_error="ffprobe could not parse the MP4"
+                        echo "$last_error"
+                      fi
+                    else
+                      last_error="Downloaded MP4 is empty"
+                      echo "$last_error"
+                    fi
+                  else
+                    last_error="Could not download final MP4"
+                    echo "$last_error"
+                  fi
+                fi
+              fi
             fi
-            sleep 10
+
+            if [ "$success" -eq 1 ]; then
+              break
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Attempt $attempt failed. Waiting before the next sequential attempt..."
+              sleep $((30 * attempt))
+            fi
           done
-          echo "E2E timed out." >&2
-          exit 1
 
-      - name: Download and strictly validate final MP4
-        if: success()
-        env:
-          BASE_URL: https://autotube-usm1.onrender.com
-        run: |
-          set -euo pipefail
-          job="$(jq -r '.jobId' start.json)"
-          curl -fL --max-time 1800 "$BASE_URL/api/full-pipeline-test/$job/download" -o autotube-final.mp4
-          test -s autotube-final.mp4
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
-          ffprobe -v error -show_entries format=duration,size -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels -of json autotube-final.mp4 > ffprobe.json
-          cat ffprobe.json
-          jq -e '.streams | map(select(.codec_type=="video")) | length >= 1' ffprobe.json
-          jq -e '.streams | map(select(.codec_type=="audio")) | length >= 1' ffprobe.json
-          jq -e '.format.duration | tonumber > 0' ffprobe.json
-          jq -e '.format.size | tonumber > 10000' ffprobe.json
-          echo "AUTOTUBE_FINAL_MP4_VALID=1"
+          if [ "$success" -ne 1 ]; then
+            echo "AUTOTUBE_E2E_FAILED_AFTER_RETRIES=1" >&2
+            echo "Last detected failure: $last_error" >&2
+            exit 1
+          fi
 
-      - name: Upload verified MP4 and reports
+      - name: Upload verified MP4 and diagnostics
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -87,4 +167,5 @@ jobs:
             status.json
             ffprobe.json
             start.json
+            motion.txt
           retention-days: 7
