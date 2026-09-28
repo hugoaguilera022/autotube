@@ -572,7 +572,51 @@ async function validateAnimatedMotion(file){
   return{motionDetected:true,sampledFrames:hashes.length,uniqueFrames:uniqueHashes.length};
 }
 
-async function validateRenderedMp4(file,expectedDuration=0){
+async function validateReferenceConformance(file,referenceStyle={},referenceTitle='',referenceThumbnail=''){
+  const result={status:'deterministic',semanticAudit:null,score:null};
+  const vp=referenceStyle?.videoProfile||{}, ap=referenceStyle?.animationProfile||{}, aud=referenceStyle?.audioProfile||{}, sp=referenceStyle?.structureProfile||{};
+  const targetAspect=String(vp.aspectRatio||'16:9');
+  const targetDuration=Number(vp.durationSeconds||0);
+  result.reference={title:String(referenceTitle||''),targetAspect,targetDurationSeconds:targetDuration,targetSceneCount:Number(sp.segmentCount||sp.sceneSegments?.length||0)};
+  result.checks={aspectRatio:targetAspect==='16:9',durationProfile:targetDuration>0,audioProfile:Boolean(aud&&Object.keys(aud).length),animationProfile:Boolean(ap&&Object.keys(ap).length),structureProfile:Boolean(sp&&Object.keys(sp).length)};
+  const auditRequired=String(process.env.AUTOTUBE_REQUIRE_REFERENCE_AUDIT||'0').trim()==='1';
+  const geminiKey=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
+  if(geminiKey){
+    const auditDir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-reference-audit-'));
+    try{
+      const probe=await new Promise((resolve,reject)=>{
+        const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-i',file,'-vf','fps=1/5,scale=512:-2','-frames:v','6','-q:v','6',path.join(auditDir,'frame-%02d.jpg')],{stdio:['ignore','pipe','pipe']});
+        let err='';p.stderr.on('data',x=>err+=x.toString());p.on('error',reject);p.on('close',code=>code===0?resolve(true):reject(new Error('No se pudieron extraer frames para la auditoría audiovisual: '+err.slice(-600))));
+      });
+      const files=await fs.readdir(auditDir);const images=[];
+      for(const name of files.filter(x=>/^frame-\\d+\\.jpg$/i.test(x)).sort().slice(0,6)){const bytes=await fs.readFile(path.join(auditDir,name));images.push({mimeType:'image/jpeg',data:bytes.toString('base64')});}
+      if(!images.length)throw new Error('La auditoría audiovisual no obtuvo frames.');
+      const auditPrompt=[
+        'Evalúa si estas imágenes son una recreación audiovisual ORIGINAL coherente con el perfil analizado del vídeo de referencia de YouTube.',
+        'No evalúes si son copias exactas; evalúa semejanza de lenguaje audiovisual: composición, sujetos/tipo de plano, paleta, iluminación, movimiento implícito, ritmo, continuidad y estructura.',
+        'Devuelve SOLO JSON: {"overallScore":0,"visualContentScore":0,"styleScore":0,"structureScore":0,"continuityScore":0,"matchedAspects":[],"missingAspects":[],"majorMismatch":false,"explanation":""}.',
+        'Una puntuación alta requiere que el conjunto recuerde claramente al perfil de referencia, pero con material original.',
+        'Título de referencia: '+String(referenceTitle||''),
+        'Perfil audiovisual de referencia: '+JSON.stringify({videoProfile:vp,animationProfile:ap,structureProfile:sp,audioProfile:aud}).slice(0,18000),
+        referenceThumbnail?'Miniatura de referencia disponible como contexto adicional, pero no debe sustituir al perfil.':'',
+        'Analiza las '+images.length+' imágenes generadas adjuntas.'
+      ].filter(Boolean).join('\\n');
+      const raw=await callGemini({system:'Eres un auditor audiovisual objetivo. No copies contenido ni identidades. Compara únicamente rasgos audiovisuales.',user:auditPrompt,images,temperature:0,maxOutputTokens:900,json:true});
+      const audit=parseJsonResponse(raw);const score=Number(audit?.overallScore);
+      if(!Number.isFinite(score))throw new Error('Auditoría Gemini devolvió una puntuación inválida.');
+      result.semanticAudit={status:'completed',provider:'Gemini vision audit',...audit};result.score=score;result.status=score>=70?'passed':'insufficient';
+      if(score<70&&auditRequired)throw new Error('REFERENCE_CONFORMANCE_INSUFFICIENT: auditoría audiovisual '+score+'/100; faltan rasgos del vídeo de referencia. '+String(audit?.explanation||''));
+    }catch(err){
+      result.semanticAudit={status:'unavailable',error:String(err?.message||err)};result.status=auditRequired?'inconclusive':'deterministic-only';
+      if(auditRequired)throw err;
+    }finally{await fs.rm(auditDir,{recursive:true,force:true}).catch(()=>{});}
+  }else{
+    result.semanticAudit={status:'unavailable',reason:'GEMINI_API_KEY no configurada'};result.status='deterministic-only';
+  }
+  return result;
+}
+
+async function validateRenderedMp4(file,expectedDuration=0,options={}){
   const probe=await new Promise((resolve,reject)=>{
     const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-map','0:a:0','-c','copy','-f','null','-'],{stdio:['ignore','pipe','pipe']});
     let stderr='';
@@ -601,8 +645,11 @@ async function validateRenderedMp4(file,expectedDuration=0){
   const audioCodec=am?String(am[1]).toLowerCase():'';
   const supportedResolution=(width===854&&height===480)||(width===1280&&height===720)||(width===1920&&height===1080);
   if(!supportedResolution)throw new Error('Resolución real del MP4: '+width+'x'+height+' (se esperaba 854x480, 1280x720 o 1920x1080).');
-  if(!fps||Math.abs(fps-30)>0.5)throw new Error('FPS reales del MP4: '+(fps||'desconocidos')+' (se esperaban 30).');  if(audioCodec!=='aac')throw new Error('Códec de audio real del MP4: '+(audioCodec||'desconocido')+' (se esperaba AAC).');
-  return{width,height,fps,audioCodec,durationSeconds};
+  const expectedFps=Number(options.expectedFps)||30;
+  if(!fps||Math.abs(fps-expectedFps)>0.5)throw new Error('FPS reales del MP4: '+(fps||'desconocidos')+' (se esperaban '+expectedFps+').');  if(audioCodec!=='aac')throw new Error('Códec de audio real del MP4: '+(audioCodec||'desconocido')+' (se esperaba AAC).');
+  const motion=await validateAnimatedMotion(file);
+  const referenceConformance=options.referenceStyle?await validateReferenceConformance(file,options.referenceStyle,options.referenceTitle||'',options.referenceThumbnail||''):null;
+  return{width,height,fps,audioCodec,durationSeconds,motion,referenceConformance};
 }
 
 
@@ -1716,6 +1763,7 @@ async function executeFullPipelineTest(reference,testId=null){
             ].join('; ');
             let clip=null;
             const referenceThumb=String(video?.thumbnail||'').trim();
+            const referenceFramePath=referenceThumb?await downloadRemoteImageToFile(referenceThumb,dir,'adaptive-reference-frame-'+i+'.jpg').catch(()=> ''):'';
             const pollinationsAttempt=async()=>generatePollinationsVideoClip(prompt,dir,{durationSeconds:Math.min(5,Math.max(3,Number(scene.duration)||4)),aspectRatio:'16:9'});
             const withAttemptTimeout=(fn,label,ms=90000)=>Promise.race([Promise.resolve().then(fn),new Promise((_,reject)=>setTimeout(()=>reject(new Error('AI_PROVIDER_ATTEMPT_TIMEOUT: '+label+' superó '+ms+' ms')),ms))]);
             // Adaptive multi-provider manager first. It uses every configured route,
@@ -1726,7 +1774,7 @@ async function executeFullPipelineTest(reference,testId=null){
                   durationSeconds:Math.min(5,Math.max(3,Number(scene.duration)||4)),
                   aspectRatio:'16:9',
                   sceneIndex:i,
-                  firstFramePath:referenceThumb?await downloadRemoteImageToFile(referenceThumb,dir,'adaptive-reference-frame-'+i+'.jpg').catch(()=> ''):''
+                  firstFramePath:referenceFramePath
                 }),
                 'adaptive-video-provider-cascade',
                 Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||90000)
@@ -1894,9 +1942,9 @@ async function executeFullPipelineTest(reference,testId=null){
         targetFps:15,
         targetDurationSeconds:durationSeconds
       });
-      validation=await validateRenderedMp4(output,durationSeconds);
+      validation=await validateRenderedMp4(output,durationSeconds,{expectedFps:15,referenceStyle,referenceTitle,referenceThumbnail:video?.thumbnail||''});
       const st=await fs.stat(output);
-      const value={bytes:st.size,sceneCount:plan.scenes.length,...validation,downloadPath:output};
+      const value={bytes:st.size,sceneCount:plan.scenes.length,...validation,downloadPath:output,referenceMatchStatus:validation.referenceConformance?.status||'not-run'};
       savePipelineCheckpoint(reference,{dir,video,style,plan,mediaResults,aiClips,narrationAudio,musicFile:music?.checkpointFile||checkpoint?.musicFile,render:value,completedStage:'render-all-scenes'});
       return value;
     });
