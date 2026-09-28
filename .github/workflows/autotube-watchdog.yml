@@ -61,7 +61,7 @@ jobs:
             fi
           done
 \t' read -r id created; do
-              [ -z "$id" ] && continue
+              if [ -z "$id" ]; then continue; fi
               created_ts=$(date -d "$created" +%s 2>/dev/null || echo "$now")
               if [ $((now-created_ts)) -ge 600 ]; then
                 echo "Cancelling stale pending canonical run $id after $((now-created_ts))s."
