@@ -33,3 +33,5 @@ El proyecto incluye `render.yaml`. Conecta el repositorio en Render como Web Ser
 
 
 <!-- strict-e2e trigger 2026-09-27 -->
+
+<!-- autonomous-cycle-start 2026-09-28 -->
