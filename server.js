@@ -1251,8 +1251,8 @@ function zeroGpuQuotaActive(){return Date.now()<zeroGpuQuotaUntil;}
 // not output-video seconds. The values are configurable and can be tightened without
 // changing the pipeline.
 const FREE_AI_WINDOW_MS = 24*60*60*1000;
-const FREE_AI_DAILY_SECONDS = Math.max(15, Number(process.env.AUTOTUBE_FREE_AI_DAILY_SECONDS)||150);
-const FREE_AI_DAILY_CLIPS = Math.max(1, Number(process.env.AUTOTUBE_FREE_AI_DAILY_CLIPS)||30);
+const FREE_AI_DAILY_SECONDS = Math.max(15, Number(process.env.AUTOTUBE_FREE_AI_DAILY_SECONDS)||3600);
+const FREE_AI_DAILY_CLIPS = Math.max(1, Number(process.env.AUTOTUBE_FREE_AI_DAILY_CLIPS)||600);
 let freeAiBudget={windowStartedAt:0,reservedSeconds:0,completedClips:0};
 function resetFreeAiBudgetIfNeeded(){
   const now=Date.now();
@@ -2270,14 +2270,15 @@ async function executeFullPipelineTest(reference,testId=null){
               }
             }
             if(!clip)throw new Error('Los proveedores gratuitos de vídeo IA y los fallbacks AI-image-motion fallaron para la escena '+(i+1)+'.');
-            aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model});
+            aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model,providerKey:clip.providerKey,generationType:clip.generationType||classifyGenerationType(clip),durationSeconds:clip.durationSeconds||Number(scene.duration)||4});
+            console.log('AutoTube scene clip committed:',i+1,'/',plan.scenes.length,'provider=',clip.providerKey||clip.provider,'duration=',clip.durationSeconds||Number(scene.duration)||4,'s');
           }catch(err){
             console.warn('AI video clip '+(i+1)+' unavailable:',err.message||String(err));
           }
         }
       }
-      // Never accept a static image as success. At least one validated AI motion
-      // clip is mandatory; additional scenes reuse the real AI clips cyclically.
+      // Never accept a static image as success. Every planned scene must have a
+      // validated generated clip; the renderer will concatenate them in timeline order.
       if(!aiClips.length){
         throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: no se pudo obtener ningún clip de vídeo IA real ni un fallback animado generado por IA.');
       }
