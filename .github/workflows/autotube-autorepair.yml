@@ -1,0 +1,107 @@
+name: AutoTube bounded autonomous repair
+
+on:
+  workflow_run:
+    workflows: ["AutoTube real YouTube to MP4 E2E"]
+    types: [completed]
+
+concurrency:
+  group: autotube-autorepair
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+
+jobs:
+  repair:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt >= 3 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout failed revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+
+      - name: Collect failure diagnostics
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          gh run view "$RUN_ID" --repo "$REPOSITORY" --log > failure.log || true
+          tail -n 1200 failure.log > failure-tail.log
+
+      - name: Repair with bounded Gemini patch
+        id: repair
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "REPAIR_RESULT=missing_gemini_secret" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python - <<'PY'
+          import json, os, urllib.request
+          log=open('failure-tail.log','r',errors='replace').read()
+          prompt=f'''You are repairing the AutoTube repository after its canonical real-YouTube-to-MP4 E2E failed three times.
+Return ONLY a unified git diff, or the exact text NO_SAFE_PATCH.
+Rules:
+- Make the smallest possible fix for the concrete failure shown below.
+- Do not change the real-AI-video requirement, strict motion validation, quota rules, or YouTube reference analysis.
+- Never add static-image, pan/zoom, stock-video, or fake-video fallback.
+- Never remove validation.
+- Only modify existing application JavaScript/TypeScript files under server/, lib/, src/, or root package/config files needed for the concrete error.
+- Never modify .github/workflows/, secrets, authentication, billing, or deployment permissions.
+- Do not change more than 2 files.
+- Do not introduce new dependencies unless the failure explicitly proves one is missing.
+- The patch must be syntactically valid and directly address the logged failure.
+
+FAILED E2E LOG:
+{log}
+'''
+          payload={'contents':[{'parts':[{'text':prompt}]}],'generationConfig':{'temperature':0.0,'maxOutputTokens':12000}}
+          req=urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key='+os.environ['GEMINI_API_KEY'],data=json.dumps(payload).encode(),headers={'content-type':'application/json'},method='POST')
+          with urllib.request.urlopen(req,timeout=60) as r: data=json.load(r)
+          out=data['candidates'][0]['content']['parts'][0]['text'].strip()
+          open('repair.patch','w').write(out)
+          PY
+          python - <<'PY'
+          p=open('repair.patch').read().strip()
+          if p.startswith('```'): p=p.split('\n',1)[1].rsplit('\n',1)[0]
+          open('repair.patch','w').write(p+'\n')
+          PY
+          if grep -qx 'NO_SAFE_PATCH' repair.patch; then echo 'REPAIR_RESULT=no_safe_patch' >> "$GITHUB_OUTPUT"; exit 0; fi
+          git apply --check repair.patch
+          git apply repair.patch
+          node --check server/index.js
+          for f in $(git diff --name-only --diff-filter=AM | grep -E '\.m?js$' || true); do node --check "$f"; done
+          npm install --ignore-scripts --no-audit --no-fund
+          git diff --check
+          changed="$(git diff --name-only)"
+          count="$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l)"
+          if [ "$count" -gt 2 ]; then git reset --hard HEAD; echo 'REPAIR_RESULT=rejected_scope' >> "$GITHUB_OUTPUT"; exit 0; fi
+          bad="$(printf '%s\n' "$changed" | grep -E '(^|/)(\.github/|\.env|package-lock\.json$)' || true)"
+          if [ -n "$bad" ]; then git reset --hard HEAD; echo 'REPAIR_RESULT=rejected_scope' >> "$GITHUB_OUTPUT"; exit 0; fi
+          if git diff --quiet; then echo 'REPAIR_RESULT=no_change' >> "$GITHUB_OUTPUT"; exit 0; fi
+          git config user.name 'AutoTube Repair Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m '[autotube-auto-repair] fix failed E2E'
+          git push origin HEAD:main
+          echo 'REPAIR_RESULT=patched_and_pushed' >> "$GITHUB_OUTPUT"
+
+      - name: Open diagnostic issue when repair cannot proceed
+        if: steps.repair.outputs.REPAIR_RESULT != 'patched_and_pushed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RESULT: ${{ steps.repair.outputs.REPAIR_RESULT }}
+        run: |
+          gh issue create --repo "$REPOSITORY" --title "AutoTube needs manual intervention after bounded auto-repair" --body "Canonical E2E exhausted its retries and autonomous repair could not safely patch the failure. Result: $RESULT. Run: $RUN_URL"
