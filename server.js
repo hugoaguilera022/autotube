@@ -940,7 +940,7 @@ async function generateFreeLtxVideoClip(prompt,dir,options={}) {
 }
 
 async function generateFreeWan22I2vVideoClip(prompt,dir,options={}){
-  const {Client}=require('@gradio/client');
+  const {Client,handle_file}=require('@gradio/client');
   const space=String(process.env.WAN22_I2V_SPACE_URL||'zerogpu-aoti/wan2-2-fp8da-aoti-faster').trim();
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   const firstFramePath=String(options.firstFramePath||'').trim();
@@ -950,7 +950,7 @@ async function generateFreeWan22I2vVideoClip(prompt,dir,options={}){
   const steps=Math.max(4,Math.min(8,Number(options.steps)||4));
   const seed=Math.floor(Math.random()*2147483647);
   const result=await app.predict('/generate_video',[
-    firstFramePath,
+    await handle_file(firstFramePath),
     String(prompt||'').trim(),
     steps,
     'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects',
