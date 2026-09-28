@@ -30,6 +30,7 @@ Compare at least TWO viable FREE alternatives when the failure is provider/infra
 Preserve real AI video generation, reference analysis, strict motion/video/MP4 QA.
 Never replace AI video with static images, stock, pan/zoom or fake video.
 Never weaken validation. Do not change secrets, authentication, billing, permissions, repository, branch, or paid-plan settings.
+Workflow files MAY be changed when the diagnosed failure is in the GitHub automation itself, but only when the repair is necessary, validated, and does not alter secrets/permissions.
 Render operational configuration changes ARE allowed when they are required to repair the service: safe start/build command, health check, or non-secret AUTOTUBE_* operational environment variables.
 Never create or modify secret/token/key/password values. If a secret is missing, return NO_SAFE_PATCH rather than inventing it.
 Maximum 2 existing application files. No new dependency unless clearly necessary. Keep valid Node.js.
