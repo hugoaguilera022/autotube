@@ -151,7 +151,8 @@ async function saveYoutubeConnection(){if(!supabaseConfigured()||!youtubeTokens)
 const PORT=process.env.PORT||3000;function youtubeClient(){return new google.auth.OAuth2(process.env.YOUTUBE_CLIENT_ID,process.env.YOUTUBE_CLIENT_SECRET,process.env.YOUTUBE_REDIRECT_URI||`${process.env.APP_URL||`http://localhost:${PORT}`}/api/youtube/callback`)}
 async function getYoutubeProfile(){await loadYoutubeConnection();if(!youtubeTokens)return youtubeProfileCache;const auth=youtubeClient();auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.channels.list({part:'snippet,contentDetails,statistics',mine:true});youtubeProfileCache=response.data.items?.[0]||null;return youtubeProfileCache}
 app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true}));app.use(express.static(path.join(__dirname,'public')));
-app.get('/api/video-providers',async(_req,res)=>{try{res.json({ok:true,providers:await getVideoProviderHealth()});}catch(err){res.status(503).json({ok:false,error:err.message||String(err)});}});
+app.get('/api/video-providers',async(_req,res)=>{try{res.json({ok:true,providers:await getVideoProviderHealth(),freeDailyBudget:freeAiBudgetSnapshot()});}catch(err){res.status(503).json({ok:false,error:err.message||String(err)});}});
+app.get('/api/free-production-budget',(_req,res)=>res.json({ok:true,freeOnlyDefault:String(process.env.AUTOTUBE_ALLOW_PAID_PROVIDERS||'0')!=='1',budget:freeAiBudgetSnapshot(),zeroGpuQuotaCooldownUntil:zeroGpuQuotaUntil}));
 app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',commit:process.env.RENDER_GIT_COMMIT||'',configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
 function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
 async function getReferenceVideo(input){
@@ -1234,6 +1235,48 @@ const VIDEO_PROVIDER_PROBE_MS = Math.max(30000, Number(process.env.AUTOTUBE_PROV
 const ZEROGPU_SHARED_QUOTA_MS = Math.max(60*60*1000, Number(process.env.AUTOTUBE_ZEROGPU_QUOTA_COOLDOWN_MS)||24*60*60*1000);
 let zeroGpuQuotaUntil=0;
 function zeroGpuQuotaActive(){return Date.now()<zeroGpuQuotaUntil;}
+
+// Free-production guard: never spend the daily free GPU allowance on blind retries.
+// This is intentionally conservative because ZeroGPU quota is measured in GPU time,
+// not output-video seconds. The values are configurable and can be tightened without
+// changing the pipeline.
+const FREE_AI_WINDOW_MS = 24*60*60*1000;
+const FREE_AI_DAILY_SECONDS = Math.max(15, Number(process.env.AUTOTUBE_FREE_AI_DAILY_SECONDS)||150);
+const FREE_AI_DAILY_CLIPS = Math.max(1, Number(process.env.AUTOTUBE_FREE_AI_DAILY_CLIPS)||30);
+let freeAiBudget={windowStartedAt:0,reservedSeconds:0,completedClips:0};
+function resetFreeAiBudgetIfNeeded(){
+  const now=Date.now();
+  if(!freeAiBudget.windowStartedAt || now-freeAiBudget.windowStartedAt>=FREE_AI_WINDOW_MS){
+    freeAiBudget={windowStartedAt:now,reservedSeconds:0,completedClips:0};
+  }
+}
+function freeAiBudgetSnapshot(){
+  resetFreeAiBudgetIfNeeded();
+  return {
+    windowStartedAt:freeAiBudget.windowStartedAt,
+    reservedSeconds:freeAiBudget.reservedSeconds,
+    completedClips:freeAiBudget.completedClips,
+    remainingSeconds:Math.max(0,FREE_AI_DAILY_SECONDS-freeAiBudget.reservedSeconds),
+    remainingClips:Math.max(0,FREE_AI_DAILY_CLIPS-freeAiBudget.completedClips)
+  };
+}
+function reserveFreeAiBudget(requestedSeconds){
+  resetFreeAiBudgetIfNeeded();
+  const seconds=Math.max(2,Math.min(10,Number(requestedSeconds)||3));
+  // Reserve a safety multiplier because GPU billing/quota is not identical to output duration.
+  const reservation=Math.min(15,Math.ceil(seconds*1.5));
+  if(freeAiBudget.reservedSeconds+reservation>FREE_AI_DAILY_SECONDS || freeAiBudget.completedClips>=FREE_AI_DAILY_CLIPS){
+    const snap=freeAiBudgetSnapshot();
+    throw new Error('FREE_AI_DAILY_BUDGET_EXHAUSTED: se protege la cuota gratuita diaria; no se realizarán más intentos IA hasta que se renueve la ventana. remainingSeconds='+snap.remainingSeconds+' remainingClips='+snap.remainingClips);
+  }
+  freeAiBudget.reservedSeconds+=reservation;
+  return reservation;
+}
+function completeFreeAiClip(){
+  resetFreeAiBudgetIfNeeded();
+  freeAiBudget.completedClips++;
+}
+
 function noteZeroGpuQuota(err){
   zeroGpuQuotaUntil=Date.now()+ZEROGPU_SHARED_QUOTA_MS;
   for(const name of ['Wan2.2-ZeroGPU','OpenKing-Wan2.2']) {
@@ -1298,15 +1341,19 @@ async function generateFreeOpenKingWan22VideoClip(prompt,dir,options={}) {
 async function generateBestFreeVideoClip(prompt,dir,options={}) {
   const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);
   const referenceFramePath=String(options.firstFramePath||'').trim();
+  const allowPaid=String(process.env.AUTOTUBE_ALLOW_PAID_PROVIDERS||'0')==='1';
   const order=[
-    ...(process.env.REPLICATE_API_TOKEN?['Replicate']:[]),
-    ...(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN?['HF-Inference']:[]),
-    ...(process.env.POLLINATIONS_API_KEY&&String(process.env.AUTOTUBE_ALLOW_POLLINATIONS_PAID||'0')==='1'?['Pollinations']:[]),
+    ...(allowPaid&&process.env.REPLICATE_API_TOKEN?['Replicate']:[]),
+    ...(allowPaid&&(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['HF-Inference']:[]),
+    ...(allowPaid&&process.env.POLLINATIONS_API_KEY&&String(process.env.AUTOTUBE_ALLOW_POLLINATIONS_PAID||'0')==='1'?['Pollinations']:[]),
     ...(referenceFramePath?['Wan2.2-I2V','Wan2.1-VACE']:[]),
     'Wan2.2-ZeroGPU','OpenKing-Wan2.2','LTX-2.5','Wan2.1','LTX-0.9.8'
   ];
   const errors=[];
   if(zeroGpuQuotaActive()) console.log('[VideoProviderManager] shared ZeroGPU quota breaker active; skipping all ZeroGPU Spaces for this window.');
+  let budgetReservation=0;
+  try{ budgetReservation=reserveFreeAiBudget(options.durationSeconds||3); }
+  catch(err){ throw err; }
   for(const provider of [...new Set(order)]){
     if(provider==='HF-Inference'){
       try{
@@ -1330,10 +1377,15 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
     }
     if(!providerAvailable(provider))continue;
-    const health=await probeVideoProvider(provider);
+    // ZeroGPU public Spaces can expose a transient/incorrect /info health response.
+    // Do not spend a generation window on a redundant probe; the real Gradio request
+    // plus output validation is the authoritative health check for these free routes.
+    const health=provider==='OpenKing-Wan2.2'||provider==='Wan2.2-ZeroGPU'
+      ? {ok:true,status:'generation-direct'}
+      : await probeVideoProvider(provider);
     if(!health.ok)continue;
-    if(provider==='OpenKing-Wan2.2'){try{const clip=await generateFreeOpenKingWan22VideoClip(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));continue;}}
-        if(provider==='Wan2.2-ZeroGPU'){try{const clip=await generateFreeWan22ZeroGpuVideoClip(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));continue;}} if(!health.ok)continue;
+    if(provider==='OpenKing-Wan2.2'){try{const clip=await generateFreeOpenKingWan22VideoClip(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider); completeFreeAiClip(); return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));continue;}}
+        if(provider==='Wan2.2-ZeroGPU'){try{const clip=await generateFreeWan22ZeroGpuVideoClip(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider); completeFreeAiClip(); return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));continue;}} if(!health.ok)continue;
     try{
       let clip;
       if(provider==='Wan2.2-I2V')clip=await generateFreeWan22I2vVideoClip(prompt,dir,{...options,firstFramePath:referenceFramePath});
