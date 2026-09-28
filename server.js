@@ -345,7 +345,7 @@ function parseSubtitleText(raw){
   return lines.join(' ').slice(0,100000);
 }
 
-function runFfmpeg(args){return new Promise((resolve,reject)=>{const safeArgs=[...args];const p=spawn(ffmpegPath,safeArgs,{stdio:['ignore','ignore','pipe']});let err='';p.stderr.on('data',d=>{err+=d.toString();if(err.length>12000)err=err.slice(-12000)});p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500))))})}
+function runFfmpeg(args,timeoutMs=180000){return new Promise((resolve,reject)=>{const safeArgs=[...args];const p=spawn(ffmpegPath,safeArgs,{stdio:['ignore','ignore','pipe']});let err='';let finished=false;const timer=setTimeout(()=>{if(finished)return;finished=true;try{p.kill('SIGKILL')}catch{}reject(new Error('FFmpeg timeout after '+timeoutMs+'ms: '+safeArgs.slice(0,18).join(' ')))},timeoutMs);p.stderr.on('data',d=>{err+=d.toString();if(err.length>12000)err=err.slice(-12000)});p.on('error',e=>{if(finished)return;finished=true;clearTimeout(timer);reject(e)});p.on('close',code=>{if(finished)return;finished=true;clearTimeout(timer);code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500)))})})}
 async function generateFallbackMusic(description,durationSeconds,dir,audioProfile={}){const duration=Math.max(1,Math.min(300,Number(durationSeconds)||30));const out=path.join(dir,'autotube-original-music-'+Date.now()+'.mp3');const energy=String(audioProfile.energy||'').toLowerCase();const gain=/(high|intense|energetic)/.test(energy)?0.16:0.10;await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','sine=frequency=196:sample_rate=44100','-f','lavfi','-i','sine=frequency=246.94:sample_rate=44100','-f','lavfi','-i','sine=frequency=293.66:sample_rate=44100','-filter_complex','[0:a]volume='+gain+'[a0];[1:a]volume='+(gain*0.75)+'[a1];[2:a]volume='+(gain*0.55)+'[a2];[a0][a1][a2]amix=inputs=3:duration=longest:normalize=0,lowpass=f=4200,afade=t=in:st=0:d=2,afade=t=out:st='+Math.max(0,duration-2)+':d=2[a]','-map','[a]','-t',String(duration),'-ac','2','-ar','44100','-c:a','libmp3lame','-b:a','128k',out]);const buffer=await fs.readFile(out);if(!buffer.length)throw new Error('La música local quedó vacía.');return{buffer,provider:'AutoTube local procedural music',durationSeconds:duration,description:String(description||'')};}
 
 async function probeReferenceTechnical(file){
@@ -510,8 +510,8 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       out=path.join(dir,'autotube-final.mp4');
       await runFfmpeg(['-y','-hide_banner','-loglevel','error',
         '-i',videoOnly,'-stream_loop','-1','-i',musicFile,
-        '-filter_complex','[0:a]aresample=44100,acompressor=threshold=0.08:ratio=3:attack=20:release=250,asplit=2[voice][voice_sc];[1:a]aresample=44100,volume=0.14[music];[music][voice_sc]sidechaincompress=threshold=0.05:ratio=6:attack=20:release=300:makeup=1:mix=1[ducked];[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[a]',
-        '-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-ar','44100','-ac','2','-b:a','160k','-threads','1','-movflags','+faststart',out]);
+        '-filter_complex','[0:a]aresample=44100,volume=1.0[base];[1:a]aresample=44100,volume=0.12[music];[base][music]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[a]',
+        '-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-ar','44100','-ac','2','-b:a','160k','-threads','1','-movflags','+faststart','-shortest',out]);
     }
     const stat=await fs.stat(out);
     if(!stat.size)throw new Error('El MP4 final está vacío.');
