@@ -44,11 +44,12 @@ jobs:
         env:
           BASE_URL: https://autotube-usm1.onrender.com
           REFERENCE: https://www.youtube.com/watch?v=P_iFWenf1VA
-          MAX_ATTEMPTS: "1"
+          MAX_ATTEMPTS: "3"
         run: |
           set -uo pipefail
           success=0
           last_error=""
+          echo "CHECKPOINT-AWARE MODE: cada nueva llamada al pipeline reutiliza los stages ya validados en Render cuando el checkpoint siga disponible."
 
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
             echo "============================================================"
@@ -159,7 +160,7 @@ jobs:
             fi
 
             if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-              echo "Attempt $attempt failed. Self-heal will own the next retry to avoid duplicate work."
+              echo "Attempt $attempt failed. The next attempt calls the same reference again; server-side checkpoint resume skips completed stages when still valid."
             fi
           done
 
