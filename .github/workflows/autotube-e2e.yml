@@ -16,7 +16,7 @@ jobs:
     steps:
       - name: Wait for Render to deploy this commit
         env:
-          BASE_URL: https://autotube-hfeu.onrender.com
+          BASE_URL: https://autotube-usm1.onrender.com
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -27,12 +27,12 @@ jobs:
             if [ "$commit" = "$EXPECTED_COMMIT" ]; then exit 0; fi
             sleep 10
           done
-          echo "Render did not serve ${EXPECTED_COMMIT} in time." >&2
+          echo "Render did not serve $EXPECTED_COMMIT in time." >&2
           exit 1
 
       - name: Run one real reference-to-MP4 pipeline
         env:
-          BASE_URL: https://autotube-hfeu.onrender.com
+          BASE_URL: https://autotube-usm1.onrender.com
           REFERENCE: https://www.youtube.com/watch?v=P_iFWenf1VA
         run: |
           set -euo pipefail
@@ -42,7 +42,8 @@ jobs:
           test -n "$job"
           for i in $(seq 1 720); do
             status="$(curl -fsS --max-time 30 "$BASE_URL/api/full-pipeline-test/$job" || true)"
-            printf '%s\n' "$status" > status.json
+            printf '%s
+' "$status" > status.json
             echo "$status" | jq '{status,ok,elapsedMs,result: .result,error}' || true
             state="$(echo "$status" | jq -r '.status // empty' 2>/dev/null || true)"
             if [ "$state" = "done" ]; then exit 0; fi
@@ -57,7 +58,7 @@ jobs:
       - name: Download and strictly validate final MP4
         if: success()
         env:
-          BASE_URL: https://autotube-hfeu.onrender.com
+          BASE_URL: https://autotube-usm1.onrender.com
         run: |
           set -euo pipefail
           job="$(jq -r '.jobId' start.json)"

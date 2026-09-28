@@ -3,7 +3,7 @@ services:
     name: autotube
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install --ignore-scripts && node setup-pot-provider.js
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
