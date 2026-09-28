@@ -1732,7 +1732,10 @@ async function executeFullPipelineTest(reference,testId=null){
     const referenceStyle=style;
     const visualReferenceAnalysis=style.visualAnalysis;
     const audioProfile={...(visualReferenceAnalysis?.audioProfile||{})};
-    const durationSeconds=Math.max(1,Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis?.videoProfile?.durationSeconds||30));
+    const referenceDurationSeconds=Math.max(1,Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis?.videoProfile?.durationSeconds||30));
+    const autonomousMaxDurationSeconds=Math.max(10,Math.min(120,Number(process.env.AUTOTUBE_AUTONOMOUS_MAX_DURATION_SECONDS||20)));
+    const durationSeconds=Math.min(referenceDurationSeconds,autonomousMaxDurationSeconds);
+    if(durationSeconds<referenceDurationSeconds)console.log('AutoTube autonomous proof-duration cap:',durationSeconds,'s of reference',referenceDurationSeconds,'s; full production remains separately configurable.');
 
     outline={title:referenceTitle,outline:[],visualIdeas:[]};
 
