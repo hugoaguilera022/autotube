@@ -1638,7 +1638,7 @@ async function executeFullPipelineTest(reference,testId=null){
       'visual-sources-all-scenes':480000,
       'narration-all-scenes':120000,
       'music':150000,
-      'render-all-scenes':360000
+      'render-all-scenes':900000
     };
     const timeoutMs=Number(process.env['AUTOTUBE_STAGE_TIMEOUT_'+String(name).replace(/[^A-Za-z0-9]/g,'_').toUpperCase()]||limits[name]||300000);
     console.log('AutoTube full pipeline stage start:',name,'timeoutMs=',timeoutMs,'budgetSec=',Math.round(timeoutMs/1000));
@@ -1938,6 +1938,7 @@ async function executeFullPipelineTest(reference,testId=null){
 
     if(!resumedStages.includes('render-all-scenes')) await run('render-all-scenes',async()=>{
       const output=path.join(renderJobDir,String(testId||('fulltest_'+Date.now()))+'.mp4');
+      console.log('AutoTube render: starting FFmpeg scene assembly; sceneCount=',plan.scenes.length,'targetDurationSec=',durationSeconds);
       render=await renderAutotubeVideo({
         scenes:plan.scenes,
         mediaResults,
@@ -1954,7 +1955,9 @@ async function executeFullPipelineTest(reference,testId=null){
         targetFps:15,
         targetDurationSeconds:durationSeconds
       });
+      console.log('AutoTube render: FFmpeg assembly finished; starting final MP4 validation');
       validation=await validateRenderedMp4(output,durationSeconds,{expectedFps:15,referenceStyle,referenceTitle,referenceThumbnail:video?.thumbnail||''});
+      console.log('AutoTube render: final MP4 validation passed; duration=',validation.durationSeconds,'fps=',validation.fps,'motion=',Boolean(validation.motion?.motionDetected),'reference=',validation.referenceConformance?.status||'not-run');
       const st=await fs.stat(output);
       const value={bytes:st.size,sceneCount:plan.scenes.length,...validation,downloadPath:output,referenceMatchStatus:validation.referenceConformance?.status||'not-run'};
       savePipelineCheckpoint(reference,{dir,video,style,plan,mediaResults,aiClips,narrationAudio,musicFile:music?.checkpointFile||checkpoint?.musicFile,render:value,completedStage:'render-all-scenes'});
