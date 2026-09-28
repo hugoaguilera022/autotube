@@ -1351,6 +1351,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       if(kind==='user_blocking')continue;
     }
   }
+  if(requireRealAiVideoGeneration()) throw new Error('REAL_AI_VIDEO_REQUIRED: todos los proveedores de vídeo IA disponibles fallaron; el fallback determinista está bloqueado en el E2E estricto.');
   // Last-resort free path: if an AI video provider is unavailable, use a validated
   // scene image already produced by the pipeline and create deterministic cinematic
   // motion locally. This is intentionally last so hosted AI providers are still preferred.
