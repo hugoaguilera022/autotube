@@ -30,7 +30,7 @@ jobs:
             fi
           done
           gh run list --repo "$REPOSITORY" --status queued --limit 100 --json databaseId,workflowName --jq '.[] | [.databaseId,.workflowName] | @tsv' | while IFS=$'\t' read -r id name; do
-            if [ "$name" != "AutoTube real YouTube to MP4 E2E" ]; then
+            if [ "$name" != "AutoTube real YouTube to MP4 E2E" ] && [ "$name" != "AutoTube bounded self-heal" ] && [ "$name" != "AutoTube bounded autonomous repair" ]; then
               echo "Cancelling queued competing run $id ($name)"
               gh run cancel "$id" --repo "$REPOSITORY" || true
             fi
