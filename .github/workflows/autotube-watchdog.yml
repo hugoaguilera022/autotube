@@ -108,6 +108,11 @@ jobs:
                         and .workflowName!="AutoTube bounded autonomous repair"
                         and .workflowName!="AutoTube autonomous watchdog"
                         and .workflowName!="AutoTube 24h supervisor"
+                        and .workflowName!="AutoTube post-change verifier"
+                        and .workflowName!="AutoTube Render autonomous repair"
+                        and .workflowName!="AutoTube Render deploy self-heal"
+                        and .workflowName!="AutoTube Render E2E"
+                        and .workflowName!="AutoTube regeneration validation"
                       )
                     )
                   | .databaseId
@@ -119,7 +124,7 @@ jobs:
 
             if [ "$canonical" -eq 0 ] && [ "$heal" -eq 0 ]; then
               echo "No canonical pipeline or recovery is active; dispatching canonical E2E."
-              gh api --method POST "/repos/$REPOSITORY/actions/workflows/367417060/dispatches" -f ref=main
+              gh workflow run autotube-e2e.yml --repo "$REPOSITORY" --ref main
             else
               echo "Canonical pipeline/recovery is active; no overlap."
             fi
