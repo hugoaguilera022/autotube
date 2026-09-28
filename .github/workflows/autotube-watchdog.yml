@@ -29,6 +29,45 @@ jobs:
 
             runs="$(gh run list --repo "$REPOSITORY" --limit 50 --json databaseId,workflowName,status,conclusion,createdAt,updatedAt)"
             echo "$runs" | jq -r '.[] | [.databaseId,.workflowName,.status,.conclusion,.createdAt,.updatedAt] | @tsv' | sed -n '1,20p'
+            # A pending canonical run can be a stale concurrency lock. If it has waited >10 min,
+            # cancel that exact run and let this single watchdog owner start a fresh one.
+            now=$(date -u +%s)
+            echo "$runs" | jq -r --argjson now "$now" '.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and .status=="pending") | [.databaseId,.createdAt] | @tsv' |
+            while IFS=
+            echo "$runs" | jq -r '.[] | select((.status=="in_progress" or .status=="queued" or .status=="pending") and
+              (.workflowName!="AutoTube real YouTube to MP4 E2E" and
+               .workflowName!="AutoTube bounded self-heal" and
+               .workflowName!="AutoTube bounded autonomous repair" and
+               .workflowName!="AutoTube autonomous watchdog" and
+               .workflowName!="AutoTube 24h supervisor")) | .databaseId' |
+            while read -r id; do
+              [ -z "$id" ] || gh run cancel "$id" --repo "$REPOSITORY" || true
+            done
+
+            canonical="$(echo "$runs" | jq '[.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="queued" or .status=="in_progress" or .status=="pending"))] | length')"
+            heal="$(echo "$runs" | jq '[.[] | select((.workflowName=="AutoTube bounded self-heal" or .workflowName=="AutoTube bounded autonomous repair") and (.status=="queued" or .status=="in_progress"))] | length')"
+
+            if [ "$canonical" -eq 0 ] && [ "$heal" -eq 0 ]; then
+              echo "No canonical pipeline or recovery is active; dispatching a fresh E2E."
+              gh workflow run "AutoTube real YouTube to MP4 E2E" --repo "$REPOSITORY" --ref main
+            else
+              echo "Canonical pipeline/recovery is active. No overlapping run will be started."
+            fi
+
+            if [ "$tick" -lt 5 ]; then
+              sleep 60
+            fi
+          done
+\t' read -r id created; do
+              [ -z "$id" ] && continue
+              created_ts=$(date -d "$created" +%s 2>/dev/null || echo "$now")
+              if [ $((now-created_ts)) -ge 600 ]; then
+                echo "Cancelling stale pending canonical run $id after $((now-created_ts))s."
+                gh run cancel "$id" --repo "$REPOSITORY" --force || true
+              fi
+            done
+            sleep 3
+            runs="$(gh run list --repo "$REPOSITORY" --limit 50 --json databaseId,workflowName,status,conclusion,createdAt,updatedAt)"
 
             echo "$runs" | jq -r '.[] | select((.status=="in_progress" or .status=="queued" or .status=="pending") and
               (.workflowName!="AutoTube real YouTube to MP4 E2E" and
