@@ -129,7 +129,32 @@ jobs:
             # could otherwise wait for a scheduled tick.
             if [ "$render_repair" -eq 0 ]; then
               echo "No Render autonomous repair run is active; dispatching one."
-              gh workflow run autotube-render-autorepair.yml --repo "$REPOSITORY" --ref main || true
+              dispatch_ok=0
+              if gh workflow run autotube-render-autorepair.yml --repo "$REPOSITORY" --ref main; then
+                dispatch_ok=1
+              else
+                echo "workflow run dispatch failed; retrying through the GitHub API."
+                if gh api --method POST "/repos/$REPOSITORY/actions/workflows/autotube-render-autorepair.yml/dispatches" -f ref=main; then
+                  dispatch_ok=1
+                fi
+              fi
+              if [ "$dispatch_ok" -ne 1 ]; then
+                echo "ERROR: could not dispatch Render autonomous repair."
+                exit 1
+              fi
+              repair_seen=0
+              for wait in 1 2 3 4 5; do
+                sleep 3
+                runs="$(gh run list --repo "$REPOSITORY" --limit 50 --json databaseId,workflowName,status,conclusion,createdAt,updatedAt)"
+                if echo "$runs" | jq -e '[.[] | select(.workflowName=="AutoTube Render autonomous repair" and (.status=="queued" or .status=="in_progress" or .status=="pending"))] | length > 0' >/dev/null; then
+                  repair_seen=1
+                  break
+                fi
+              done
+              if [ "$repair_seen" -ne 1 ]; then
+                echo "ERROR: Render repair dispatch was not observed in GitHub Actions."
+                exit 1
+              fi
             else
               echo "Render autonomous repair is already active; no overlap."
             fi
