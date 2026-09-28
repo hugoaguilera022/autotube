@@ -1907,6 +1907,7 @@ async function persistPipelineCheckpoint(next){
       key:next.key,
       reference:next.reference,
       completedStage:next.completedStage||'',
+      completedStages:Array.isArray(next.completedStages)?next.completedStages:[],
       updatedAt:Number(next.updatedAt||Date.now()),
       video:next.video||null,
       style:next.style||null,
@@ -1934,7 +1935,7 @@ async function hydratePipelineCheckpoint(reference){
     if(Date.now()-Number(persisted.updatedAt||0)>AUTOTUBE_CHECKPOINT_TTL_MS)return null;
     const stage=String(persisted.completedStage||'');
     const cp={
-      key,reference:String(reference||'').trim(),completedStage:stage,updatedAt:Number(persisted.updatedAt||Date.now()),
+      key,reference:String(reference||'').trim(),completedStage:stage,completedStages:Array.isArray(persisted.completedStages)?persisted.completedStages:PIPELINE_CHECKPOINT_STAGE_ORDER.slice(0,checkpointStageIndex(stage)+1),updatedAt:Number(persisted.updatedAt||Date.now()),
       video:persisted.video||null,style:persisted.style||null,plan:persisted.plan||null,blueprint:persisted.blueprint||null
     };
     // Render's filesystem is ephemeral. Never reuse file paths/media from a previous
