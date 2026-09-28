@@ -571,37 +571,66 @@ function canStartFreeVideoGeneration(){pruneFreeVideoQuota();return !freeVideoQu
 function reserveFreeVideoGeneration(){pruneFreeVideoQuota();if(freeVideoQuota.active)throw new Error('Ya hay una generación de vídeo IA gratuita en curso.');if(freeVideoQuota.successful.length>=freeVideoQuotaLimit())throw new Error('Se ha alcanzado la cuota gratuita diaria de vídeo IA. Vuelve a intentarlo cuando se renueve la cuota.');freeVideoQuota.active=true;}
 function finishFreeVideoGeneration(success){if(success)freeVideoQuota.successful.push(Date.now());freeVideoQuota.active=false;pruneFreeVideoQuota();}
 
+async function discoverPollinationsVideoModels(key) {
+  try {
+    const response=await fetch('https://gen.pollinations.ai/v1/models',{headers:{Authorization:'Bearer '+key,Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+    if(!response.ok)return[];
+    const data=await response.json().catch(()=>null);
+    const list=Array.isArray(data?.data)?data.data:(Array.isArray(data)?data:[]);
+    return list.map(x=>String(x?.id||x?.name||'').trim()).filter(Boolean).filter((id,i,arr)=>arr.indexOf(id)===i).slice(0,12);
+  }catch(err){
+    console.warn('Pollinations model discovery unavailable:',err?.message||String(err));
+    return[];
+  }
+}
+
 async function generatePollinationsVideoClip(prompt,dir,options={}) {
   const key=String(process.env.POLLINATIONS_API_KEY||'').trim();
   if(!key)throw new Error('No hay POLLINATIONS_API_KEY configurada para el fallback de vídeo IA.');
   const duration=Math.max(2,Math.min(5,Number(options.durationSeconds)||4));
   const aspectRatio=String(options.aspectRatio||'16:9');
-  const model=String(process.env.POLLINATIONS_VIDEO_MODEL||'wan-fast').trim();
-  const endpoint='https://gen.pollinations.ai/video/'+encodeURIComponent(String(prompt||'').trim())+'?'+new URLSearchParams({
-    model,duration:String(duration),aspectRatio
-  }).toString();
-  const response=await fetch(endpoint,{signal:AbortSignal.timeout(240000),headers:{
-    Authorization:'Bearer '+key,
-    Accept:'video/mp4,video/*,*/*;q=0.8',
-    'User-Agent':'AutoTube/1.0'
-  }});
-  if(!response.ok)throw new Error('Pollinations video generation '+response.status+': '+(await response.text()).slice(0,500));
-  if(!response.body)throw new Error('Pollinations video no devolvió un cuerpo de respuesta.');
-  const outputPath=path.join(dir,'pollinations-video-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-  const handle=await fs.open(outputPath,'w');
-  const reader=response.body.getReader();
-  let total=0;
-  try{
-    while(true){
-      const part=await reader.read();
-      if(part.done)break;
-      total+=part.value.byteLength;
-      if(total>180*1024*1024){await reader.cancel().catch(()=>{});throw new Error('El vídeo Pollinations supera el límite de 180 MB.');}
-      await handle.write(Buffer.from(part.value));
+  const configured=String(process.env.POLLINATIONS_VIDEO_MODEL||'wan-fast').trim();
+  const discovered=await discoverPollinationsVideoModels(key);
+  const candidates=[configured,...discovered,'wan-fast','wan'].filter(Boolean).filter((x,i,arr)=>arr.indexOf(x)===i);
+  let lastError=null;
+  for(const model of candidates){
+    const endpoint='https://gen.pollinations.ai/video/'+encodeURIComponent(String(prompt||'').trim())+'?'+new URLSearchParams({
+      model,duration:String(duration),aspectRatio
+    }).toString();
+    try{
+      const response=await fetch(endpoint,{signal:AbortSignal.timeout(300000),headers:{
+        Authorization:'Bearer '+key,
+        Accept:'video/mp4,video/*,*/*;q=0.8',
+        'User-Agent':'AutoTube/1.0'
+      }});
+      if(!response.ok){
+        const body=(await response.text()).slice(0,700);
+        throw new Error('HTTP '+response.status+': '+body);
+      }
+      if(!response.body)throw new Error('Pollinations no devolvió un cuerpo de respuesta.');
+      const outputPath=path.join(dir,'pollinations-video-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+      const handle=await fs.open(outputPath,'w');
+      const reader=response.body.getReader();
+      let total=0;
+      try{
+        while(true){
+          const part=await reader.read();
+          if(part.done)break;
+          total+=part.value.byteLength;
+          if(total>180*1024*1024){await reader.cancel().catch(()=>{});throw new Error('El vídeo Pollinations supera el límite de 180 MB.');}
+          await handle.write(Buffer.from(part.value));
+        }
+      }finally{await handle.close().catch(()=>{});}
+      if(!total)throw new Error('Pollinations devolvió un vídeo vacío.');
+      await validateGeneratedVideoClip(outputPath);
+      console.log('Pollinations video fallback succeeded:',model,total,'bytes');
+      return{outputPath,bytes:total,provider:'Pollinations AI video',model,durationSeconds:duration,status:'complete'};
+    }catch(err){
+      lastError=err;
+      console.warn('Pollinations video model failed:',model,err?.message||String(err));
     }
-  }finally{await handle.close().catch(()=>{});}
-  if(!total)throw new Error('Pollinations devolvió un vídeo vacío.');
-  return{outputPath,bytes:total,provider:'Pollinations AI video',model,durationSeconds:duration,status:'complete'};
+  }
+  throw new Error('Pollinations no pudo generar un vídeo IA válido con ningún modelo disponible. Último error: '+(lastError?.message||'desconocido'));
 }
 
 async function generateFreeLtxVideoClip(prompt,dir,options={}) {
