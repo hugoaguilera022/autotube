@@ -40,6 +40,8 @@ jobs:
         id: repair
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [ -z "${GEMINI_API_KEY:-}" ]; then
