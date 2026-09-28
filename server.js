@@ -921,7 +921,7 @@ async function generateFreeLtx25VideoClip(prompt,dir,options={}) {
     .filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
   const duration=Math.max(1,Math.min(8,Number(options.durationSeconds)||3));
   const width=896, height=512;
-  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
   const imagePath=String(options.firstFramePath||'').trim();
   const errors=[];
   for(const spaceUrl of spaces){
@@ -1325,12 +1325,13 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
       const ev=(block.match(/(?:^|\n)event:\s*([^\n]+)/)||[])[1]?.trim()||'';
       const dl=(block.match(/(?:^|\n)data:\s*([\s\S]+)/)||[])[1]?.trim()||'';
       if(ev==='error')errorMessage=dl||'Wan2.2 AoTI generation error';
+      if(ev==='exception')errorMessage=dl||'Wan2.2 AoTI exception';
       if(ev==='complete'){try{completed=JSON.parse(dl)}catch{}}
     }
     if(completed!==null||errorMessage)break;
   }
   await reader.cancel().catch(()=>{});
-  if(errorMessage)throw new Error('Wan2.2 AoTI generation error: '+errorMessage.slice(0,1200));
+  if(errorMessage)throw new Error('Wan2.2 AoTI generation error: '+String(errorMessage).slice(0,1600));
   const arr=Array.isArray(completed)?completed:(completed?.data||[]);
   const out=arr?.[0]; const raw=out?.video||out?.[0]?.video||out;
   const url=raw?.url||raw?.path||raw; if(!url)throw new Error('Wan2.2 AoTI no devolvió vídeo.');
@@ -1432,7 +1433,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     ...(allowPaid&&process.env.REPLICATE_API_TOKEN?['Replicate']:[]),
     ...(allowPaid&&(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['HF-Inference']:[]),
     ...(allowPaid&&process.env.POLLINATIONS_API_KEY&&String(process.env.AUTOTUBE_ALLOW_POLLINATIONS_PAID||'0')==='1'?['Pollinations']:[]),
-    ...(referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-I2V','Wan2.1-VACE']:[]),
+    ...(referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-I2V','Wan2.1-VACE']:[]),
     'Wan2.2-ZeroGPU','OpenKing-Wan2.2','LTX-2.5','Wan2.1','LTX-0.9.8'
   ];
   const errors=[];
