@@ -47,6 +47,7 @@ if [ -n "${RENDER_API_KEY:-}" ] && [ -n "${RENDER_SERVICE_ID:-}" ] && [ -n "${RE
       echo "Using Render deploy failure logs for root-cause repair."
     fi
   fi
+fi
 if grep -Eiq '502|503|504|timeout|timed out|ECONNRESET|ETIMEDOUT|ZeroGPU quota|queue is full|temporarily unavailable|rate.?limit|429' failure-tail.log; then
   echo "Transient/provider signature detected: invoking alternative-route repair instead of stopping."
 fi
