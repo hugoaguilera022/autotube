@@ -350,7 +350,81 @@ function parseSubtitleText(raw){
 }
 
 function runFfmpeg(args,timeoutMs=180000){return new Promise((resolve,reject)=>{const safeArgs=[...args];const p=spawn(ffmpegPath,safeArgs,{stdio:['ignore','ignore','pipe']});let err='';let finished=false;const timer=setTimeout(()=>{if(finished)return;finished=true;try{p.kill('SIGKILL')}catch{}reject(new Error('FFmpeg timeout after '+timeoutMs+'ms: '+safeArgs.slice(0,18).join(' ')))},timeoutMs);p.stderr.on('data',d=>{err+=d.toString();if(err.length>12000)err=err.slice(-12000)});p.on('error',e=>{if(finished)return;finished=true;clearTimeout(timer);reject(e)});p.on('close',code=>{if(finished)return;finished=true;clearTimeout(timer);code===0?resolve():reject(new Error('FFmpeg '+code+': '+err.slice(-2500)))})})}
-async function generateFallbackMusic(description,durationSeconds,dir,audioProfile={}){const duration=Math.max(1,Math.min(300,Number(durationSeconds)||30));const out=path.join(dir,'autotube-original-music-'+Date.now()+'.mp3');const energy=String(audioProfile.energy||'').toLowerCase();const gain=/(high|intense|energetic)/.test(energy)?0.11:0.07;const bpm=Math.max(55,Math.min(120,Number(audioProfile.bpmEstimate)||72));const chord=Math.max(0.5,60/bpm*4);const freqs=[[261.63,329.63,392],[220,261.63,329.63],[174.61,220,261.63],[196,246.94,293.66]];const inputs=[];const voiceLabels=[];for(let voice=0;voice<3;voice++){const labels=[];for(let chordIndex=0;chordIndex<4;chordIndex++){const freq=freqs[chordIndex][voice];const inputIndex=inputs.length/4;inputs.push('-f','lavfi','-i','sine=frequency='+freq+':duration='+chord);labels.push('['+inputIndex+':a]');}voiceLabels.push(labels);}const filterParts=[];for(let voice=0;voice<3;voice++){filterParts.push(voiceLabels[voice].join('')+'concat=n=4:v=0:a=1,volume='+String(gain/(voice+1))+'[v'+voice+']');}filterParts.push('[v0][v1][v2]amix=inputs=3:duration=longest:normalize=0,lowpass=f=3600,highpass=f=70,acompressor=threshold=-24dB:ratio=2:attack=20:release=180,afade=t=in:st=0:d=2,afade=t=out:st='+Math.max(0,duration-2)+':d=2[a]');const filter=filterParts.join(';');return runFfmpeg(['-y','-hide_banner','-loglevel','error',...inputs,'-filter_complex',filter,'-map','[a]','-t',String(duration),'-ac','2','-ar','44100','-c:a','libmp3lame','-b:a','128k',out]).then(async()=>{const buffer=await fs.readFile(out);if(!buffer.length)throw new Error('La música local quedó vacía.');return{buffer,provider:'AutoTube local procedural chord progression',durationSeconds:duration,description:String(description||'')};});}
+async function generateProceduralMusic(description,durationSeconds,dir,audioProfile={}){
+  const duration=Math.max(1,Math.min(300,Number(durationSeconds)||30));
+  const out=path.join(dir,'autotube-procedural-music-'+Date.now()+'.mp3');
+  const energy=String(audioProfile.energy||'').toLowerCase();const gain=/(high|intense|energetic)/.test(energy)?0.11:0.07;
+  const bpm=Math.max(55,Math.min(120,Number(audioProfile.bpmEstimate)||72));const chord=Math.max(0.5,60/bpm*4);
+  const freqs=[[261.63,329.63,392],[220,261.63,329.63],[174.61,220,261.63],[196,246.94,293.66]];const inputs=[];const voiceLabels=[];
+  for(let voice=0;voice<3;voice++){const labels=[];for(let chordIndex=0;chordIndex<4;chordIndex++){const freq=freqs[chordIndex][voice];const inputIndex=inputs.length/4;inputs.push('-f','lavfi','-i','sine=frequency='+freq+':duration='+chord);labels.push('['+inputIndex+':a]');}voiceLabels.push(labels);}
+  const filterParts=[];for(let voice=0;voice<3;voice++)filterParts.push(voiceLabels[voice].join('')+'concat=n=4:v=0:a=1,volume='+String(gain/(voice+1))+'[v'+voice+']');
+  filterParts.push('[v0][v1][v2]amix=inputs=3:duration=longest:normalize=0,lowpass=f=3600,highpass=f=70,acompressor=threshold=-24dB:ratio=2:attack=20:release=180,afade=t=in:st=0:d=2,afade=t=out:st='+Math.max(0,duration-2)+':d=2[a]');
+  await runFfmpeg(['-y','-hide_banner','-loglevel','error',...inputs,'-filter_complex',filterParts.join(';'),'-map','[a]','-t',String(duration),'-ac','2','-ar','44100','-c:a','libmp3lame','-b:a','128k',out]);
+  const buffer=await fs.readFile(out);if(buffer.length<1000)throw new Error('La música procedural quedó vacía.');
+  return{buffer,provider:'AutoTube procedural last-resort',durationSeconds:duration,description:String(description||''),generationType:'procedural'};
+}
+const musicProviderState=new Map();
+function musicState(provider='unknown'){const key=String(provider||'unknown');if(!musicProviderState.has(key))musicProviderState.set(key,{cooldownUntil:0,failures:0,lastError:'',lastFailureAt:0,lastSuccessAt:0});return musicProviderState.get(key);}
+function musicCooldownActive(provider){return Date.now()<Number(musicState(provider).cooldownUntil||0);}
+function noteMusicCooldown(provider,ms,err=''){const st=musicState(provider);st.cooldownUntil=Date.now()+Math.max(15000,Number(ms)||60000);st.failures++;st.lastFailureAt=Date.now();st.lastError=String(err||'');st.lastFailureAt=Date.now();}
+function noteMusicSuccess(provider){const st=musicState(provider);st.cooldownUntil=0;st.failures=0;st.lastSuccessAt=Date.now();st.lastError='';}
+function classifyMusicError(err){const m=String(err?.message||err||'').toLowerCase();if(/429|quota|rate limit|too many requests|insufficient.*credit|limit/.test(m))return'quota';if(/401|403|api key|unauthori|forbidden/.test(m))return'auth';if(/404|model.*not found|unsupported/.test(m))return'model';if(/timeout|timed out|econnreset|eai_again|socket hang up|network/.test(m))return'network';if(/500|502|503|504|service unavailable|temporarily unavailable/.test(m))return'capacity';return'other';}
+async function validateGeneratedMusic(bufferOrPath,expectedDuration){
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-music-qa-'));const file=path.join(dir,'candidate.audio');
+  try{
+    if(Buffer.isBuffer(bufferOrPath))await fs.writeFile(file,bufferOrPath);else await fs.copyFile(String(bufferOrPath),file);
+    const stat=await fs.stat(file);if(stat.size<2000)throw new Error('Audio generado demasiado pequeño.');
+    const stderr=await new Promise((resolve,reject)=>{const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-af','volumedetect,astats=metadata=1:reset=1','-f','null','-'],{stdio:['ignore','ignore','pipe']});let e='';p.stderr.on('data',d=>{e+=d.toString();if(e.length>30000)e=e.slice(-30000)});p.on('error',reject);p.on('close',code=>code===0?resolve(e):reject(new Error('FFmpeg no pudo validar el audio: '+e.slice(-1600))));});
+    const t=String(stderr);const dm=t.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);const duration=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
+    const rms=t.match(/RMS level dB:\s*(-?[\d.]+)/i);const peak=t.match(/Peak level dB:\s*(-?[\d.]+)/i);const rmsDb=rms?Number(rms[1]):NaN,peakDb=peak?Number(peak[1]):NaN;
+    if(!duration||duration<1)throw new Error('Audio sin duración verificable.');if(Number.isFinite(rmsDb)&&rmsDb<-55)throw new Error('Audio prácticamente silencioso (RMS '+rmsDb+' dB).');if(Number.isFinite(peakDb)&&peakDb<-50)throw new Error('Audio demasiado débil (peak '+peakDb+' dB).');
+    if(expectedDuration&&duration<Math.max(1,Number(expectedDuration)*0.75))throw new Error('Audio demasiado corto: '+duration.toFixed(2)+' s.');
+    return{ok:true,durationSeconds:duration,rmsDb,peakDb,bytes:stat.size};
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+}
+async function discoverPollinationsMusicModels(key){
+  try{const r=await fetch('https://gen.pollinations.ai/v1/models',{headers:{Authorization:'Bearer '+key,Accept:'application/json'},signal:AbortSignal.timeout(15000)});if(!r.ok)return[];
+    const data=await r.json().catch(()=>null);const list=Array.isArray(data?.data)?data.data:(Array.isArray(data)?data:[]);
+    return list.filter(x=>String(x?.category||'').toLowerCase()==='audio').filter(x=>{const s=(String(x?.id||'')+' '+String(x?.title||'')+' '+String(x?.description||'')).toLowerCase();return /music|lyria|stable.?audio|song|soundtrack/.test(s)&&!/speech|tts|voice|whisper/.test(s);}).sort((a,b)=>Number(b?.health?.success_rate||0)-Number(a?.health?.success_rate||0)).map(x=>String(x?.id||x?.name||'').trim()).filter(Boolean).slice(0,8);
+  }catch(err){console.warn('[MusicCascade] Pollinations discovery unavailable:',err?.message||String(err));return[];}
+}
+async function generatePollinationsMusic(description,durationSeconds,dir,audioProfile={}){
+  const key=String(process.env.POLLINATIONS_API_KEY||'').trim();if(!key)throw new Error('POLLINATIONS_API_KEY no configurada.');
+  const models=await discoverPollinationsMusicModels(key);const configured=String(process.env.POLLINATIONS_MUSIC_MODEL||'').trim();const candidates=[configured,...models].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);if(!candidates.length)throw new Error('Pollinations no expone un modelo musical disponible.');
+  const prompt=String(description||'Original instrumental music matching the reference audio profile: '+JSON.stringify(audioProfile)).slice(0,3000);let lastErr=null;
+  for(const model of candidates){if(musicCooldownActive('pollinations:'+model))continue;try{
+    const url='https://gen.pollinations.ai/audio/'+encodeURIComponent(prompt)+'?'+new URLSearchParams({model:String(model),duration:String(Math.min(120,Math.max(5,Number(durationSeconds)||30)))}).toString();
+    const r=await fetch(url,{headers:{Authorization:'Bearer '+key,Accept:'audio/*'},signal:AbortSignal.timeout(180000)});const contentType=String(r.headers.get('content-type')||'').toLowerCase();const bytes=Buffer.from(await r.arrayBuffer());
+    if(!r.ok)throw new Error('Pollinations music '+r.status+': '+bytes.toString('utf8').slice(0,500));if(!contentType.startsWith('audio/'))throw new Error('Pollinations music no devolvió audio ('+contentType+').');
+    const qa=await validateGeneratedMusic(bytes,durationSeconds);noteMusicSuccess('pollinations:'+model);return{buffer:bytes,provider:'Pollinations AI Music',model,durationSeconds:qa.durationSeconds,generationType:'ai-music',validation:qa};
+  }catch(err){lastErr=err;const kind=classifyMusicError(err);noteMusicCooldown('pollinations:'+model,kind==='quota'?24*60*60*1000:kind==='auth'||kind==='model'?60*60*1000:kind==='capacity'||kind==='network'?90000:60000,err.message);console.warn('[MusicCascade] Pollinations model failed; quarantined:',model,err.message);}}
+  throw lastErr||new Error('Pollinations music exhausted.');
+}
+async function generateHuggingFaceMusic(description,durationSeconds,dir,audioProfile={}){
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();if(!token)throw new Error('HF music token no configurado.');
+  const configured=String(process.env.AUTOTUBE_HF_MUSIC_MODEL||'').trim();const candidates=[configured,'facebook/musicgen-small','facebook/musicgen-medium'].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);let lastErr=null;
+  for(const model of candidates){if(musicCooldownActive('hf:'+model))continue;try{
+    const r=await fetch('https://router.huggingface.co/hf-inference/models/'+encodeURIComponent(model),{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',Accept:'audio/wav'},body:JSON.stringify({inputs:String(description||'').slice(0,2500),parameters:{duration:Math.min(30,Math.max(5,Number(durationSeconds)||30))}}),signal:AbortSignal.timeout(180000)});
+    const ct=String(r.headers.get('content-type')||'').toLowerCase();const bytes=Buffer.from(await r.arrayBuffer());if(!r.ok)throw new Error('Hugging Face music '+r.status+': '+bytes.toString('utf8').slice(0,600));if(!ct.startsWith('audio/'))throw new Error('Hugging Face music no devolvió audio ('+ct+').');
+    const qa=await validateGeneratedMusic(bytes,durationSeconds);noteMusicSuccess('hf:'+model);return{buffer:bytes,provider:'Hugging Face MusicGen',model,durationSeconds:qa.durationSeconds,generationType:'ai-music',validation:qa};
+  }catch(err){lastErr=err;const kind=classifyMusicError(err);noteMusicCooldown('hf:'+model,kind==='quota'?24*60*60*1000:kind==='auth'||kind==='model'?60*60*1000:kind==='capacity'||kind==='network'?90000:60000,err.message);console.warn('[MusicCascade] HF model failed; quarantined:',model,err.message);}}
+  throw lastErr||new Error('Hugging Face MusicGen exhausted.');
+}
+async function generateAceStepMusic(description,durationSeconds,dir,audioProfile={}){
+  const base=String(process.env.ACE_STEP_URL||'').trim();if(!base)throw new Error('ACE_STEP_URL no configurada.');
+  const r=await fetch(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:String(description||'').slice(0,3000),duration:Number(durationSeconds)||30,lyrics:'',instrumental:true}),signal:AbortSignal.timeout(180000)});const ct=String(r.headers.get('content-type')||'').toLowerCase();const bytes=Buffer.from(await r.arrayBuffer());
+  if(!r.ok)throw new Error('ACE-Step '+r.status+': '+bytes.toString('utf8').slice(0,600));if(!ct.startsWith('audio/'))throw new Error('ACE-Step no devolvió audio ('+ct+').');const qa=await validateGeneratedMusic(bytes,durationSeconds);return{buffer:bytes,provider:'ACE-Step',model:'configured endpoint',durationSeconds:qa.durationSeconds,generationType:'ai-music',validation:qa};
+}
+async function generateMusicWithCascade(description,durationSeconds,dir,audioProfile={}){
+  const errors=[];const providers=[...(process.env.ACE_STEP_URL?['ace-step']:[]),...(process.env.POLLINATIONS_API_KEY?['pollinations']:[]),...((process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['huggingface']:[])];
+  for(const provider of providers){if(musicCooldownActive(provider)){errors.push(provider+': cooldown activo');continue;}try{
+    let music;if(provider==='ace-step')music=await generateAceStepMusic(description,durationSeconds,dir,audioProfile);else if(provider==='pollinations')music=await generatePollinationsMusic(description,durationSeconds,dir,audioProfile);else music=await generateHuggingFaceMusic(description,durationSeconds,dir,audioProfile);
+    const qa=await validateGeneratedMusic(music.buffer,durationSeconds);noteMusicSuccess(provider);return{...music,validation:qa};
+  }catch(err){const kind=classifyMusicError(err);const msg=String(err?.message||err);errors.push(provider+': '+kind+': '+msg.slice(0,700));noteMusicCooldown(provider,kind==='quota'?24*60*60*1000:kind==='auth'||kind==='model'?60*60*1000:kind==='capacity'||kind==='network'?90000:60000,msg);console.warn('[MusicCascade] provider failed; advancing:',provider,msg);}}
+  if(String(process.env.AUTOTUBE_ALLOW_PROCEDURAL_AUDIO||'0')==='1'){const music=await generateProceduralMusic(description,durationSeconds,dir,audioProfile);return{...music,validation:await validateGeneratedMusic(music.buffer,durationSeconds)};}
+  throw new Error('MUSIC_PROVIDERS_EXHAUSTED: '+errors.join(' | '));
+}
+const generateFallbackMusic=generateMusicWithCascade;
 
 async function probeReferenceTechnical(file){
   const stderr=await new Promise((resolve,reject)=>{
