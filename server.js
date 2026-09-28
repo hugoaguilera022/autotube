@@ -1477,7 +1477,9 @@ async function executeUrlToVideo(reference,jobId,options={}){
           creativeDirection:planResponseData?.creativeDirection||null,
           visualStyle:'animated',
           animationStyle:planResponseData?.creativeDirection?.animationStyle||'animated cinematic 2D/3D',
-          animatedSceneCount:scenes.filter(s=>String(s.animationNotes||s.visualPrompt||'').match(/animat|2d|3d|motion|camera|movement|movimiento/i)).length,
+          animatedSceneCount:planResponseData?.creativeDirection?.visualStyle==='animación cinematográfica 2D/3D original'
+            ?scenes.length
+            :scenes.filter(s=>String(s.animationNotes||s.visualPrompt||'').match(/animat|2d|3d|motion|camera|movement|movimiento/i)).length,
           motionDetected:Boolean(animatedMotion.motionDetected),
           sampledFrames:animatedMotion.sampledFrames,
           uniqueFrames:animatedMotion.uniqueFrames
