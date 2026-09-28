@@ -1374,7 +1374,7 @@ const VIDEO_PROVIDER_PROBE_MS = Math.max(30000, Number(process.env.AUTOTUBE_PROV
 // makes trying another ZeroGPU Space immediately wasteful. Keep a shared breaker for the
 // whole account window and never spend more GPU time on blind provider fallbacks.
 const ZEROGPU_SHARED_QUOTA_MS = Math.max(60*60*1000, Number(process.env.AUTOTUBE_ZEROGPU_QUOTA_COOLDOWN_MS)||24*60*60*1000);
-let sharedZeroGpuCooldownUntil()=0;
+let sharedZeroGpuCooldownUntil=0;
 function zeroGpuQuotaActive(){return Date.now()<sharedZeroGpuCooldownUntil();}
 
 // Free-production guard: never spend the daily free GPU allowance on blind retries.
@@ -1484,7 +1484,7 @@ function settleHfZeroGpuAttempt(provider,requestedSeconds,{success=false,quota=f
   }
 }
 function sharedZeroGpuCooldownUntil(){
-  return Math.max(0,...[...videoProviderState.values()].map(st=>Number(st?.cooldownUntil||0)));
+  return Math.max(sharedZeroGpuCooldownUntil,...[...videoProviderState.values()].map(st=>Number(st?.cooldownUntil||0)));
 }
 function noteZeroGpuQuota(err,providerName='ZeroGPU'){
   // ZeroGPU quota is shared across Spaces for the same caller account.
