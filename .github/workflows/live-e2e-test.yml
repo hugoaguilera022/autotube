@@ -1,7 +1,6 @@
 name: AutoTube E2E live regeneration test
 on:
   workflow_dispatch:
-  push:
 jobs:
   test:
     runs-on: ubuntu-latest

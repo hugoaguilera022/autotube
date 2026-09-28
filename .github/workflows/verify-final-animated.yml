@@ -1,7 +1,5 @@
 name: Verify final animated MP4
 on:
-  push:
-    paths:
       - .github/workflows/verify-final-animated.yml
 jobs:
   verify:
