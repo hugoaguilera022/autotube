@@ -28,7 +28,7 @@ jobs:
             echo "=== AutoTube watchdog minute $tick/5 ==="
 
             runs="$(gh run list --repo "$REPOSITORY" --limit 50 --json databaseId,workflowName,status,conclusion,createdAt,updatedAt)"
-            echo "$runs" | jq -r '.[] | [.databaseId,.workflowName,.status,.conclusion,.createdAt,.updatedAt] | @tsv' | head -n 20
+            echo "$runs" | jq -r '.[] | [.databaseId,.workflowName,.status,.conclusion,.createdAt,.updatedAt] | @tsv' | sed -n '1,20p'
 
             echo "$runs" | jq -r '.[] | select((.status=="in_progress" or .status=="queued") and
               (.workflowName!="AutoTube real YouTube to MP4 E2E" and
