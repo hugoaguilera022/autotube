@@ -1318,7 +1318,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
       const raw0=data[0];
       const raw=typeof raw0==='string'?(raw0):(raw0?.url||raw0?.path||raw0?.video?.url||raw0?.video?.path||'');
       if(!raw)throw new Error('LTX-2.3 Space no devolvió un vídeo.');
-      const outputPath=await downloadGradioOutput(raw,'https://'+space.replace(/^https?:\\/\\//,'').replace(/\\.hf\\.space$/,'')+'.hf.space',token,dir,'ltx23-official-generated');
+      const outputPath=await downloadGradioOutput(raw,'https://'+space.replace(/^https?:\/\//,'').replace(/\.hf\.space$/,'')+'.hf.space',token,dir,'ltx23-official-generated');
       const validation=await validateGeneratedVideoClip(outputPath);
       if(!validation.ok)throw new Error('LTX-2.3 Space produjo un clip inválido.');
       const stat=await fs.stat(outputPath);
