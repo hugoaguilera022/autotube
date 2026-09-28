@@ -1908,10 +1908,11 @@ async function executeFullPipelineTest(reference,testId=null){
                   firstFramePath:referenceFramePath
                 }),
                 'adaptive-video-provider-cascade',
-                Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||90000)
+                Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||180000)
               );
               console.log('AutoTube adaptive AI provider succeeded:',i+1,clip.providerKey||clip.provider,clip.model);
             }catch(adaptiveErr){
+              if(requireRealAiVideoGeneration())throw adaptiveErr;
               console.warn('Adaptive provider manager exhausted/failed; going directly to validated local fallback:',adaptiveErr.message||String(adaptiveErr));
             }
             if(!clip && String(process.env.AUTOTUBE_ENABLE_LEGACY_AI_CASCADE||'0')==='1'){
