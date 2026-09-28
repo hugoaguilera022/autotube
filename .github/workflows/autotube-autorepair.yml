@@ -94,7 +94,42 @@ FAILED E2E LOG:
           git add -A
           git commit -m '[autotube-auto-repair] fix failed E2E'
           git push origin HEAD:main
+          echo "Patched revision pushed. Explicitly starting a fresh canonical E2E because pushes made with GITHUB_TOKEN do not recursively trigger workflows."
+          gh workflow run "AutoTube real YouTube to MP4 E2E" --repo "$REPOSITORY" --ref main
           echo 'REPAIR_RESULT=patched_and_pushed' >> "$GITHUB_OUTPUT"
+
+      - name: Notify user when autonomous repair cannot proceed
+        if: steps.repair.outputs.REPAIR_RESULT != 'patched_and_pushed'
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          ALERT_EMAIL: hugoaguilera022@gmail.com
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RESULT: ${{ steps.repair.outputs.REPAIR_RESULT }}
+        run: |
+          set -euo pipefail
+          test -n "$BREVO_API_KEY"
+          python - <<'PY'
+          import json, os, urllib.request
+          payload = {
+            "sender": {"name":"AutoTube","email":"hugoaguilera022@gmail.com"},
+            "to": [{"email":os.environ["ALERT_EMAIL"]}],
+            "subject":"🚨 AutoTube necesita tu ayuda",
+            "textContent":(
+              "🚨 NECESITAMOS TU AYUDA‼️\n\n"
+              "AutoTube agotó sus recuperaciones y no pudo aplicar un parche seguro automáticamente.\n"
+              f"Resultado: {os.environ['RESULT']}\n"
+              f"Run: {os.environ['RUN_URL']}\n"
+            )
+          }
+          req=urllib.request.Request(
+            "https://api.brevo.com/v3/smtp/email",
+            data=json.dumps(payload).encode(),
+            headers={"accept":"application/json","api-key":os.environ["BREVO_API_KEY"],"content-type":"application/json"},
+            method="POST"
+          )
+          with urllib.request.urlopen(req,timeout=30) as resp:
+            print(resp.read().decode())
+          PY
 
       - name: Open diagnostic issue when repair cannot proceed
         if: steps.repair.outputs.REPAIR_RESULT != 'patched_and_pushed'
