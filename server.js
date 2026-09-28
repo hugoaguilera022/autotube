@@ -1500,10 +1500,31 @@ async function executeFullPipelineTest(reference,testId=null){
                 clip={outputPath:motionPath,bytes:st.size,provider:image.provider+' + FFmpeg motion',model:image.model+' animated',durationSeconds:seconds,status:'complete'};
                 console.log('AutoTube AI image-motion fallback generated:',i+1,clip.model);
               }catch(fallbackErr){
-                console.warn('AI image-motion fallback unavailable for clip '+(i+1)+':',fallbackErr.message||String(fallbackErr));
+                console.warn('Gemini AI image-motion fallback unavailable for clip '+(i+1)+':',fallbackErr.message||String(fallbackErr));
+                try{
+                  const image=await generatePollinationsOriginalImage(
+                    'Create an original cinematic 16:9 visual for this scene. '+prompt+
+                    ' Completely original composition, no logos, no text, no copied frames.',
+                    dir,
+                    {width:1280,height:720}
+                  );
+                  const motionPath=path.join(dir,'pollinations-ai-motion-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+                  const seconds=Math.max(3,Math.min(5,Number(scene.duration)||4));
+                  await new Promise((resolve,reject)=>{
+                    const vf='scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,zoompan=z=1+0.0012*on:d=1:s=1280x720:fps=30,format=yuv420p';
+                    const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-loop','1','-i',image.outputPath,'-vf',vf,'-t',String(seconds),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart',motionPath]);
+                    let err='';p.stderr.on('data',d=>err+=d);p.on('close',code=>code===0?resolve(true):reject(new Error('Pollinations image animation FFmpeg '+code+': '+err.slice(0,700))));
+                  });
+                  await validateGeneratedVideoClip(motionPath);
+                  const st=await fs.stat(motionPath);
+                  clip={outputPath:motionPath,bytes:st.size,provider:image.provider+' + FFmpeg motion',model:image.model+' animated',durationSeconds:seconds,status:'complete'};
+                  console.log('AutoTube Pollinations AI image-motion fallback generated:',i+1,clip.model);
+                }catch(pollImageErr){
+                  console.warn('Pollinations AI image-motion fallback unavailable for clip '+(i+1)+':',pollImageErr.message||String(pollImageErr));
+                }
               }
             }
-            if(!clip)throw new Error('Los proveedores gratuitos de vídeo IA y el fallback AI-image-motion fallaron para la escena '+(i+1)+'.');
+            if(!clip)throw new Error('Los proveedores gratuitos de vídeo IA y los fallbacks AI-image-motion fallaron para la escena '+(i+1)+'.');
             aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model});
           }catch(err){
             console.warn('AI video clip '+(i+1)+' unavailable:',err.message||String(err));
