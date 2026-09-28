@@ -1256,7 +1256,41 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       if(kind==='user_blocking')continue;
     }
   }
-  throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: ningún proveedor de vídeo IA disponible pudo generar un clip válido. '+errors.join(' | '));
+  // Last-resort free path: if an AI video provider is unavailable, use a validated
+  // scene image already produced by the pipeline and create deterministic cinematic
+  // motion locally. This is intentionally last so hosted AI providers are still preferred.
+  if(referenceFramePath){
+    try{
+      const clip=await generateLocalMotionFallbackClip(dir,{...options,firstFramePath:referenceFramePath});
+      const validation=await validateGeneratedVideoClip(clip.outputPath);
+      if(!validation.ok)throw new Error('El fallback local no pasó la validación.');
+      return{...clip,providerKey:'Local-FFmpeg',validation,fallback:true,providerFailures:errors};
+    }catch(err){
+      errors.push('Local-FFmpeg: '+String(err.message||err).slice(0,500));
+    }
+  }
+  throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: ningún proveedor de vídeo IA ni fallback local pudo generar un clip válido. '+errors.join(' | '));
+}
+
+async function generateLocalMotionFallbackClip(dir,options={}) {
+  const sourcePath=String(options.firstFramePath||options.sceneImagePath||'').trim();
+  if(!sourcePath)throw new Error('Fallback local requiere una imagen de escena.');
+  const duration=Math.max(3,Math.min(8,Number(options.durationSeconds)||5));
+  const outputPath=path.join(dir,'local-motion-fallback-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  const fps=24;
+  const width=Math.max(320,Math.min(1280,Number(options.width)||1280));
+  const height=Math.max(180,Math.min(720,Number(options.height)||720));
+  const zoom=Math.max(1.02,Math.min(1.18,Number(options.zoom)||1.08));
+  const frames=Math.ceil(duration*fps);
+  // Deterministic, dependency-free motion fallback: animated crop/zoom + slight
+  // horizontal drift. It never calls an external provider and therefore remains
+  // available when every hosted video model is unavailable.
+  await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',sourcePath,
+    '-vf',`scale=${Math.ceil(width*zoom/2)*2}:${Math.ceil(height*zoom/2)*2},zoompan=z='min(zoom+${(zoom-1)/frames}*1.5,${zoom})':x='iw/2-(iw/zoom/2)+sin(on/30)*iw*0.025':y='ih/2-(ih/zoom/2)+cos(on/37)*ih*0.018':d=1:s=${width}x${height}:fps=${fps},format=yuv420p`,
+    '-frames:v',String(frames),'-an','-c:v','libx264','-preset','veryfast','-crf','22','-movflags','+faststart',outputPath]);
+  const stat=await fs.stat(outputPath);
+  if(!stat.size)throw new Error('Fallback local produjo un MP4 vacío.');
+  return{outputPath,bytes:stat.size,provider:'AutoTube local motion fallback · FFmpeg',model:'zoompan-cinematic',durationSeconds:duration,status:'complete'};
 }
 
 async function validateGeneratedVideoClip(file){
