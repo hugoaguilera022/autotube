@@ -777,67 +777,53 @@ async function generateHuggingFaceProviderVideoClip(prompt,dir,options={}) {
 }
 
 async function generateFreeLtx25VideoClip(prompt,dir,options={}) {
-  const spaceUrl=String(process.env.LTX25_SPACE_URL||'https://DeepRat-LTX-Video-ZeroGPU-Optimized.hf.space').replace(/\/$/,'');
-  const duration=Math.max(3,Math.min(3,Number(options.durationSeconds)||3));
-  const width=896;
-  const height=512;
-  const seed=Math.floor(Math.random()*2147483647);
+  const {Client,handle_file}=require('@gradio/client');
+  const configured=String(process.env.LTX25_SPACE_URL||'').trim().replace(/\/$/,'');
+  const spaces=[configured,'https://ChopperBlu-ltx-2-5-demo.hf.space','https://Lightricks-LTX-2-5.hf.space','https://akhaliq-ltx-2-5-workflow.hf.space']
+    .filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
+  const duration=Math.max(1,Math.min(8,Number(options.durationSeconds)||3));
+  const width=896, height=512;
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
-  const headers={'Content-Type':'application/json'};
-  if(token)headers.Authorization='Bearer '+token;
-  const submit=await fetch(spaceUrl+'/gradio_api/call/generate',{
-    method:'POST',
-    headers,
-    body:JSON.stringify({data:[String(prompt||'').trim(),'worst quality, blurry, static, distorted, text, logos, watermark',null,null,height,width,'text-to-video',duration,9,seed,true,3.0,false]}),
-    signal:AbortSignal.timeout(60000)
-  });
-  const submitRaw=await submit.text();
-  let submitData=null;try{submitData=submitRaw?JSON.parse(submitRaw):null}catch{}
-  if(!submit.ok)throw new Error('LTX Video ZeroGPU submit '+submit.status+': '+submitRaw.slice(0,500));
-  const eventId=String(submitData?.event_id||'').trim();
-  if(!eventId)throw new Error('LTX Video ZeroGPU no devolvió event_id.');
-  const result=await fetch(spaceUrl+'/gradio_api/call/generate/'+encodeURIComponent(eventId),{
-    headers:token?{Authorization:'Bearer '+token}:{},
-    signal:AbortSignal.timeout(300000)
-  });
-  const stream=await result.text();
-  if(!result.ok)throw new Error('LTX Video ZeroGPU result '+result.status+': '+stream.slice(0,700));
-  const events=stream.split(/\r?\n\r?\n/);
-  let completeData=null;
-  for(const event of events){
-    const type=(event.match(/^event:\s*(.+)$/m)||[])[1]?.trim();
-    const dataLine=(event.match(/^data:\s*(.+)$/m)||[])[1];
-    if(type==='error')throw new Error('LTX Video ZeroGPU error: '+String(dataLine||event).slice(0,700));
-    if(type==='complete'&&dataLine){try{completeData=JSON.parse(dataLine)}catch{}}
-  }
-  const data=Array.isArray(completeData)?completeData:(Array.isArray(completeData?.data)?completeData.data:[]);
-  const output=data[0];
-  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
-  if(!url)throw new Error('LTX Video ZeroGPU terminó sin devolver el vídeo.');
-  const fileUrl=String(url).startsWith('http')?String(url):spaceUrl+'/gradio_api/file='+String(url).replace(/^\//,'');
-  const response=await fetch(fileUrl,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(180000)});
-  if(!response.ok)throw new Error('LTX Video ZeroGPU no pudo descargar el vídeo ('+response.status+').');
-  const outputPath=path.join(dir,'ltx25-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-  if(response.body?.getReader){
-    const handle=await fs.open(outputPath,'w');
-    const reader=response.body.getReader();
-    let total=0;
+  const imagePath=String(options.firstFramePath||'').trim();
+  const errors=[];
+  for(const spaceUrl of spaces){
     try{
-      while(true){
-        const part=await reader.read();
-        if(part.done)break;
-        total+=part.value.byteLength;
-        if(total>180*1024*1024){await reader.cancel().catch(()=>{});throw new Error('El vídeo LTX-2.5 supera el límite de 180 MB.');}
-        await handle.write(Buffer.from(part.value));
+      const client=await Client.connect(spaceUrl,token?{token}:undefined);
+      const seed=Math.floor(Math.random()*2147483647);
+      const image=imagePath?await handle_file(imagePath):null;
+      // Current LTX-2.5 public demos expose a stable /generate_video API:
+      // prompt, image, width, height, duration, auto_length, seed, randomize_seed, decoder.
+      let result;
+      try{
+        result=await client.predict('/generate_video',[
+          String(prompt||'').trim(), image, width, height, duration, false, seed, true, 'conv'
+        ]);
+      }catch(firstErr){
+        // Workflow-based mirrors use the same logical operator with a smaller signature.
+        result=await client.predict('/generate_video',[
+          String(prompt||'').trim(), image, height, width, duration, seed, 'conv', false, true
+        ]);
       }
-    }finally{await handle.close().catch(()=>{});}
-    if(!total)throw new Error('LTX Video devolvió un vídeo vacío.');
-  }else{
-    await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+      const data=Array.isArray(result?.data)?result.data:[];
+      const output=data[0];
+      const raw=typeof output==='string' ? output : (output?.url||output?.path||output?.video?.url||'');
+      if(!raw)throw new Error('LTX-2.5 terminó sin devolver el vídeo.');
+      const fileUrl=String(raw).startsWith('http')?String(raw):spaceUrl+'/gradio_api/file='+String(raw).replace(/^\//,'');
+      const response=await fetch(fileUrl,{headers:token?{Authorization:'Bearer '+token}:{} ,signal:AbortSignal.timeout(300000)});
+      if(!response.ok)throw new Error('LTX-2.5 descarga HTTP '+response.status);
+      const outputPath=path.join(dir,'ltx25-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+      const bytes=Buffer.from(await response.arrayBuffer());
+      if(bytes.length<10000)throw new Error('LTX-2.5 devolvió un archivo demasiado pequeño.');
+      await fs.writeFile(outputPath,bytes);
+      const validation=await validateGeneratedVideoClip(outputPath);
+      if(!validation.ok)throw new Error('LTX-2.5 produjo un clip inválido.');
+      return{outputPath,bytes:bytes.length,provider:'Hugging Face ZeroGPU · LTX-2.5',model:'LTX-2.5 distilled',durationSeconds:validation.durationSeconds,status:'complete'};
+    }catch(err){
+      errors.push(spaceUrl+': '+String(err?.message||err).slice(0,500));
+      console.warn('LTX-2.5 Space failed:',spaceUrl,err?.message||String(err));
+    }
   }
-  const stat=await fs.stat(outputPath);
-  if(!stat.size)throw new Error('LTX-2.5 devolvió un vídeo vacío.');
-  return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX Video 0.9.8 distilled',model:'LTX-Video-0.9.8-13B-distilled',durationSeconds:duration,status:'complete'};
+  throw new Error('LTX-2.5 no pudo generar un clip válido: '+errors.join(' | '));
 }
 
 async function downloadRemoteImageToFile(url,dir,name='reference-frame.jpg'){
