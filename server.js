@@ -1279,7 +1279,7 @@ function completeFreeAiClip(){
 
 function noteZeroGpuQuota(err){
   zeroGpuQuotaUntil=Date.now()+ZEROGPU_SHARED_QUOTA_MS;
-  for(const name of ['Wan2.2-ZeroGPU','OpenKing-Wan2.2']) {
+  for(const name of ['Wan2.2-ZeroGPU','OpenKing-Wan2.2','LTX-2.3-ZeroGPU']) {
     const st=providerState(name);
     st.status='cooldown';
     st.lastError=String(err?.message||err);
@@ -1290,9 +1290,9 @@ function noteZeroGpuQuota(err){
 }
 function providerState(name){if(!videoProviderState.has(name))videoProviderState.set(name,{status:'unknown',failures:0,lastError:'',lastFailureAt:0,lastSuccessAt:0,cooldownUntil:0});return videoProviderState.get(name);}
 function classifyVideoProviderError(err){const m=String(err?.message||err||'').toLowerCase();if(/401|403|unauthori[sz]ed|forbidden|oauth|login|permission|credentials/.test(m))return'user_blocking';if(/429|zero.?gpu quota|quota|rate limit|too many requests/.test(m))return'quota';if(/502|503|504|temporarily unavailable|space.*error|service unavailable|gateway/.test(m))return'transient_provider';if(/timeout|timed out|econnreset|etimedout|eai_again|socket hang up/.test(m))return'transient_network';if(/endpoint|not found|404|could not resolve app config|no api|invalid.*parameter|unexpected.*argument/.test(m))return'integration';if(/ffmpeg|invalid.*video|stream of video|duration.*invalid|static|movement/.test(m))return'output';return'unknown';}
-function noteProviderFailure(name,err){const st=providerState(name);st.failures++;st.lastError=String(err?.message||err);st.lastFailureAt=Date.now();const kind=classifyVideoProviderError(err);if((name==='Wan2.2-ZeroGPU'||name==='OpenKing-Wan2.2')&&kind==='quota'){noteZeroGpuQuota(err);return;}const multiplier=kind==='quota'?4:kind==='integration'?6:1;st.cooldownUntil=Date.now()+VIDEO_PROVIDER_COOLDOWN_MS*multiplier*Math.min(4,st.failures);st.status=kind==='user_blocking'?'blocked':kind==='integration'?'broken':'down';console.warn('[VideoProviderManager]',name,'=>',st.status,'error=',st.lastError.slice(0,500));}
+function noteProviderFailure(name,err){const st=providerState(name);st.failures++;st.lastError=String(err?.message||err);st.lastFailureAt=Date.now();const kind=classifyVideoProviderError(err);if((name==='Wan2.2-ZeroGPU'||name==='OpenKing-Wan2.2'||name==='LTX-2.3-ZeroGPU')&&kind==='quota'){noteZeroGpuQuota(err);return;}const multiplier=kind==='quota'?4:kind==='integration'?6:1;st.cooldownUntil=Date.now()+VIDEO_PROVIDER_COOLDOWN_MS*multiplier*Math.min(4,st.failures);st.status=kind==='user_blocking'?'blocked':kind==='integration'?'broken':'down';console.warn('[VideoProviderManager]',name,'=>',st.status,'error=',st.lastError.slice(0,500));}
 function noteProviderSuccess(name){const st=providerState(name);st.status='healthy';st.failures=0;st.lastError='';st.lastSuccessAt=Date.now();st.cooldownUntil=0;}
-function providerAvailable(name){const permanentlyUnstable={ 'Wan2.2-I2V':String(process.env.AUTOTUBE_ENABLE_WAN22_I2V||'0')!=='1', 'LTX-2.5':String(process.env.AUTOTUBE_ENABLE_LTX25||'0')!=='1', 'Wan2.1':String(process.env.AUTOTUBE_ENABLE_WAN21||'0')!=='1', 'LTX-0.9.8':String(process.env.AUTOTUBE_ENABLE_LTX098||'0')!=='1', 'Wan2.2-ZeroGPU':String(process.env.AUTOTUBE_ENABLE_WAN22_ZEROGPU||'1')!=='1' , 'OpenKing-Wan2.2':String(process.env.AUTOTUBE_ENABLE_OPENKING_WAN22||'1')!=='1', 'LTX-2.3-ZeroGPU':String(process.env.AUTOTUBE_ENABLE_LTX23_ZEROGPU||'1')!=='1' };if(permanentlyUnstable[name])return false;if((name==='Wan2.2-ZeroGPU'||name==='OpenKing-Wan2.2')&&zeroGpuQuotaActive())return false;const st=providerState(name);return st.status!=='blocked'&&Date.now()>=Number(st.cooldownUntil||0);}
+function providerAvailable(name){const permanentlyUnstable={ 'Wan2.2-I2V':String(process.env.AUTOTUBE_ENABLE_WAN22_I2V||'0')!=='1', 'LTX-2.5':String(process.env.AUTOTUBE_ENABLE_LTX25||'0')!=='1', 'Wan2.1':String(process.env.AUTOTUBE_ENABLE_WAN21||'0')!=='1', 'LTX-0.9.8':String(process.env.AUTOTUBE_ENABLE_LTX098||'0')!=='1', 'Wan2.2-ZeroGPU':String(process.env.AUTOTUBE_ENABLE_WAN22_ZEROGPU||'1')!=='1' , 'OpenKing-Wan2.2':String(process.env.AUTOTUBE_ENABLE_OPENKING_WAN22||'1')!=='1', 'LTX-2.3-ZeroGPU':String(process.env.AUTOTUBE_ENABLE_LTX23_ZEROGPU||'1')!=='1' };if(permanentlyUnstable[name])return false;if((name==='Wan2.2-ZeroGPU'||name==='OpenKing-Wan2.2'||name==='LTX-2.3-ZeroGPU')&&zeroGpuQuotaActive())return false;const st=providerState(name);return st.status!=='blocked'&&Date.now()>=Number(st.cooldownUntil||0);}
 async function probeVideoProvider(name){const st=providerState(name);if(st.status==='blocked')return{ok:false,status:st.status,error:st.lastError};if(st.status==='healthy'&&Date.now()-st.lastSuccessAt<VIDEO_PROVIDER_PROBE_MS)return{ok:true,status:'healthy',cached:true};const raw={ 'Wan2.2-I2V':process.env.WAN22_I2V_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','LTX-2.5':process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space','Wan2.1':process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space','Wan2.1-VACE':process.env.WAN_VACE_SPACE_URL||'https://jdpadmin-wan2-1-vace-diffusers-demo.hf.space','LTX-0.9.8':process.env.LTX_SPACE||'https://lightricks-ltx-video-distilled.hf.space','Wan2.2-ZeroGPU':process.env.WAN22_ZEROGPU_SPACE_URL||'https://alexcheng0072-wan27-free-video-generator.hf.space','OpenKing-Wan2.2':process.env.OPENKING_WAN22_SPACE_URL||'https://openking-wan2-video-generation.hf.space', 'LTX-2.3-ZeroGPU':process.env.LTX23_ZEROGPU_SPACE||'https://shaundeoOo-ltx-2-3-fast.hf.space'}[name];if(!raw)return{ok:false,status:'unconfigured'};const url=String(raw).startsWith('http')?String(raw).replace(/\/$/,'')+'/gradio_api/info':'https://'+String(raw).replace(/\/$/,'')+'.hf.space/gradio_api/info';try{const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(4000)});if(!response.ok)throw new Error('HTTP '+response.status);noteProviderSuccess(name);return{ok:true,status:'healthy'};}catch(err){noteProviderFailure(name,err);return{ok:false,status:providerState(name).status,error:String(err.message||err)};}}
 async function getVideoProviderHealth(){const result={};for(const name of ['LTX-2.3-ZeroGPU','Wan2.2-ZeroGPU','OpenKing-Wan2.2','Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
 
@@ -1302,12 +1302,16 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   const imagePath=String(options.firstFramePath||'').trim();
   if(!imagePath)throw new Error('LTX-2.3 ZeroGPU I2V requiere un frame inicial.');
+  const imageBytes=await fs.readFile(imagePath);
+  if(!imageBytes.length)throw new Error('El frame inicial para LTX-2.3 está vacío.');
+  const imageMime=/\\.png$/i.test(imagePath)?'image/png':'image/jpeg';
+  const imageDataUri='data:'+imageMime+';base64,'+imageBytes.toString('base64');
   const duration=Math.max(5,Math.min(5,Number(options.durationSeconds)||5));
   const resolution=String(options.resolution||'720p');
   const seed=Math.floor(Math.random()*4294967295);
   const app=await Client.connect(space,token?{token}:undefined);
   const result=await app.predict('/generate',[
-    imagePath,
+    imageDataUri,
     String(prompt||'').trim(),
     String(options.negativePrompt||'blurry, jittery, distorted anatomy, text, logos, watermark').trim(),
     resolution,
