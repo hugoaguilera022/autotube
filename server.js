@@ -1606,7 +1606,8 @@ async function executeFullPipelineTest(reference,testId=null){
         // It preserves 16:9 while materially reducing FFmpeg's peak frame memory.
         targetWidth:854,
         targetHeight:480,
-        targetFps:30,
+        // 15 fps keeps the animated result smooth while fitting Render Free's CPU/memory budget.
+        targetFps:15,
         targetDurationSeconds:durationSeconds
       });
       validation=await validateRenderedMp4(output,durationSeconds);
