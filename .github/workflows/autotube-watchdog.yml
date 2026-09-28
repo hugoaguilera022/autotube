@@ -121,6 +121,18 @@ jobs:
 
             canonical="$(echo "$runs" | jq '[.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="queued" or .status=="in_progress" or .status=="pending"))] | length')"
             heal="$(echo "$runs" | jq '[.[] | select((.workflowName=="AutoTube bounded self-heal" or .workflowName=="AutoTube bounded autonomous repair") and (.status=="queued" or .status=="in_progress" or .status=="pending"))] | length')"
+            render_repair="$(echo "$runs" | jq '[.[] | select(.workflowName=="AutoTube Render autonomous repair" and (.status=="queued" or .status=="in_progress" or .status=="pending"))] | length')"
+
+            # The Render repair loop is an independent owner of production recovery.
+            # Keep it alive from the watchdog instead of relying only on its cron.
+            # This closes the gap where a failed Render deploy or LIVE runtime error
+            # could otherwise wait for a scheduled tick.
+            if [ "$render_repair" -eq 0 ]; then
+              echo "No Render autonomous repair run is active; dispatching one."
+              gh workflow run autotube-render-autorepair.yml --repo "$REPOSITORY" --ref main || true
+            else
+              echo "Render autonomous repair is already active; no overlap."
+            fi
 
             if [ "$canonical" -eq 0 ] && [ "$heal" -eq 0 ]; then
               echo "No canonical pipeline or recovery is active; dispatching canonical E2E."
