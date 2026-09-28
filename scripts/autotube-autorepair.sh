@@ -10,7 +10,21 @@ count="$(echo "$completed" | jq '[.[0:3][] | select(.conclusion=="failure")] | l
 [ -n "${GEMINI_API_KEY:-}" ] || { gh issue create --repo "$REPOSITORY" --title "AutoTube repair needs Gemini secret" --body "Three E2E failures detected but GEMINI_API_KEY is unavailable."; exit 0; }
 run_id="$(echo "$latest" | jq -r .databaseId)"
 gh run view "$run_id" --repo "$REPOSITORY" --log > failure.log || true
-tail -n 1600 failure.log > failure-tail.log
+tail -n 2200 failure.log > failure-tail.log
+signature="$(sed -E 's/[0-9]{10,}/<ID>/g; s/[0-9a-f]{7,40}/<SHA>/g' failure-tail.log | sha256sum | cut -d' ' -f1)"
+echo "Failure signature: $signature"
+if git log --all --oneline --grep="failure-signature:$signature" -n 1 | grep -q .; then
+  gh issue create --repo "$REPOSITORY" --title "AutoTube repair circuit breaker: repeated failure" --body "Same failure signature already repaired: $signature. No duplicate patch created." || true
+  exit 0
+fi
+if grep -Eiq 'user.?action|required.*login|sign in to confirm|authentication required|OAuth|permission denied' failure-tail.log; then
+  gh issue create --repo "$REPOSITORY" --title "AutoTube needs user action" --body "Likely user-blocking E2E failure. Signature: $signature" || true
+  exit 0
+fi
+if grep -Eiq '502|503|504|timeout|timed out|ECONNRESET|ETIMEDOUT|ZeroGPU quota|queue is full|temporarily unavailable|rate.?limit|429' failure-tail.log; then
+  gh issue create --repo "$REPOSITORY" --title "AutoTube transient/provider failure after retries" --body "Transient/provider failure after three attempts. Signature: $signature" || true
+  exit 0
+fi
 python3 - <<'PY'
 import json,os,urllib.request
 log=open("failure-tail.log","r",errors="replace").read()
@@ -32,5 +46,5 @@ count_files="$(printf "%s\n" "$changed" | sed "/^$/d" | wc -l)"
 printf "%s\n" "$changed" | grep -Eq "(^|/)\.github/|(^|/)\.env|(^|/)package-lock\.json$" && { git reset --hard HEAD; exit 0; } || true
 git config user.name "AutoTube Repair Bot"
 git config user.email "actions@users.noreply.github.com"
-git add -A && git commit -m "[autotube-auto-repair] fix E2E failure" && git push origin HEAD:main
+git add -A && git commit -m "[autotube-auto-repair] fix E2E failure failure-signature:$signature" && git push origin HEAD:main
 gh workflow run "AutoTube real YouTube to MP4 E2E" --repo "$REPOSITORY" --ref main
