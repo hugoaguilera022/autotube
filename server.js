@@ -1204,7 +1204,7 @@ function providerState(name){if(!videoProviderState.has(name))videoProviderState
 function classifyVideoProviderError(err){const m=String(err?.message||err||'').toLowerCase();if(/401|403|unauthori[sz]ed|forbidden|oauth|login|permission|credentials/.test(m))return'user_blocking';if(/429|zero.?gpu quota|quota|rate limit|too many requests/.test(m))return'quota';if(/502|503|504|temporarily unavailable|space.*error|service unavailable|gateway/.test(m))return'transient_provider';if(/timeout|timed out|econnreset|etimedout|eai_again|socket hang up/.test(m))return'transient_network';if(/endpoint|not found|404|could not resolve app config|no api|invalid.*parameter|unexpected.*argument/.test(m))return'integration';if(/ffmpeg|invalid.*video|stream of video|duration.*invalid|static|movement/.test(m))return'output';return'unknown';}
 function noteProviderFailure(name,err){const st=providerState(name);st.failures++;st.lastError=String(err?.message||err);st.lastFailureAt=Date.now();const kind=classifyVideoProviderError(err);const multiplier=kind==='quota'?4:kind==='integration'?6:1;st.cooldownUntil=Date.now()+VIDEO_PROVIDER_COOLDOWN_MS*multiplier*Math.min(4,st.failures);st.status=kind==='user_blocking'?'blocked':kind==='integration'?'broken':'down';console.warn('[VideoProviderManager]',name,'=>',st.status,'error=',st.lastError.slice(0,500));}
 function noteProviderSuccess(name){const st=providerState(name);st.status='healthy';st.failures=0;st.lastError='';st.lastSuccessAt=Date.now();st.cooldownUntil=0;}
-function providerAvailable(name){const st=providerState(name);return st.status!=='blocked'&&Date.now()>=Number(st.cooldownUntil||0);}
+function providerAvailable(name){const permanentlyUnstable={ 'Wan2.2-I2V':String(process.env.AUTOTUBE_ENABLE_WAN22_I2V||'0')!=='1', 'LTX-2.5':String(process.env.AUTOTUBE_ENABLE_LTX25||'0')!=='1', 'Wan2.1':String(process.env.AUTOTUBE_ENABLE_WAN21||'0')!=='1', 'LTX-0.9.8':String(process.env.AUTOTUBE_ENABLE_LTX098||'0')!=='1' };if(permanentlyUnstable[name])return false;const st=providerState(name);return st.status!=='blocked'&&Date.now()>=Number(st.cooldownUntil||0);}
 async function probeVideoProvider(name){const st=providerState(name);if(st.status==='blocked')return{ok:false,status:st.status,error:st.lastError};if(st.status==='healthy'&&Date.now()-st.lastSuccessAt<VIDEO_PROVIDER_PROBE_MS)return{ok:true,status:'healthy',cached:true};const raw={ 'Wan2.2-I2V':process.env.WAN22_I2V_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','LTX-2.5':process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space','Wan2.1':process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space','Wan2.1-VACE':process.env.WAN_VACE_SPACE_URL||'https://jdpadmin-wan2-1-vace-diffusers-demo.hf.space','LTX-0.9.8':process.env.LTX_SPACE||'https://lightricks-ltx-video-distilled.hf.space'}[name];if(!raw)return{ok:false,status:'unconfigured'};const url=String(raw).startsWith('http')?String(raw).replace(/\/$/,'')+'/gradio_api/info':'https://'+String(raw).replace(/\/$/,'')+'.hf.space/gradio_api/info';try{const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(4000)});if(!response.ok)throw new Error('HTTP '+response.status);noteProviderSuccess(name);return{ok:true,status:'healthy'};}catch(err){noteProviderFailure(name,err);return{ok:false,status:providerState(name).status,error:String(err.message||err)};}}
 async function getVideoProviderHealth(){const result={};for(const name of ['Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
 async function generateBestFreeVideoClip(prompt,dir,options={}) {
@@ -1760,15 +1760,10 @@ async function executeFullPipelineTest(reference,testId=null){
       if(resumedStages.includes('reference-blueprint')&&cachedBlueprint?.sections?.length){
         blueprint=cachedBlueprint;
         checks['reference-blueprint']={ok:true,resumed:true,sections:blueprint.sections.length};
-      }else try{
-        blueprint=await run('reference-blueprint',async()=>{
-          const b=await buildReferenceBlueprint({referenceTitle,transcript:'',visualReferenceAnalysis,referenceStyle});
-          return b;
-        });
-      }catch(blueprintErr){
-        console.warn('Reference blueprint primary provider failed; switching to deterministic local blueprint:',blueprintErr.message||String(blueprintErr));
+      }else{
+        const blueprintStarted=Date.now();
         blueprint=buildLocalReferenceBlueprint(plan.scenes,durationSeconds,visualReferenceAnalysis,referenceStyle);
-        checks['reference-blueprint-recovery']={ok:true,mode:'local-deterministic',reason:String(blueprintErr.message||blueprintErr),sections:blueprint.sections.length};
+        checks['reference-blueprint']={ok:true,mode:'local-deterministic-fast',sections:blueprint.sections.length,ms:Date.now()-blueprintStarted};
       }
       if(blueprint?.sections?.length){
         plan.scenes=applyReferenceBlueprint(plan.scenes,blueprint,durationSeconds);
@@ -1838,9 +1833,9 @@ async function executeFullPipelineTest(reference,testId=null){
               );
               console.log('AutoTube adaptive AI provider succeeded:',i+1,clip.providerKey||clip.provider,clip.model);
             }catch(adaptiveErr){
-              console.warn('Adaptive provider manager exhausted/failed; using legacy deep cascade:',adaptiveErr.message||String(adaptiveErr));
+              console.warn('Adaptive provider manager exhausted/failed; going directly to validated local fallback:',adaptiveErr.message||String(adaptiveErr));
             }
-            if(!clip){
+            if(!clip && String(process.env.AUTOTUBE_ENABLE_LEGACY_AI_CASCADE||'0')==='1'){
             const attempts=i===0
               ? [
                   async()=>generateHuggingFaceVideoModelCascade(prompt,dir,{durationSeconds:3}),
@@ -2392,6 +2387,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{
     const visualReference=body.visualReferenceAnalysis&&typeof body.visualReferenceAnalysis==='object'?body.visualReferenceAnalysis:null;
     const system='Eres el director creativo y productor de AutoTube. Crea vídeos originales a partir de una idea o guion. Analiza el tema, audiencia, tono y referencias y PROPÓN 4 direcciones audiovisuales distintas y apropiadas. Cada dirección puede ser realista/cinematográfica, animación 2D/3D, ilustración, dibujo, stop-motion, surrealista, documental u otra, pero solo si tiene sentido para el contenido. No repitas categorías por obligación. Después genera un plan de escenas para la dirección seleccionada. La cantidad de escenas es libre y debe adaptarse al ritmo y duración. Devuelve SOLO JSON válido con title, creativeOptions, recommendedOptionId, creativeDirection, script, scenes, musicMood, voiceStyle y aspectRatio. Cada creativeOption debe tener id,name,concept,visualStyle,animationStyle,cameraLanguage,palette,lighting,motion,transitions,voice,music,soundDesign,aspectRatio y why. Cada scene debe tener number,title,duration,narration,visualPrompt,animationNotes,cameraMovement,transition,searchQuery y mediaType. La suma de duraciones debe cubrir aproximadamente la duración objetivo. Cada visualPrompt debe describir material NUEVO, sin logos, marcas, personajes protegidos, frames ni audio copiado. Si hay referencia audiovisual, úsala solo para describir rasgos generales. La IA debe decidir qué tipos de imagen/animación/realismo/dibujo tienen más sentido y ofrecerlos como opciones seleccionables.';
     const user=JSON.stringify({topic,customScript,language,targetDurationSeconds:totalSeconds,selectedCreativeDirection:requestedDirection,referenceProfile:visualReference,userInstruction:'Propón opciones audiovisuales adecuadas al contenido, no una lista fija.'});
+    if(geminiCooldownActive('youtube') || String(process.env.AUTOTUBE_FORCE_LOCAL_PLAN||'0')==='1') throw new Error('GEMINI_QUOTA_COOLDOWN: usar plan local sin esperar a Gemini.');
     const raw=await callGemini({system,user,temperature:0.75,maxOutputTokens:12000,json:true});
     const data=parseJsonResponse(raw);
     const options=Array.isArray(data.creativeOptions)?data.creativeOptions.filter(x=>x&&x.id).slice(0,6):[];
