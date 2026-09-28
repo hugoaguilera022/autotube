@@ -1433,7 +1433,9 @@ async function executePreflight(){
         aiClips:[{path:source}],
         narrationAudio:[],
         musicBuffer:null,
-        onProgress:()=>{},
+        onProgress:(progress)=>{
+          touch('render-all-scenes',Number(progress)||0);
+        },
         finalOutputPath:output
       });
       const validation=await validateRenderedMp4(output);
@@ -1627,8 +1629,14 @@ async function executeFullPipelineTest(reference,testId=null){
   const started=Date.now();
   const checks={};
   if(resumedStages.length)console.log('AutoTube checkpoint resume:',reference,'stages=',resumedStages.join(','));
+  const jobState=testId?fullPipelineTestJobs.get(testId):null;
+  const touch=(stage,progress=null)=>{
+    const j=testId?fullPipelineTestJobs.get(testId):null;
+    if(j){j.currentStage=stage;j.lastProgressAt=Date.now();if(progress!==null)j.progress=progress;}
+  };
   const run=async(name,fn)=>{
     const t=Date.now();
+    touch(name,0);
     const limits={
       // Hard budgets keep a failed strategy from consuming the whole autonomous cycle.
       // Each stage can still be overridden with AUTOTUBE_STAGE_TIMEOUT_<STAGE>.
@@ -1649,6 +1657,7 @@ async function executeFullPipelineTest(reference,testId=null){
         new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('AUTOTUBE_STAGE_TIMEOUT: '+name+' superó '+timeoutMs+' ms')),timeoutMs)})
       ]);
       checks[name]={ok:true,ms:Date.now()-t,...(value&&typeof value==='object'?value:{})};
+      touch(name,100);
       console.log('AutoTube full pipeline stage done:',name,'ms=',Date.now()-t);
       return value;
     }catch(err){
@@ -2412,9 +2421,23 @@ async function runAutonomousCycle(){
   const running=[...fullPipelineTestJobs.values()].find(j=>j.status==='running');
   if(running){
     const age=now-Number(running.startedAt||now);
-    const staleAfterMs=Math.max(15*60*1000,Number(process.env.AUTOTUBE_AUTONOMOUS_STALE_MS||20*60*1000));
-    if(age<staleAfterMs){
-      console.log('AutoTube autonomous cycle: existing job still running:',running.id,'ageMs=',age);
+    const stage=String(running.currentStage||'unknown');
+    const lastProgressAt=Number(running.lastProgressAt||running.startedAt||now);
+    const progressAgeMs=now-lastProgressAt;
+    const staleDefaults={
+      'youtube-source-and-reference-analysis':4*60*1000,
+      'production-plan':3*60*1000,
+      'reference-blueprint':3*60*1000,
+      'visual-sources-all-scenes':4*60*1000,
+      'narration-all-scenes':3*60*1000,
+      'music':3*60*1000,
+      'render-all-scenes':4*60*1000,
+      unknown:5*60*1000
+    };
+    const configuredStale=Number(process.env.AUTOTUBE_AUTONOMOUS_STALE_MS||0);
+    const staleAfterMs=Math.max(2*60*1000,configuredStale||staleDefaults[stage]||staleDefaults.unknown);
+    if(progressAgeMs<staleAfterMs){
+      console.log('AutoTube autonomous cycle: existing job progressing:',running.id,'stage=',stage,'ageMs=',age,'progressAgeMs=',progressAgeMs,'progress=',running.progress??'n/a');
       return;
     }
     running.status='failed';
@@ -2433,7 +2456,7 @@ async function runAutonomousCycle(){
   if(Date.now()-autonomousLastStart<autonomousIntervalMs)return;
   autonomousLastStart=Date.now();
   const id='auto_fulltest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
-  fullPipelineTestJobs.set(id,{id,reference:autonomousReference,status:'running',startedAt:Date.now(),result:null,autonomous:true});
+  fullPipelineTestJobs.set(id,{id,reference:autonomousReference,status:'running',startedAt:Date.now(),lastProgressAt:Date.now(),currentStage:'starting',progress:0,result:null,autonomous:true});
   console.log('AutoTube autonomous cycle started:',id,autonomousReference);
   try{
     const result=await executeFullPipelineTest(autonomousReference,id);
@@ -2447,6 +2470,8 @@ async function runAutonomousCycle(){
     const j=fullPipelineTestJobs.get(id);
     if(j){
       j.status=userActionRequired?'blocked_user_action':'failed';
+      j.currentStage='recovery';
+      j.lastProgressAt=Date.now();
       j.result={
         ok:false,
         error:message,
