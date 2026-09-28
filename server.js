@@ -1489,6 +1489,7 @@ function getSharedZeroGpuCooldownUntil(){
 function noteZeroGpuQuota(err,providerName='ZeroGPU'){
   // ZeroGPU quota is shared across Spaces for the same caller account.
   const until=Date.now()+ZEROGPU_SHARED_QUOTA_MS;
+  sharedZeroGpuCooldownUntilTs=Math.max(sharedZeroGpuCooldownUntilTs,until);
   for(const name of HF_ZEROGPU_PROVIDERS){
     const st=providerState(name);
     st.status='cooldown';
