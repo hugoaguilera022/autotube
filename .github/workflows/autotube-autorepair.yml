@@ -81,7 +81,7 @@ FAILED E2E LOG:
           if grep -qx 'NO_SAFE_PATCH' repair.patch; then echo 'REPAIR_RESULT=no_safe_patch' >> "$GITHUB_OUTPUT"; exit 0; fi
           git apply --check repair.patch
           git apply repair.patch
-          node --check server/index.js
+          node --check server.js
           for f in $(git diff --name-only --diff-filter=AM | grep -E '\.m?js$' || true); do node --check "$f"; done
           npm install --ignore-scripts --no-audit --no-fund
           git diff --check
