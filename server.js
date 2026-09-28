@@ -867,7 +867,7 @@ async function generateHuggingFaceProviderVideoClip(prompt,dir,options={}) {
 }
 
 async function generateHuggingFaceVideoModelCascade(prompt,dir,options={}) {
-  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
   if(!token)throw new Error('HF_TOKEN no configurado.');
   const duration=Math.max(2,Math.min(5,Number(options.durationSeconds)||3));
   const imagePath=String(options.firstFramePath||'').trim();
@@ -990,7 +990,7 @@ async function downloadGradioOutput(output,spaceUrl,token,dir,prefix){
 
 async function generateFreeWan21VideoClip(prompt,dir,options={}) {
   const spaceUrl=String(process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space').replace(/\/$/,'');
-  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
   const headers={'Content-Type':'application/json'};
   if(token)headers.Authorization='Bearer '+token;
   const frames=81;
@@ -1038,7 +1038,7 @@ async function generateFreeWanVace13VideoClip(prompt,dir,options={}){
   const firstFramePath=String(options.firstFramePath||'').trim();
   if(!firstFramePath)throw new Error('Wan2.1 VACE requiere un frame de referencia.');
   const space=String(process.env.WAN_VACE_SPACE_URL||'jdpadmin/wan2.1-vace-diffusers-demo').trim();
-  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
   const {Client}=require('@gradio/client');
   const client=await Client.connect(space,token?{token}:undefined);
   const frames=81;
@@ -1069,7 +1069,7 @@ async function generateFreeLtxVideoClip(prompt,dir,options={}) {
     const width=Math.max(256,Math.min(1280,Math.round((Number(options.width)||704)/32)*32));
     const height=Math.max(256,Math.min(1280,Math.round((Number(options.height)||512)/32)*32));
     const negativePrompt=String(options.negativePrompt||'worst quality, inconsistent motion, blurry, jittery, distorted, text, logos').trim();
-    const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+    const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
     const app=await Client.connect(space,token?{token}:undefined);
     const seed=Math.floor(Math.random()*4294967295);
     const result=await app.predict('/text_to_video',[
@@ -1117,7 +1117,7 @@ async function generateFreeLtxVideoClip(prompt,dir,options={}) {
 async function generateFreeWan22I2vVideoClip(prompt,dir,options={}){
   const {Client,handle_file}=require('@gradio/client');
   const space=String(process.env.WAN22_I2V_SPACE_URL||'zerogpu-aoti/wan2-2-fp8da-aoti-faster').trim();
-  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
   const firstFramePath=String(options.firstFramePath||'').trim();
   if(!firstFramePath)throw new Error('Wan2.2 I2V requiere un frame de referencia.');
   const app=await Client.connect(space,token?{token}:undefined);
@@ -1291,7 +1291,7 @@ function classifyVideoProviderError(err){const m=String(err?.message||err||'').t
 function noteProviderFailure(name,err){const st=providerState(name);st.failures++;st.lastError=String(err?.message||err);st.lastFailureAt=Date.now();const kind=classifyVideoProviderError(err);if((name==='Wan2.2-ZeroGPU'||name==='OpenKing-Wan2.2'||name==='LTX-2.3-ZeroGPU')&&kind==='quota'){noteZeroGpuQuota(err,name);return;}const multiplier=kind==='quota'?4:kind==='integration'?6:1;st.cooldownUntil=Date.now()+VIDEO_PROVIDER_COOLDOWN_MS*multiplier*Math.min(4,st.failures);st.status=kind==='user_blocking'?'blocked':kind==='integration'?'broken':'down';console.warn('[VideoProviderManager]',name,'=>',st.status,'error=',st.lastError.slice(0,500));}
 function noteProviderSuccess(name){const st=providerState(name);st.status='healthy';st.failures=0;st.lastError='';st.lastSuccessAt=Date.now();st.cooldownUntil=0;}
 function providerAvailable(name){const permanentlyUnstable={ 'Wan2.2-I2V':String(process.env.AUTOTUBE_ENABLE_WAN22_I2V||'0')!=='1', 'LTX-2.5':String(process.env.AUTOTUBE_ENABLE_LTX25||'0')!=='1', 'Wan2.1':String(process.env.AUTOTUBE_ENABLE_WAN21||'0')!=='1', 'LTX-0.9.8':String(process.env.AUTOTUBE_ENABLE_LTX098||'0')!=='1', 'Wan2.2-ZeroGPU':String(process.env.AUTOTUBE_ENABLE_WAN22_ZEROGPU||'1')!=='1' , 'OpenKing-Wan2.2':String(process.env.AUTOTUBE_ENABLE_OPENKING_WAN22||'1')!=='1', 'LTX-2.3-ZeroGPU':String(process.env.AUTOTUBE_ENABLE_LTX23_ZEROGPU||'1')!=='1', 'Wan2.2-AoTI':String(process.env.AUTOTUBE_ENABLE_WAN22_AOTI||'1')!=='1', 'Wan2.2-AoTI-R3GM':String(process.env.AUTOTUBE_ENABLE_WAN22_AOTI_R3GM||'1')!=='1', 'Wan2.2-AoTI-CB':String(process.env.AUTOTUBE_ENABLE_WAN22_AOTI_CB||'1')!=='1', 'Wan2.2-Rahul-AOT':String(process.env.AUTOTUBE_ENABLE_WAN22_RAHUL_AOT||'1')!=='1', 'Wan2.2-Rahul-T2V':String(process.env.AUTOTUBE_ENABLE_WAN22_RAHUL_T2V||'1')!=='1' };if(permanentlyUnstable[name])return false;const st=providerState(name);return st.status!=='blocked'&&Date.now()>=Number(st.cooldownUntil||0);}
-async function probeVideoProvider(name){const st=providerState(name);if(st.status==='blocked')return{ok:false,status:st.status,error:st.lastError};if(st.status==='healthy'&&Date.now()-st.lastSuccessAt<VIDEO_PROVIDER_PROBE_MS)return{ok:true,status:'healthy',cached:true};const raw={ 'Wan2.2-I2V':process.env.WAN22_I2V_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','LTX-2.5':process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space','Wan2.1':process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space','Wan2.1-VACE':process.env.WAN_VACE_SPACE_URL||'https://jdpadmin-wan2-1-vace-diffusers-demo.hf.space','LTX-0.9.8':process.env.LTX_SPACE||'https://lightricks-ltx-video-distilled.hf.space','Wan2.2-ZeroGPU':process.env.WAN22_ZEROGPU_SPACE_URL||'https://alexcheng0072-wan27-free-video-generator.hf.space','OpenKing-Wan2.2':process.env.OPENKING_WAN22_SPACE_URL||'https://openking-wan2-video-generation.hf.space', 'LTX-2.3-ZeroGPU':process.env.LTX23_ZEROGPU_SPACE||'https://shaundeoOo-ltx-2-3-fast.hf.space','Wan2.2-AoTI':process.env.WAN22_AOTI_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','Wan2.2-AoTI-R3GM':process.env.WAN22_AOTI_R3GM_SPACE_URL||'https://r3gm-wan2-2-fp8da-aoti-preview.hf.space','Wan2.2-AoTI-CB':process.env.WAN22_AOTI_CB_SPACE_URL||'https://cbensimon-wan2-2-fp8da-aoti-preview2.hf.space','Wan2.2-Rahul-AOT':process.env.WAN22_RAHUL_AOT_SPACE_URL||'https://rahul7star-wan22-aot.hf.space','Wan2.2-Rahul-T2V':process.env.WAN22_RAHUL_T2V_SPACE_URL||'https://rahul7star-wan2-2-t2v-a14b.hf.space'}[name];if(!raw)return{ok:false,status:'unconfigured'};const url=String(raw).startsWith('http')?String(raw).replace(/\/$/,'')+'/gradio_api/info':'https://'+String(raw).replace(/\/$/,'')+'.hf.space/gradio_api/info';try{const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(4000)});if(!response.ok)throw new Error('HTTP '+response.status);noteProviderSuccess(name);return{ok:true,status:'healthy'};}catch(err){noteProviderFailure(name,err);return{ok:false,status:providerState(name).status,error:String(err.message||err)};}}
+async function probeVideoProvider(name){const st=providerState(name);if(st.status==='blocked')return{ok:false,status:st.status,error:st.lastError};if(st.status==='healthy'&&Date.now()-st.lastSuccessAt<VIDEO_PROVIDER_PROBE_MS)return{ok:true,status:'healthy',cached:true};const raw={ 'Wan2.2-I2V':process.env.WAN22_I2V_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','LTX-2.5':process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space','Wan2.1':process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space','Wan2.1-VACE':process.env.WAN_VACE_SPACE_URL||'https://jdpadmin-wan2-1-vace-diffusers-demo.hf.space','LTX-0.9.8':process.env.LTX_SPACE||'https://lightricks-ltx-video-distilled.hf.space','Wan2.2-ZeroGPU':process.env.WAN22_ZEROGPU_SPACE_URL||'https://alexcheng0072-wan27-free-video-generator.hf.space','OpenKing-Wan2.2':process.env.OPENKING_WAN22_SPACE_URL||'https://openking-wan2-video-generation.hf.space', 'LTX-2.3-ZeroGPU':process.env.LTX23_ZEROGPU_SPACE||'https://shaundeoOo-ltx-2-3-fast.hf.space','Wan2.2-AoTI':process.env.WAN22_AOTI_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','Wan2.2-AoTI-R3GM':process.env.WAN22_AOTI_R3GM_SPACE_URL||'https://r3gm-wan2-2-fp8da-aoti-preview.hf.space','Wan2.2-AoTI-CB':process.env.WAN22_AOTI_CB_SPACE_URL||'https://cbensimon-wan2-2-fp8da-aoti-preview2.hf.space','Wan2.2-Rahul-AOT':process.env.WAN22_RAHUL_AOT_SPACE_URL||'https://rahul7star-wan22-aot.hf.space','Wan2.2-Rahul-T2V':process.env.WAN22_RAHUL_T2V_SPACE_URL||'https://rahul7star-wan2-2-t2v-a14b.hf.space'}[name];if(!raw)return{ok:false,status:'unconfigured'};const url=String(raw).startsWith('http')?String(raw).replace(/\/$/,'')+'/gradio_api/info':'https://'+String(raw).replace(/\/$/,'')+'.hf.space/gradio_api/info';try{const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(4000)});if(!response.ok)throw new Error('HTTP '+response.status);noteProviderSuccess(name);return{ok:true,status:'healthy'};}catch(err){noteProviderFailure(name,err);return{ok:false,status:providerState(name).status,error:String(err.message||err)};}}
 async function getVideoProviderHealth(){const result={};for(const name of ['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-Rahul-AOT','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-T2V','Wan2.2-ZeroGPU','OpenKing-Wan2.2','Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
 
 async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
@@ -1331,7 +1331,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
     'linoyts/ltx23-distilled-api',
     'ShaundeOoO/ltx-2.3-fast'
   ].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
-  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
   const imagePath=String(options.firstFramePath||'').trim();
   const duration=Math.max(1,Math.min(5,Number(options.durationSeconds)||3));
   const width=768,height=512;
@@ -1363,7 +1363,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
 
 async function generateWan22RestVideoClip(prompt,dir,options={}) {
   const space=String(options.spaceUrl||'').trim().replace(/\/$/,'');
-  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
   const imagePath=String(options.firstFramePath||'').trim();
   if(!imagePath)throw new Error('Wan2.2 REST requiere un frame inicial.');
   const imageBytes=await fs.readFile(imagePath);
@@ -1438,7 +1438,7 @@ async function generateFreeOpenKingWan22VideoClip(prompt,dir,options={}) {
 
 async function generateFreeWan22RahulT2vVideoClip(prompt,dir,options={}) {
   const space=String(process.env.WAN22_RAHUL_T2V_SPACE_URL||'https://rahul7star-wan2-2-t2v-a14b.hf.space').trim().replace(/\/$/,'');
-  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
   const headers={'Content-Type':'application/json'}; if(token)headers.Authorization='Bearer '+token;
   const frames=Math.max(24,Math.min(48,Math.round((Number(options.durationSeconds)||3)*16)));
   const data=[String(prompt||'').trim(),String(options.negativePrompt||'static, blurry, distorted, text, watermark').trim(),768,432,frames,4,3,Math.max(8,Math.min(16,Number(options.steps)||12)),16,false];
