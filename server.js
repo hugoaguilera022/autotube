@@ -1297,13 +1297,13 @@ async function probeVideoProvider(name){const st=providerState(name);if(st.statu
 async function getVideoProviderHealth(){const result={};for(const name of ['LTX-2.3-ZeroGPU','Wan2.2-ZeroGPU','OpenKing-Wan2.2','Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
 
 async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
-  const space=String(process.env.LTX23_ZEROGPU_SPACE||'https://shaundeoOo-ltx-2-3-fast.hf.space').trim().replace(/\\/$/,'');
+  const space=String(process.env.LTX23_ZEROGPU_SPACE||'https://shaundeoOo-ltx-2-3-fast.hf.space').trim().replace(/\/$/,'');
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   const imagePath=String(options.firstFramePath||'').trim();
   if(!imagePath)throw new Error('LTX-2.3 ZeroGPU I2V requiere un frame inicial.');
   const imageBytes=await fs.readFile(imagePath);
   if(!imageBytes.length)throw new Error('El frame inicial para LTX-2.3 está vacío.');
-  const imageMime=/\\.png$/i.test(imagePath)?'image/png':'image/jpeg';
+  const imageMime=/\.png$/i.test(imagePath)?'image/png':'image/jpeg';
   const imageDataUri='data:'+imageMime+';base64,'+imageBytes.toString('base64');
   const duration=5;
   const resolution=String(options.resolution||'720p');
@@ -1338,7 +1338,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
     const part=await reader.read();
     if(part.done)break;
     buffer+=decoder.decode(part.value,{stream:true});
-    const events=buffer.split(/\\n\\n/);
+    const events=buffer.split(/\n\n/);
     buffer=events.pop()||'';
     for(const block of events){
       const eventName=(block.match(/(?:^|\\n)event:\s*([^\\n]+)/)||[])[1]?.trim()||'';
@@ -1362,7 +1362,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
     outputPath=path.join(dir,'ltx23-zerogpu-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
     await fs.writeFile(outputPath,Buffer.from(raw.slice(raw.indexOf(',')+1),'base64'));
   }else{
-    const outputUrl=String(raw).startsWith('http')?String(raw):space+String(raw).replace(/^\\//,'/');
+    const outputUrl=String(raw).startsWith('http')?String(raw):space+String(raw).replace(/^\//,'/');
     const response=await fetch(outputUrl,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(120000)});
     if(!response.ok)throw new Error('LTX-2.3 REST descarga HTTP '+response.status);
     outputPath=path.join(dir,'ltx23-zerogpu-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
