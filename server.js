@@ -1584,9 +1584,26 @@ async function runAutonomousCycle(){
     console.log('AutoTube autonomous cycle finished:',id,j?.status,result?.ok);
     if(result?.ok)autonomousStopped=true;
   }catch(err){
+    const message=String(err?.message||err||'Error desconocido');
+    const userActionRequired=/INSUFFICIENT_BALANCE|Insufficient balance|401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|no.*API.?key|invalid.*credential|private.*video|sign in to confirm|USER_ACTION_REQUIRED/i.test(message);
     const j=fullPipelineTestJobs.get(id);
-    if(j){j.status='failed';j.result={ok:false,error:err?.message||String(err)};j.finishedAt=Date.now();}
-    console.error('AutoTube autonomous cycle error:',id,err?.message||String(err));
+    if(j){
+      j.status=userActionRequired?'blocked_user_action':'failed';
+      j.result={
+        ok:false,
+        error:message,
+        retryable:!userActionRequired,
+        userActionRequired,
+        autonomousStopReason:userActionRequired?'Se requiere una acción del usuario para continuar.':'El ciclo seguirá reintentando automáticamente.'
+      };
+      j.finishedAt=Date.now();
+    }
+    if(userActionRequired){
+      autonomousStopped=true;
+      console.error('AutoTube autonomous cycle STOPPED: USER ACTION REQUIRED:',id,message);
+    }else{
+      console.error('AutoTube autonomous cycle error; will retry automatically:',id,message);
+    }
   }
 }
 setTimeout(()=>{runAutonomousCycle().catch(err=>console.error('AutoTube autonomous launch error:',err));},20000);
