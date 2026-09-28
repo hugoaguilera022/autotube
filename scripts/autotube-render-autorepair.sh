@@ -145,5 +145,10 @@ count="$(printf "%s\n" "$changed" | sed "/^$/d" | wc -l)"
 if printf "%s\n" "$changed" | grep -Eq "(^|/)\.github/|(^|/)\.env|(^|/)package-lock\.json$"; then git reset --hard HEAD; exit 0; fi
 git config user.name "AutoTube Render Repair Bot"
 git config user.email "actions@users.noreply.github.com"
-git add -A && git commit -m "[autotube-auto-repair] fix Render deploy $deploy_id render-deploy:$deploy_id" && git push origin HEAD:main
+if [ "$runtime_incident" = "true" ]; then
+  repair_commit_message="[autotube-auto-repair] runtime repair $runtime_fingerprint runtime-fingerprint:$runtime_fingerprint render-deploy:$deploy_id"
+else
+  repair_commit_message="[autotube-auto-repair] fix Render deploy $deploy_id render-deploy:$deploy_id"
+fi
+git add -A && git commit -m "$repair_commit_message" && git push origin HEAD:main
 echo "Repair pushed to main; Render auto-deploy and canonical cycle continue."
