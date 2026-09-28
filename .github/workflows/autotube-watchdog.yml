@@ -2,7 +2,7 @@ name: AutoTube autonomous watchdog
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -11,33 +11,46 @@ concurrency:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 jobs:
   maintain:
     runs-on: ubuntu-latest
+    timeout-minutes: 7
     steps:
-      - name: Keep only the canonical pipeline
+      - name: Watch canonical AutoTube every minute
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh run list --repo "$REPOSITORY" --status in_progress --limit 100 --json databaseId,workflowName --jq '.[] | [.databaseId,.workflowName] | @tsv' | while IFS=$'\t' read -r id name; do
-            if [ "$name" != "AutoTube real YouTube to MP4 E2E" ] && [ "$name" != "AutoTube bounded self-heal" ] && [ "$name" != "AutoTube bounded autonomous repair" ]; then
-              echo "Cancelling competing run $id ($name)"
-              gh run cancel "$id" --repo "$REPOSITORY" || true
+          for tick in $(seq 1 5); do
+            echo "=== AutoTube watchdog minute $tick/5 ==="
+
+            runs="$(gh run list --repo "$REPOSITORY" --limit 50 --json databaseId,workflowName,status,conclusion,createdAt,updatedAt)"
+            echo "$runs" | jq -r '.[] | [.databaseId,.workflowName,.status,.conclusion,.createdAt,.updatedAt] | @tsv' | head -n 20
+
+            echo "$runs" | jq -r '.[] | select((.status=="in_progress" or .status=="queued") and
+              (.workflowName!="AutoTube real YouTube to MP4 E2E" and
+               .workflowName!="AutoTube bounded self-heal" and
+               .workflowName!="AutoTube bounded autonomous repair" and
+               .workflowName!="AutoTube autonomous watchdog" and
+               .workflowName!="AutoTube 24h supervisor")) | .databaseId' |
+            while read -r id; do
+              [ -z "$id" ] || gh run cancel "$id" --repo "$REPOSITORY" || true
+            done
+
+            canonical="$(echo "$runs" | jq '[.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="queued" or .status=="in_progress"))] | length')"
+            heal="$(echo "$runs" | jq '[.[] | select((.workflowName=="AutoTube bounded self-heal" or .workflowName=="AutoTube bounded autonomous repair") and (.status=="queued" or .status=="in_progress"))] | length')"
+
+            if [ "$canonical" -eq 0 ] && [ "$heal" -eq 0 ]; then
+              echo "No canonical pipeline or recovery is active; dispatching a fresh E2E."
+              gh workflow run "AutoTube real YouTube to MP4 E2E" --repo "$REPOSITORY" --ref main
+            else
+              echo "Canonical pipeline/recovery is active. No overlapping run will be started."
+            fi
+
+            if [ "$tick" -lt 5 ]; then
+              sleep 60
             fi
           done
-          gh run list --repo "$REPOSITORY" --status queued --limit 100 --json databaseId,workflowName --jq '.[] | [.databaseId,.workflowName] | @tsv' | while IFS=$'\t' read -r id name; do
-            if [ "$name" != "AutoTube real YouTube to MP4 E2E" ] && [ "$name" != "AutoTube bounded self-heal" ] && [ "$name" != "AutoTube bounded autonomous repair" ]; then
-              echo "Cancelling queued competing run $id ($name)"
-              gh run cancel "$id" --repo "$REPOSITORY" || true
-            fi
-          done
-      - name: Report canonical state
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          gh run list --repo "$REPOSITORY" --workflow "AutoTube real YouTube to MP4 E2E" --limit 5
