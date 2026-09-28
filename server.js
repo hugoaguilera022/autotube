@@ -1450,7 +1450,33 @@ async function executeFullPipelineTest(reference,testId=null){
                 console.warn('AI video model '+modelNames[attempt]+' unavailable for clip '+(i+1)+':',modelErr.message||String(modelErr));
               }
             }
-            if(!clip)throw new Error('Los tres modelos gratuitos de vídeo IA fallaron para la escena '+(i+1)+'.');
+            if(!clip){
+              // Stable fallback: generate a genuinely new AI image, then animate it into
+              // a short motion clip with FFmpeg. This keeps the final asset AI-generated
+              // and animated even when every free text-to-video endpoint is unavailable.
+              try{
+                const image=await generateGeminiOriginalImage(
+                  'Create an original cinematic 16:9 visual for this scene. '+prompt+
+                  ' Use completely new characters, environments and compositions. No logos, no text, no copied frames.',
+                  dir,
+                  {model:'gemini-2.5-flash-image'}
+                );
+                const motionPath=path.join(dir,'gemini-ai-motion-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+                const seconds=Math.max(3,Math.min(5,Number(scene.duration)||4));
+                await new Promise((resolve,reject)=>{
+                  const vf='scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,zoompan=z=1+0.0008*on:d=1:s=1280x720:fps=30,format=yuv420p';
+                  const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-loop','1','-i',image.outputPath,'-vf',vf,'-t',String(seconds),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart',motionPath]);
+                  let err='';p.stderr.on('data',d=>err+=d);p.on('close',code=>code===0?resolve(true):reject(new Error('AI image animation FFmpeg '+code+': '+err.slice(0,700))));
+                });
+                await validateGeneratedVideoClip(motionPath);
+                const st=await fs.stat(motionPath);
+                clip={outputPath:motionPath,bytes:st.size,provider:image.provider+' + FFmpeg motion',model:image.model+' animated',durationSeconds:seconds,status:'complete'};
+                console.log('AutoTube AI image-motion fallback generated:',i+1,clip.model);
+              }catch(fallbackErr){
+                console.warn('AI image-motion fallback unavailable for clip '+(i+1)+':',fallbackErr.message||String(fallbackErr));
+              }
+            }
+            if(!clip)throw new Error('Los proveedores gratuitos de vídeo IA y el fallback AI-image-motion fallaron para la escena '+(i+1)+'.');
             aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model});
           }catch(err){
             console.warn('AI video clip '+(i+1)+' unavailable:',err.message||String(err));
@@ -1460,7 +1486,7 @@ async function executeFullPipelineTest(reference,testId=null){
       // Never accept a static image as success. At least one validated AI motion
       // clip is mandatory; additional scenes reuse the real AI clips cyclically.
       if(!aiClips.length){
-        throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: no se pudo obtener ningún clip de vídeo IA real mediante los proveedores gratuitos.');
+        throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: no se pudo obtener ningún clip de vídeo IA real ni un fallback animado generado por IA.');
       }
       mediaResults=plan.scenes.map((scene,i)=>{
         const clip=aiClips[i%aiClips.length];
