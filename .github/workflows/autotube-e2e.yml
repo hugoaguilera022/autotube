@@ -46,7 +46,7 @@ jobs:
         env:
           BASE_URL: https://autotube-usm1.onrender.com
           REFERENCE: https://www.youtube.com/watch?v=P_iFWenf1VA
-          MAX_ATTEMPTS: "5"
+          MAX_ATTEMPTS: "1"
         run: |
           set -uo pipefail
           success=0
@@ -153,8 +153,7 @@ jobs:
             fi
 
             if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-              echo "Attempt $attempt failed. Waiting before the next sequential attempt..."
-              sleep $((30 * attempt))
+              echo "Attempt $attempt failed. Self-heal will own the next retry to avoid duplicate work."
             fi
           done
 
