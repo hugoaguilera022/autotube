@@ -1,0 +1,43 @@
+name: AutoTube autonomous watchdog
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: autotube-watchdog
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keep only the canonical E2E
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh run list --repo "$REPOSITORY" --status in_progress --limit 100 --json databaseId,workflowName --jq '.[] | [.databaseId,.workflowName] | @tsv' | while IFS=$'\t' read -r id name; do
+            if [ "$name" != "AutoTube real YouTube to MP4 E2E" ]; then
+              echo "Cancelling competing run $id ($name)"
+              gh run cancel "$id" --repo "$REPOSITORY" || true
+            fi
+          done
+          gh run list --repo "$REPOSITORY" --status queued --limit 100 --json databaseId,workflowName --jq '.[] | [.databaseId,.workflowName] | @tsv' | while IFS=$'\t' read -r id name; do
+            if [ "$name" != "AutoTube real YouTube to MP4 E2E" ]; then
+              echo "Cancelling queued competing run $id ($name)"
+              gh run cancel "$id" --repo "$REPOSITORY" || true
+            fi
+          done
+      - name: Report canonical state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh run list --repo "$REPOSITORY" --workflow "AutoTube real YouTube to MP4 E2E" --limit 5
