@@ -1922,6 +1922,15 @@ const PIPELINE_CHECKPOINT_STAGE_ORDER=['youtube-source-and-reference-analysis','
 const adaptiveProviderDurationCaps=new Map();
 const adaptiveProviderCooldowns=new Map();
 function adaptiveProviderKey(x){return String(x?.providerKey||x?.provider||x||'unknown');}
+async function withAttemptTimeout(task,label,timeoutMs=300000){
+  const ms=Math.max(1000,Number(timeoutMs)||300000); let timer;
+  try{
+    return await Promise.race([
+      Promise.resolve().then(()=>task()),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('AUTOTUBE_AI_ATTEMPT_TIMEOUT: '+label+' superó '+ms+' ms')),ms);})
+    ]);
+  }finally{if(timer)clearTimeout(timer);}
+}
 function adaptiveCooldown(p,ms=120000){adaptiveProviderCooldowns.set(p,Date.now()+Math.max(5000,ms));}
 function adaptiveCap(p){const n=Number(adaptiveProviderDurationCaps.get(p));return Number.isFinite(n)&&n>0?n:Number(process.env.AUTOTUBE_PROVIDER_INITIAL_MAX_SECONDS||5);}
 function adaptiveSetCap(p,n){const cap=Math.max(0.5,Number(n)||0);if(cap>0)adaptiveProviderDurationCaps.set(p,cap);}
