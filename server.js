@@ -1378,6 +1378,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
     }catch(err){
       errors.push(space+': '+String(err?.message||err).slice(0,600));
       console.warn('LTX-2.3 ZeroGPU Space failed:',space,err?.message||String(err));
+      if(classifyVideoProviderError(err)==='quota')throw err;
     }
   }
   throw new Error('LTX-2.3 ZeroGPU routes failed: '+errors.join(' | '));
