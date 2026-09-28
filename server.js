@@ -1322,7 +1322,7 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
   if(!up.ok)throw new Error('Wan2.2 AoTI upload HTTP '+up.status+': '+ut.slice(0,1000)); let u=null;try{u=JSON.parse(ut)}catch{}
   const uploaded=Array.isArray(u)?u[0]:u?.path||u?.[0]; if(!uploaded)throw new Error('Wan2.2 AoTI upload sin path: '+ut.slice(0,1000));
   const imageFile={path:String(uploaded),meta:{_type:'gradio.FileData'},orig_name:path.basename(imagePath)};
-  const duration=Math.max(0.5,Math.min(5,Number(options.durationSeconds)||3));
+  const duration=Math.max(0.5,Math.min(Number(process.env.AUTOTUBE_PROVIDER_REQUEST_MAX_SECONDS||120),Number(options.durationSeconds)||3));
   const data=[imageFile,String(prompt||'').trim(),4,String(options.negativePrompt||'blurry, jittery, distorted anatomy, text, logos, watermark').trim(),duration,1,1,Math.floor(Math.random()*2147483647),true];
   const h={'Content-Type':'application/json'};if(token)h.Authorization='Bearer '+token;
   const submit=await fetch(space+'/gradio_api/call/generate_video',{method:'POST',headers:h,body:JSON.stringify({data}),signal:AbortSignal.timeout(30000)});const st=await submit.text();
@@ -1351,7 +1351,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
   ].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
   const token=String(process.env.AUTOTUBE_HF_AUTH_PUBLIC_SPACES||'0')==='1'?String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim():'';
   const imagePath=String(options.firstFramePath||'').trim();
-  const duration=Math.max(1,Math.min(5,Number(options.durationSeconds)||3));
+  const duration=Math.max(1,Math.min(Number(process.env.AUTOTUBE_PROVIDER_REQUEST_MAX_SECONDS||120),Number(options.durationSeconds)||3));
   const width=768,height=512;
   const errors=[];
   for(const space of spaces){
@@ -1399,11 +1399,11 @@ async function generateWan22RestVideoClip(prompt,dir,options={}) {
   const mode=String(options.mode||'simple');
   let data;
   if(mode==='openking'){
-    const duration=Math.max(2,Math.min(4,Number(options.durationSeconds)||3));
+    const duration=Math.max(2,Math.min(Number(process.env.AUTOTUBE_PROVIDER_REQUEST_MAX_SECONDS||120),Number(options.durationSeconds)||3));
     const width=832,height=480,frames=Math.max(49,Math.min(97,Math.round(duration*24)));
     data=[String(prompt||'').trim(),fileData,width,height,frames,8,5.0,Math.floor(Math.random()*2147483647)];
   }else{
-    const duration=Math.max(3,Math.min(5,Number(options.durationSeconds)||3));
+    const duration=Math.max(3,Math.min(Number(process.env.AUTOTUBE_PROVIDER_REQUEST_MAX_SECONDS||120),Number(options.durationSeconds)||3));
     data=[fileData,String(prompt||'').trim(),4,String(options.negativePrompt||'static, blurry, distorted, text, watermark').trim(),duration,1,1,Math.floor(Math.random()*2147483647),true];
   }
   const endpoint=String(options.endpoint||'/generate_video');
@@ -1918,6 +1918,62 @@ const autonomousPipelineCheckpoints=new Map();
 const AUTOTUBE_CHECKPOINT_TTL_MS=Math.max(10*60*1000,Number(process.env.AUTOTUBE_CHECKPOINT_TTL_MS||6*60*60*1000));
 const AUTOTUBE_CHECKPOINT_PERSIST_PREFIX='autotube-checkpoint-';
 const PIPELINE_CHECKPOINT_STAGE_ORDER=['youtube-source-and-reference-analysis','production-plan','reference-blueprint','visual-sources-all-scenes','narration-all-scenes','music','render-all-scenes'];
+
+const adaptiveProviderDurationCaps=new Map();
+const adaptiveProviderCooldowns=new Map();
+function adaptiveProviderKey(x){return String(x?.providerKey||x?.provider||x||'unknown');}
+function adaptiveCooldown(p,ms=120000){adaptiveProviderCooldowns.set(p,Date.now()+Math.max(5000,ms));}
+function adaptiveCap(p){const n=Number(adaptiveProviderDurationCaps.get(p));return Number.isFinite(n)&&n>0?n:Number(process.env.AUTOTUBE_PROVIDER_INITIAL_MAX_SECONDS||5);}
+function adaptiveSetCap(p,n){const cap=Math.max(0.5,Number(n)||0);if(cap>0)adaptiveProviderDurationCaps.set(p,cap);}
+function adaptiveErrorKind(err){
+  const k=classifyVideoProviderError(err),m=String(err?.message||err).toLowerCase();
+  if(k==='quota'||/quota exceeded|exceeded your|remaining quota|rate limit|too many requests|429/.test(m))return 'quota';
+  if(/illegal duration|requested duration|duration.*maximum|duration.*max/.test(m))return 'duration';
+  if(/503|502|504|service unavailable|temporarily unavailable|space.*down|queue.*failed|timeout|timed out/.test(m))return 'capacity';
+  return k||'execution';
+}
+async function concatVideoChunks(chunks,dir,prefix){
+  if(!Array.isArray(chunks)||!chunks.length)throw new Error('No hay fragmentos para concatenar.');
+  if(chunks.length===1)return chunks[0];
+  const listPath=path.join(dir,prefix+'-concat-'+Date.now()+'.txt');
+  const outPath=path.join(dir,prefix+'-joined-'+Date.now()+'.mp4');
+  await fs.writeFile(listPath,chunks.map(p=>'file '+String(p).replace(/'/g,"'\\''")).join('\n')+'\n','utf8');
+  try{
+    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','concat','-safe','0','-i',listPath,'-map','0:v:0','-an','-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-movflags','+faststart',outPath]);
+    await validateGeneratedVideoClip(outPath);return outPath;
+  }finally{await fs.rm(listPath,{force:true}).catch(()=>{});}
+}
+async function generateResilientSceneVideoClip(prompt,dir,options={}){
+  const target=Math.max(0.5,Number(options.durationSeconds)||4);let remaining=target;const chunks=[];const providersUsed=[];
+  let attempts=0;const maxAttempts=Math.max(10,Math.ceil(target/0.5)*8);
+  while(remaining>0.45&&attempts++<maxAttempts){
+    const request=Math.max(0.5,Math.min(remaining,adaptiveCap('cascade'),Number(process.env.AUTOTUBE_PROVIDER_REQUEST_MAX_SECONDS||120)));
+    let clip=null,lastErr=null;
+    try{clip=await generateBestFreeVideoClip(prompt,dir,{...options,durationSeconds:request,adaptiveChunk:true});}catch(err){lastErr=err;}
+    if(clip?.outputPath){
+      const validation=await validateGeneratedVideoClip(clip.outputPath).catch(e=>({ok:false,error:e.message}));
+      if(validation.ok){
+        const actual=Math.max(0,Number(clip.durationSeconds)||Number(validation.durationSeconds)||0);
+        if(actual>0){
+          const provider=adaptiveProviderKey(clip);
+          adaptiveSetCap(provider,actual);
+          chunks.push(clip.outputPath);providersUsed.push({provider,duration:actual});
+          remaining=Math.max(0,remaining-actual);
+          continue;
+        }
+      }else lastErr=new Error('Fragmento generado no pasó QA: '+(validation.error||''));
+    }
+    const kind=adaptiveErrorKind(lastErr);
+    if(kind==='duration'){adaptiveSetCap('cascade',Math.max(0.5,request/2));continue;}
+    if(kind==='quota'||kind==='capacity'){adaptiveCooldown('cascade',kind==='quota'?300000:90000);adaptiveSetCap('cascade',Math.max(0.5,request/2));continue;}
+    if(lastErr)throw lastErr;
+    break;
+  }
+  if(remaining>0.45)throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: faltan '+remaining.toFixed(2)+' s de vídeo para completar la escena.');
+  const joined=await concatVideoChunks(chunks,dir,'autotube-scene');
+  const v=await validateGeneratedVideoClip(joined);if(!v.ok)throw new Error('La escena concatenada no pasó QA.');
+  return{outputPath:joined,durationSeconds:v.durationSeconds,provider:providersUsed.map(x=>x.provider).filter((x,i,a)=>a.indexOf(x)===i).join(' + '),providerKey:providersUsed.length===1?providersUsed[0].provider:'adaptive-multi-provider',model:'adaptive-duration-chunks',generationType:'ai-video',status:'complete',chunks:chunks.length,providersUsed};
+}
 function pipelineCheckpointKey(reference){return crypto.createHash('sha1').update(String(reference||'').trim()).digest('hex').slice(0,20);}
 function checkpointStageIndex(stage){const i=PIPELINE_CHECKPOINT_STAGE_ORDER.indexOf(String(stage||''));return i<0?-1:i;}
 async function persistPipelineCheckpoint(next){
@@ -2137,153 +2193,40 @@ async function executeFullPipelineTest(reference,testId=null){
       // Generate original motion clips sequentially when LTX is available. Never run
       // scene generations concurrently on Render Free; that would spike memory/CPU.
       {
-        // Free ZeroGPU is quota-limited, so do not burn one GPU request per scene.
-        // Generate up to three distinct AI motion clips and reuse them across the
-        // storyboard with FFmpeg timing/cropping. This keeps the pipeline genuinely
-        // AI-video based while staying inside the free daily budget.
-        const targetCount=Math.min(3,plan.scenes.length);
-        for(let i=0;i<targetCount;i++){
+        for(let i=0;i<plan.scenes.length;i++){
           const scene=plan.scenes[i];
           try{
-            const continuity=JSON.stringify({
-              visual:visualReferenceAnalysis?.videoProfile||{},
-              animation:visualReferenceAnalysis?.animationProfile||{},
-              structure:visualReferenceAnalysis?.structureProfile||{},
-              audio:visualReferenceAnalysis?.audioProfile||{},
-              scene:scene.referenceStructure||{}
-            }).slice(0,7000);
-            const prompt=[
-              String(scene.visualPrompt||scene.title||referenceTitle),
-              'Match the reference audiovisual language: composition, shot scale, camera movement, motion intensity, lighting, palette, pacing and continuity.',
-              'Preserve recurring visual anchors between scenes while generating new original material.',
-              'Continuity blueprint: '+continuity,
-              'Scene animation: '+String(scene.animationNotes||''),
-              'Camera: '+String(scene.cameraMovement||''),
-              'Original material only; no copied frames, logos, text or watermark.'
-            ].join('; ');
-            let clip=null;
+            const continuity=JSON.stringify({visual:visualReferenceAnalysis?.videoProfile||{},animation:visualReferenceAnalysis?.animationProfile||{},structure:visualReferenceAnalysis?.structureProfile||{},audio:visualReferenceAnalysis?.audioProfile||{},scene:scene.referenceStructure||{}}).slice(0,7000);
+            const prompt=[String(scene.visualPrompt||scene.title||referenceTitle),'Match the reference audiovisual language: composition, shot scale, camera movement, motion intensity, lighting, palette, pacing and continuity.','Preserve recurring visual anchors between scenes while generating new original material.','Continuity blueprint: '+continuity,'Scene animation: '+String(scene.animationNotes||''),'Camera: '+String(scene.cameraMovement||''),'Original material only; no copied frames, logos, text or watermark.'].join('; ');
             const referenceThumb=String(video?.thumbnail||'').trim();
             const referenceFramePath=referenceThumb?await downloadRemoteImageToFile(referenceThumb,dir,'adaptive-reference-frame-'+i+'.jpg').catch(()=> ''):'';
-            const pollinationsAttempt=async()=>generatePollinationsVideoClip(prompt,dir,{durationSeconds:Math.min(5,Math.max(3,Number(scene.duration)||4)),aspectRatio:'16:9'});
-            const withAttemptTimeout=(fn,label,ms=90000)=>Promise.race([Promise.resolve().then(fn),new Promise((_,reject)=>setTimeout(()=>reject(new Error('AI_PROVIDER_ATTEMPT_TIMEOUT: '+label+' superó '+ms+' ms')),ms))]);
-            // Adaptive multi-provider manager first. It uses every configured route,
-            // remembers healthy/broken providers and skips known failures.
+            let clip=null;
             try{
-              clip=await withAttemptTimeout(
-                ()=>generateBestFreeVideoClip(prompt,dir,{
-                  durationSeconds:Math.min(5,Math.max(3,Number(scene.duration)||4)),
-                  aspectRatio:'16:9',
-                  sceneIndex:i,
-                  firstFramePath:referenceFramePath
-                }),
-                'adaptive-video-provider-cascade',
-                Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||180000)
-              );
-              console.log('AutoTube adaptive AI provider succeeded:',i+1,clip.providerKey||clip.provider,clip.model);
-            }catch(adaptiveErr){
-              // Provider exhaustion is not a fatal E2E condition: switch immediately to the AI-image story path below.
-              // This is still original AI media (not a deterministic/static fallback), so strict AI mode remains satisfied.
-              console.warn('Adaptive AI-video providers exhausted; switching to AI-image story fallback:',adaptiveErr.message||String(adaptiveErr));
-            }
-            if(!clip && String(process.env.AUTOTUBE_ENABLE_LEGACY_AI_CASCADE||'0')==='1'){
-            const attempts=i===0
-              ? [
-                  async()=>generateHuggingFaceVideoModelCascade(prompt,dir,{durationSeconds:3}),
-                  async()=>generateHuggingFaceProviderVideoClip(prompt,dir,{durationSeconds:3}),
-                  pollinationsAttempt,
-                  async()=>generateFreeWanVace13VideoClip(prompt,dir,{durationSeconds:5,firstFramePath:await (async()=>{
-                    if(!referenceThumb)throw new Error('No hay miniatura de referencia disponible para VACE.');
-                    return downloadRemoteImageToFile(referenceThumb,dir,'vace-reference-frame-'+i+'.jpg');
-                  })()}),
-                  async()=>generateFreeLtx25VideoClip(prompt,dir,{durationSeconds:3}),
-                  async()=>generateFreeWan21VideoClip(prompt,dir,{durationSeconds:5})
-                ]
-              : [
-                  async()=>generateHuggingFaceProviderVideoClip(prompt,dir,{durationSeconds:3}),
-                  pollinationsAttempt,
-                  async()=>generateFreeLtx25VideoClip(prompt,dir,{durationSeconds:3}),
-                  async()=>generateFreeWan21VideoClip(prompt,dir,{durationSeconds:5}),
-                  async()=>generateFreeWanVace13VideoClip(prompt,dir,{durationSeconds:5,firstFramePath:await (async()=>{
-                    if(!referenceThumb)throw new Error('No hay miniatura de referencia disponible para VACE.');
-                    return downloadRemoteImageToFile(referenceThumb,dir,'vace-reference-frame-'+i+'.jpg');
-                  })()})
-                ];
-            const modelNames=i===0
-              ? ['HF high-quality cascade (Wan2.2/LTX-2.3/Hunyuan/CogVideoX/Mochi)','HuggingFace','Pollinations','Wan2.1-VACE-1.3B','LTX-2.5','Wan2.1-T2V-1.3B']
-              : ['HF high-quality cascade (Wan2.2/LTX-2.3/Hunyuan/CogVideoX/Mochi)','HuggingFace','Pollinations','LTX-2.5','Wan2.1-T2V-1.3B','Wan2.1-VACE-1.3B'];
-            for(let attempt=0;attempt<attempts.length;attempt++){
-              try{
-                clip=await withAttemptTimeout(attempts[attempt],modelNames[attempt],Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||90000));
-                await validateGeneratedVideoClip(clip.outputPath);
-                console.log('AutoTube free AI clip generated:',i+1,modelNames[attempt],clip.model);
-                break;
-              }catch(modelErr){
-                console.warn('AI video model '+modelNames[attempt]+' unavailable for clip '+(i+1)+':',modelErr.message||String(modelErr));
-              }
-            }
-            }
+              clip=await withAttemptTimeout(()=>generateResilientSceneVideoClip(prompt,dir,{durationSeconds:Number(scene.duration)||4,aspectRatio:'16:9',sceneIndex:i,firstFramePath:referenceFramePath}),'adaptive-duration-scene-'+(i+1),Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||300000));
+              console.log('AutoTube resilient scene generated:',i+1,'/',plan.scenes.length,'chunks=',clip.chunks,'providers=',clip.providerKey,'duration=',clip.durationSeconds);
+            }catch(videoErr){console.warn('AutoTube resilient video generation exhausted for scene '+(i+1)+':',videoErr.message||String(videoErr));}
             if(!clip){
-              // Stable fallback: generate a genuinely new AI image, then animate it into
-              // a short motion clip with FFmpeg. This keeps the final asset AI-generated
-              // and animated even when every free text-to-video endpoint is unavailable.
               try{
-                const image=await generateGeminiOriginalImage(
-                  'Create an original cinematic 16:9 visual for this scene. '+prompt+
-                  ' Use completely new characters, environments and compositions. No logos, no text, no copied frames.',
-                  dir,
-                  {model:'gemini-2.5-flash-image'}
-                );
+                const image=await generateGeminiOriginalImage('Create an original cinematic 16:9 visual for this scene. '+prompt+' Use completely new characters, environments and compositions. No logos, no text, no copied frames.',dir,{model:'gemini-2.5-flash-image'});
                 const motionPath=path.join(dir,'gemini-ai-motion-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-                const seconds=Math.max(3,Math.min(5,Number(scene.duration)||4));
-                await new Promise((resolve,reject)=>{
-                  const vf='scale=854:480:force_original_aspect_ratio=increase,crop=854:480,zoompan=z=1+0.0008*on:d=1:s=854x480:fps=15,format=yuv420p';
-                  const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-loop','1','-i',image.outputPath,'-vf',vf,'-t',String(seconds),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart',motionPath]);
-                  let err='';p.stderr.on('data',d=>err+=d);p.on('close',code=>code===0?resolve(true):reject(new Error('AI image animation FFmpeg '+code+': '+err.slice(0,700))));
-                });
-                await validateGeneratedVideoClip(motionPath);
-                const st=await fs.stat(motionPath);
-                clip={outputPath:motionPath,bytes:st.size,provider:image.provider+' + FFmpeg motion',model:image.model+' animated',durationSeconds:seconds,status:'complete'};
-                console.log('AutoTube AI image-motion fallback generated:',i+1,clip.model);
-              }catch(fallbackErr){
-                console.warn('Gemini AI image-motion fallback unavailable for clip '+(i+1)+':',fallbackErr.message||String(fallbackErr));
-                try{
-                  const image=await generatePollinationsOriginalImage(
-                    'Create an original cinematic 16:9 visual for this scene. '+prompt+
-                    ' Completely original composition, no logos, no text, no copied frames.',
-                    dir,
-                    {width:854,height:480}
-                  );
-                  const motionPath=path.join(dir,'pollinations-ai-motion-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-                  const seconds=Math.max(3,Math.min(5,Number(scene.duration)||4));
-                  await new Promise((resolve,reject)=>{
-                    const vf='scale=854:480:force_original_aspect_ratio=increase,crop=854:480,zoompan=z=1+0.0012*on:d=1:s=854x480:fps=15,format=yuv420p';
-                    const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-loop','1','-i',image.outputPath,'-vf',vf,'-t',String(seconds),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart',motionPath]);
-                    let err='';p.stderr.on('data',d=>err+=d);p.on('close',code=>code===0?resolve(true):reject(new Error('Pollinations image animation FFmpeg '+code+': '+err.slice(0,700))));
-                  });
-                  await validateGeneratedVideoClip(motionPath);
-                  const st=await fs.stat(motionPath);
-                  clip={outputPath:motionPath,bytes:st.size,provider:image.provider+' + FFmpeg motion',model:image.model+' animated',durationSeconds:seconds,status:'complete'};
-                  console.log('AutoTube Pollinations AI image-motion fallback generated:',i+1,clip.model);
-                }catch(pollImageErr){
-                  console.warn('Pollinations AI image-motion fallback unavailable for clip '+(i+1)+':',pollImageErr.message||String(pollImageErr));
-                }
-              }
+                const seconds=Math.max(3,Math.min(Number(scene.duration)||4,Number(process.env.AUTOTUBE_IMAGE_MOTION_MAX_SECONDS||8)));
+                await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',image.outputPath,'-vf','scale=854:480:force_original_aspect_ratio=increase,crop=854:480,zoompan=z=1+0.0008*on:d=1:s=854x480:fps=15,format=yuv420p','-t',String(seconds),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart',motionPath]);
+                await validateGeneratedVideoClip(motionPath);const st=await fs.stat(motionPath);
+                clip={outputPath:motionPath,bytes:st.size,provider:image.provider+' + FFmpeg motion',model:image.model+' animated',durationSeconds:seconds,generationType:'ai-image-motion',status:'complete'};
+              }catch(fallbackErr){console.warn('AutoTube AI-image story fallback failed for scene '+(i+1)+':',fallbackErr.message||String(fallbackErr));}
             }
-            if(!clip)throw new Error('Los proveedores gratuitos de vídeo IA y los fallbacks AI-image-motion fallaron para la escena '+(i+1)+'.');
+            if(!clip)throw new Error('No se pudo completar la escena '+(i+1)+' con vídeo IA ni fallback AI-image.');
             aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model,providerKey:clip.providerKey,generationType:clip.generationType||classifyGenerationType(clip),durationSeconds:clip.durationSeconds||Number(scene.duration)||4});
             console.log('AutoTube scene clip committed:',i+1,'/',plan.scenes.length,'provider=',clip.providerKey||clip.provider,'duration=',clip.durationSeconds||Number(scene.duration)||4,'s');
-          }catch(err){
-            console.warn('AI video clip '+(i+1)+' unavailable:',err.message||String(err));
-          }
+          }catch(err){console.warn('AI video scene '+(i+1)+' unavailable:',err.message||String(err));}
         }
-      }
       // Never accept a static image as success. Every planned scene must have a
       // validated generated clip; the renderer will concatenate them in timeline order.
-      if(!aiClips.length){
-        throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: no se pudo obtener ningún clip de vídeo IA real ni un fallback animado generado por IA.');
+      if(aiClips.length!==plan.scenes.length){
+        throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: faltan clips de escenas ('+aiClips.length+'/'+plan.scenes.length+'). No se reutilizarán clips de otra escena.');
       }
       mediaResults=plan.scenes.map((scene,i)=>{
-        const clip=aiClips[i%aiClips.length];
+        const clip=aiClips[i];
         return {
           number:scene.number,
           query:scene.searchQuery||scene.title||referenceTitle,
