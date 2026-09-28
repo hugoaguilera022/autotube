@@ -704,6 +704,23 @@ async function generateNarrationTts(text,language='es',voiceStyle='Natural y cer
 }
 const generateGeminiTts=generateNarrationTts;
 
+const originalImageProviderState=new Map();
+function originalImageCooldownActive(provider='gemini'){return Date.now()<Number(originalImageProviderState.get(provider)||0);}
+function noteOriginalImageCooldown(provider='gemini',ms=120000){originalImageProviderState.set(provider,Date.now()+Math.max(15000,Number(ms)||120000));}
+function classifyOriginalImageError(err){const m=String(err?.message||err||'').toLowerCase();if(/429|quota|rate limit|too many requests/.test(m))return'quota';if(/401|403|api key|unauthori/.test(m))return'auth';if(/timeout|timed out|econnreset|eai_again|socket hang up/.test(m))return'network';return'other';}
+async function generateOriginalImageWithCascade(prompt,dir,options={}){
+  const errors=[];
+  if(!originalImageCooldownActive('gemini')){
+    try{return await generateGeminiOriginalImage(prompt,dir,{model:String(options.geminiModel||'gemini-2.5-flash-image')});}
+    catch(err){const kind=classifyOriginalImageError(err);errors.push('Gemini: '+String(err?.message||err));if(kind==='quota'||kind==='auth')noteOriginalImageCooldown('gemini',kind==='quota'?24*60*60*1000:15*60*1000);console.warn('[OriginalImageCascade] Gemini failed; advancing to next provider:',String(err?.message||err));}
+  }else errors.push('Gemini: cooldown activo');
+  if(!originalImageCooldownActive('pollinations')){
+    try{return await generatePollinationsOriginalImage(prompt,dir,{width:Number(options.width)||854,height:Number(options.height)||480});}
+    catch(err){errors.push('Pollinations: '+String(err?.message||err));noteOriginalImageCooldown('pollinations',classifyOriginalImageError(err)==='quota'?5*60*1000:60000);console.warn('[OriginalImageCascade] Pollinations failed:',String(err?.message||err));}
+  }else errors.push('Pollinations: cooldown activo');
+  throw new Error('ORIGINAL_IMAGE_PROVIDERS_EXHAUSTED: '+errors.join(' | '));
+}
+
 async function generateGeminiOriginalImage(prompt,dir,options={}) {
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
@@ -2216,8 +2233,8 @@ async function executeFullPipelineTest(reference,testId=null){
             }catch(videoErr){console.warn('AutoTube resilient video generation exhausted for scene '+(i+1)+':',videoErr.message||String(videoErr));}
             if(!clip){
               try{
-                const image=await generateGeminiOriginalImage('Create an original cinematic 16:9 visual for this scene. '+prompt+' Use completely new characters, environments and compositions. No logos, no text, no copied frames.',dir,{model:'gemini-2.5-flash-image'});
-                const motionPath=path.join(dir,'gemini-ai-motion-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+                const image=await generateOriginalImageWithCascade('Create an original cinematic 16:9 visual for this scene. '+prompt+' Use completely new characters, environments and compositions. No logos, no text, no copied frames.',dir,{width:854,height:480});
+                const motionPath=path.join(dir,'ai-image-motion-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
                 const seconds=Math.max(3,Math.min(Number(scene.duration)||4,Number(process.env.AUTOTUBE_IMAGE_MOTION_MAX_SECONDS||8)));
                 await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',image.outputPath,'-vf','scale=854:480:force_original_aspect_ratio=increase,crop=854:480,zoompan=z=1+0.0008*on:d=1:s=854x480:fps=15,format=yuv420p','-t',String(seconds),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart',motionPath]);
                 await validateGeneratedVideoClip(motionPath);const st=await fs.stat(motionPath);
