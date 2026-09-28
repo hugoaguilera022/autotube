@@ -46,6 +46,9 @@ Third failure: do not repeat the same strategy; implement or test an alternative
 
 A retry without a changed hypothesis/route is not considered recovery.
 
+## Free ZeroGPU quota policy
+Hugging Face documents a 5-minute daily ZeroGPU quota for free accounts, shared at the account level across ZeroGPU Spaces. Therefore AutoTube treats `Wan2.2-ZeroGPU` and `OpenKing-Wan2.2` as one shared quota pool. A quota/429 response opens a 24-hour circuit breaker for both routes; the system must not immediately switch Spaces and consume more quota on the same account. The breaker is reset by a new process instance only, so durable quota telemetry remains a hardening item.
+
 ## Checkpoint policy
 Successful stages must be reused when their checkpoint and artifacts are still valid. After a Render restart, in-memory checkpoints may disappear, so durable checkpoint persistence is a future priority.
 
