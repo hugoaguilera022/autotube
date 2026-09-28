@@ -1330,16 +1330,27 @@ async function executeFullPipelineTest(reference,testId=null){
           try{
             const prompt=String(scene.visualPrompt||scene.title||referenceTitle)+'; '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3200)+'; '+String(scene.animationNotes||'').slice(0,1200)+'; '+String(scene.cameraMovement||'').slice(0,800)+'; ORIGINAL MATERIAL ONLY.';
             let clip=null;
-            const attempts=[
-              async()=>generateFreeLtx25VideoClip(prompt,dir,{durationSeconds:3}),
-              async()=>generateFreeWan21VideoClip(prompt,dir,{durationSeconds:5}),
-              async()=>generateFreeWanVace13VideoClip(prompt,dir,{durationSeconds:5,firstFramePath:await (async()=>{
-                const thumb=String(video?.thumbnail||'').trim();
-                if(!thumb)throw new Error('No hay miniatura de referencia disponible para VACE.');
-                return downloadRemoteImageToFile(thumb,dir,'vace-reference-frame.jpg');
-              })()})
-            ];
-            const modelNames=['LTX-2.5','Wan2.1-T2V-1.3B','Wan2.1-VACE-1.3B'];
+            const referenceThumb=String(video?.thumbnail||'').trim();
+            const attempts=i===0
+              ? [
+                  async()=>generateFreeWanVace13VideoClip(prompt,dir,{durationSeconds:5,firstFramePath:await (async()=>{
+                    if(!referenceThumb)throw new Error('No hay miniatura de referencia disponible para VACE.');
+                    return downloadRemoteImageToFile(referenceThumb,dir,'vace-reference-frame-'+i+'.jpg');
+                  })()}),
+                  async()=>generateFreeLtx25VideoClip(prompt,dir,{durationSeconds:3}),
+                  async()=>generateFreeWan21VideoClip(prompt,dir,{durationSeconds:5})
+                ]
+              : [
+                  async()=>generateFreeLtx25VideoClip(prompt,dir,{durationSeconds:3}),
+                  async()=>generateFreeWan21VideoClip(prompt,dir,{durationSeconds:5}),
+                  async()=>generateFreeWanVace13VideoClip(prompt,dir,{durationSeconds:5,firstFramePath:await (async()=>{
+                    if(!referenceThumb)throw new Error('No hay miniatura de referencia disponible para VACE.');
+                    return downloadRemoteImageToFile(referenceThumb,dir,'vace-reference-frame-'+i+'.jpg');
+                  })()})
+                ];
+            const modelNames=i===0
+              ? ['Wan2.1-VACE-1.3B','LTX-2.5','Wan2.1-T2V-1.3B']
+              : ['LTX-2.5','Wan2.1-T2V-1.3B','Wan2.1-VACE-1.3B'];
             for(let attempt=0;attempt<attempts.length;attempt++){
               try{
                 clip=await attempts[attempt]();
