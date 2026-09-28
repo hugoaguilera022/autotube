@@ -1053,6 +1053,88 @@ async function generateFreeWan22I2vVideoClip(prompt,dir,options={}){
   return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · Wan2.2 I2V',model:'Wan2.2 I2V A14B FP8 Lightning',durationSeconds:duration,status:'complete'};
 }
 
+async function generateReplicateOfficialVideoClip(prompt,dir,options={}) {
+  const token=String(process.env.REPLICATE_API_TOKEN||'').trim();
+  if(!token)throw new Error('REPLICATE_API_TOKEN no configurado.');
+  const configured=String(process.env.REPLICATE_VIDEO_MODELS||'').trim();
+  const models=[...(configured?configured.split(','):[]),
+    'lightricks/ltx-2.5-fast',
+    'alibaba/wan-3',
+    'alibaba/wan-3-prime',
+    'prunaai/p-video-2'
+  ].map(x=>String(x).trim()).filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
+  const duration=Math.max(3,Math.min(8,Number(options.durationSeconds)||4));
+  const aspectRatio=String(options.aspectRatio||'16:9');
+  const errors=[];
+  for(const model of models){
+    try{
+      const metaResponse=await fetch('https://api.replicate.com/v1/models/'+model,{headers:{Authorization:'Bearer '+token,Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+      if(!metaResponse.ok)throw new Error('model metadata HTTP '+metaResponse.status);
+      const meta=await metaResponse.json();
+      const schema=meta?.latest_version?.openapi_schema?.components?.schemas?.Input||{};
+      const props=schema.properties||{};
+      const input={};
+      const promptKeys=['prompt','text','description'];
+      const promptKey=promptKeys.find(k=>props[k]);
+      if(!promptKey)throw new Error('modelo sin campo de prompt compatible');
+      input[promptKey]=String(prompt||'').trim();
+      const durationKey=['duration','duration_seconds','num_frames'].find(k=>props[k]);
+      if(durationKey)input[durationKey]=durationKey==='num_frames'?Math.round(duration*24):duration;
+      const aspectKey=['aspect_ratio','aspectRatio'].find(k=>props[k]);
+      if(aspectKey)input[aspectKey]=aspectRatio;
+      const resolutionKey=['resolution','size','output_resolution'].find(k=>props[k]);
+      if(resolutionKey){
+        const allowed=props[resolutionKey]?.enum||[];
+        input[resolutionKey]=allowed.includes('480p')?'480p':allowed.includes('720p')?'720p':allowed.includes('16:9')?'16:9':allowed[0]||'480p';
+      }
+      const negativeKey=['negative_prompt','negativePrompt'].find(k=>props[k]);
+      if(negativeKey)input[negativeKey]='blurry, jittery, distorted anatomy, text, logos, watermark, copied frames';
+      const imagePath=String(options.firstFramePath||'').trim();
+      const imageKey=['image','start_image','input_image','first_frame'].find(k=>props[k]);
+      if(imagePath&&imageKey){
+        const bytes=await fs.readFile(imagePath);
+        if(bytes.length<=256*1024){
+          const mime=/\.png$/i.test(imagePath)?'image/png':'image/jpeg';
+          input[imageKey]='data:'+mime+';base64,'+bytes.toString('base64');
+        }
+      }
+      const create=await fetch('https://api.replicate.com/v1/models/'+model+'/predictions',{
+        method:'POST',
+        headers:{Authorization:'Bearer '+token,'Content-Type':'application/json','Prefer':'wait=60','Cancel-After':'3m'},
+        body:JSON.stringify({input}),
+        signal:AbortSignal.timeout(70000)
+      });
+      const prediction=await create.json().catch(()=>null);
+      if(!create.ok)throw new Error('prediction HTTP '+create.status+': '+String(prediction?.detail||prediction?.error||'').slice(0,500));
+      let p=prediction;
+      const deadline=Date.now()+180000;
+      while(p?.status&&!['succeeded','failed','canceled'].includes(p.status)&&Date.now()<deadline){
+        await new Promise(r=>setTimeout(r,2500));
+        const u=p?.urls?.get||('https://api.replicate.com/v1/predictions/'+encodeURIComponent(p.id||''));
+        const rr=await fetch(u,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(15000)});
+        p=await rr.json();
+      }
+      if(p?.status!=='succeeded')throw new Error('prediction '+String(p?.status||'unknown')+': '+String(p?.error||'sin resultado').slice(0,500));
+      const output=p.output;
+      const raw=Array.isArray(output)?output[0]:(typeof output==='string'?output:(output?.url||output?.video?.url||output?.path||''));
+      if(!raw)throw new Error('Replicate no devolvió una URL de vídeo.');
+      const response=await fetch(String(raw),{signal:AbortSignal.timeout(120000)});
+      if(!response.ok)throw new Error('descarga Replicate HTTP '+response.status);
+      const bytes=Buffer.from(await response.arrayBuffer());
+      if(bytes.length<10000)throw new Error('Replicate devolvió un archivo demasiado pequeño.');
+      const outputPath=path.join(dir,'replicate-video-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+      await fs.writeFile(outputPath,bytes);
+      const validation=await validateGeneratedVideoClip(outputPath);
+      if(!validation.ok)throw new Error('Replicate produjo un clip inválido.');
+      return{outputPath,bytes:bytes.length,provider:'Replicate official',model,durationSeconds:validation.durationSeconds,status:'complete'};
+    }catch(err){
+      errors.push(model+': '+String(err?.message||err).slice(0,500));
+      console.warn('Replicate video model failed:',model,err?.message||String(err));
+    }
+  }
+  throw new Error('Replicate no pudo generar un clip válido: '+errors.join(' | '));
+}
+
 /* Autonomous free-video provider manager. */
 const videoProviderState = new Map();
 const VIDEO_PROVIDER_COOLDOWN_MS = Math.max(30000, Number(process.env.AUTOTUBE_PROVIDER_COOLDOWN_MS)||180000);
@@ -1064,7 +1146,61 @@ function noteProviderSuccess(name){const st=providerState(name);st.status='healt
 function providerAvailable(name){const st=providerState(name);return st.status!=='blocked'&&Date.now()>=Number(st.cooldownUntil||0);}
 async function probeVideoProvider(name){const st=providerState(name);if(st.status==='blocked')return{ok:false,status:st.status,error:st.lastError};if(st.status==='healthy'&&Date.now()-st.lastSuccessAt<VIDEO_PROVIDER_PROBE_MS)return{ok:true,status:'healthy',cached:true};const raw={ 'Wan2.2-I2V':process.env.WAN22_I2V_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','LTX-2.5':process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space','Wan2.1':process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space','Wan2.1-VACE':process.env.WAN_VACE_SPACE_URL||'https://jdpadmin-wan2-1-vace-diffusers-demo.hf.space','LTX-0.9.8':process.env.LTX_SPACE||'https://lightricks-ltx-video-distilled.hf.space'}[name];if(!raw)return{ok:false,status:'unconfigured'};const url=String(raw).startsWith('http')?String(raw).replace(/\/$/,'')+'/gradio_api/info':'https://'+String(raw).replace(/\/$/,'')+'.hf.space/gradio_api/info';try{const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(12000)});if(!response.ok)throw new Error('HTTP '+response.status);noteProviderSuccess(name);return{ok:true,status:'healthy'};}catch(err){noteProviderFailure(name,err);return{ok:false,status:providerState(name).status,error:String(err.message||err)};}}
 async function getVideoProviderHealth(){const result={};for(const name of ['Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
-async function generateBestFreeVideoClip(prompt,dir,options={}){const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);const referenceFramePath=String(options.firstFramePath||'').trim();const order=referenceFramePath?(sceneIndex===0?['Wan2.2-I2V','Wan2.1-VACE','LTX-2.5','Wan2.1','LTX-0.9.8']:['Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8']):(sceneIndex===0?['LTX-2.5','Wan2.1','LTX-0.9.8']:['LTX-2.5','Wan2.1','LTX-0.9.8']);const errors=[];for(const provider of order){if((provider==='Wan2.1-VACE'||provider==='Wan2.2-I2V')&&!referenceFramePath)continue;if(!providerAvailable(provider))continue;const health=await probeVideoProvider(provider);if(!health.ok)continue;try{let clip;if(provider==='Wan2.2-I2V')clip=await generateFreeWan22I2vVideoClip(prompt,dir,{...options,firstFramePath:referenceFramePath});else if(provider==='Wan2.1-VACE')clip=await generateFreeWanVace13VideoClip(prompt,dir,{...options,firstFramePath:referenceFramePath});else if(provider==='LTX-2.5')clip=await generateFreeLtx25VideoClip(prompt,dir,options);else if(provider==='Wan2.1')clip=await generateFreeWan21VideoClip(prompt,dir,options);else clip=await generateFreeLtxVideoClip(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);if(!validation.ok)throw new Error('Clip IA inválido después de generarlo.');noteProviderSuccess(provider);return{...clip,providerKey:provider,validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));if(kind==='user_blocking')throw new Error('USER_BLOCKING_VIDEO_PROVIDER '+String(err.message||err));}}const health=await getVideoProviderHealth().catch(()=>({}));throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: ningún proveedor gratuito de vídeo IA pudo generar un clip válido. '+errors.join(' | ')+' | health='+JSON.stringify(health));}
+async function generateBestFreeVideoClip(prompt,dir,options={}) {
+  const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);
+  const referenceFramePath=String(options.firstFramePath||'').trim();
+  const order=[
+    ...(process.env.REPLICATE_API_TOKEN?['Replicate']:[]),
+    ...(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN?['HF-Inference']:[]),
+    ...(process.env.POLLINATIONS_API_KEY?['Pollinations']:[]),
+    ...(referenceFramePath?['Wan2.2-I2V','Wan2.1-VACE']:[]),
+    'LTX-2.5','Wan2.1','LTX-0.9.8'
+  ];
+  const errors=[];
+  for(const provider of [...new Set(order)]){
+    if(provider==='HF-Inference'){
+      try{
+        const clip=await generateHuggingFaceProviderVideoClip(prompt,dir,options);
+        const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);
+        return{...clip,providerKey:provider,validation};
+      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
+    }
+    if(provider==='Replicate'){
+      try{
+        const clip=await generateReplicateOfficialVideoClip(prompt,dir,options);
+        const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);
+        return{...clip,providerKey:provider,validation};
+      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
+    }
+    if(provider==='Pollinations'){
+      try{
+        const clip=await generatePollinationsVideoClip(prompt,dir,options);
+        const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);
+        return{...clip,providerKey:provider,validation};
+      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
+    }
+    if(!providerAvailable(provider))continue;
+    const health=await probeVideoProvider(provider); if(!health.ok)continue;
+    try{
+      let clip;
+      if(provider==='Wan2.2-I2V')clip=await generateFreeWan22I2vVideoClip(prompt,dir,{...options,firstFramePath:referenceFramePath});
+      else if(provider==='Wan2.1-VACE')clip=await generateFreeWanVace13VideoClip(prompt,dir,{...options,firstFramePath:referenceFramePath});
+      else if(provider==='LTX-2.5')clip=await generateFreeLtx25VideoClip(prompt,dir,options);
+      else if(provider==='Wan2.1')clip=await generateFreeWan21VideoClip(prompt,dir,options);
+      else clip=await generateFreeLtxVideoClip(prompt,dir,options);
+      const validation=await validateGeneratedVideoClip(clip.outputPath);
+      if(!validation.ok)throw new Error('Clip IA inválido después de generarlo.');
+      noteProviderSuccess(provider);
+      return{...clip,providerKey:provider,validation};
+    }catch(err){
+      const kind=classifyVideoProviderError(err); noteProviderFailure(provider,err);
+      errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));
+      if(kind==='user_blocking')continue;
+    }
+  }
+  throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: ningún proveedor de vídeo IA disponible pudo generar un clip válido. '+errors.join(' | '));
+}
+
 async function validateGeneratedVideoClip(file){
   const result=await new Promise((resolve,reject)=>{
     const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-f','null','-'],{stdio:['ignore','pipe','pipe']});
