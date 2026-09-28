@@ -647,6 +647,14 @@ async function generateGeminiOriginalImage(prompt,dir,options={}) {
   }finally{clearTimeout(timer)}
 }
 
+const freeVideoQuota = { successful: [], active: false };
+function freeVideoQuotaLimit(){return Math.max(1,Math.min(3,Number(process.env.AUTOTUBE_FREE_DAILY_LIMIT||1)));}
+function freeVideoQuotaWindowMs(){return 24*60*60*1000;}
+function pruneFreeVideoQuota(){const now=Date.now();freeVideoQuota.successful=freeVideoQuota.successful.filter(t=>now-t<freeVideoQuotaWindowMs());}
+function canStartFreeVideoGeneration(){pruneFreeVideoQuota();return !freeVideoQuota.active && freeVideoQuota.successful.length<freeVideoQuotaLimit();}
+function reserveFreeVideoGeneration(){pruneFreeVideoQuota();if(freeVideoQuota.active)throw new Error('Ya hay una generación de vídeo IA gratuita en curso.');if(freeVideoQuota.successful.length>=freeVideoQuotaLimit())throw new Error('Se ha alcanzado la cuota gratuita diaria de vídeo IA. Vuelve a intentarlo cuando se renueve la cuota.');freeVideoQuota.active=true;}
+function finishFreeVideoGeneration(success){if(success)freeVideoQuota.successful.push(Date.now());freeVideoQuota.active=false;pruneFreeVideoQuota();}
+
 async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   const {Client}=require('@gradio/client');
   const space=String(process.env.LTX_SPACE||'Lightricks/ltx-video-distilled').trim();
@@ -1362,11 +1370,21 @@ async function executeUrlToVideo(reference,jobId,options={}){
     }
     if(job)Object.assign(job,{progress:30,sceneCount:scenes.length,durationSeconds});
 
+    const maxFreeScenes=Math.max(1,Math.min(4,Number(process.env.AUTOTUBE_MAX_FREE_SCENES||4)));
+    if(scenes.length>maxFreeScenes){
+      scenes=scenes.slice(0,maxFreeScenes);
+      const limitedTotal=scenes.reduce((n,x)=>n+Number(x.duration||0),0)||1;
+      const target=Math.min(durationSeconds,Number(process.env.AUTOTUBE_MAX_FREE_DURATION_SECONDS||20));
+      scenes=scenes.map(x=>({...x,duration:Math.max(3,Number(x.duration||0)*target/limitedTotal)}));
+    }
+    if(!canStartFreeVideoGeneration())throw new Error('La cuota gratuita de vídeo IA está ocupada o agotada por hoy.');
+    reserveFreeVideoGeneration();
     const mediaResults=scenes.map((scene)=>({number:scene.number,media:[]}));
     const aiClips=[];
 
-    // Generate each scene strictly from the analyzed DNA. Providers are tried one at a time
-    // so a quota failure never creates overlapping generation jobs or aborts the whole render.
+    // FREE MODE IS STRICT: every scene must be a real AI-generated video clip.
+    // There is deliberately NO image/Ken-Burns/stock fallback.
+    try {
     for(let i=0;i<scenes.length;i++){
       const scene=scenes[i];
       const dnaPrompt=[
@@ -1381,55 +1399,17 @@ async function executeUrlToVideo(reference,jobId,options={}){
         String(scene.cameraMovement||''),
         'ORIGINAL MATERIAL ONLY. Do not reproduce faces, characters, logos, text, frames, exact shots, recordings or copyrighted audio.'
       ].filter(Boolean).join('; ');
-      if(style.constantImage){
-        const imageDir=await fs.mkdtemp(path.join(dir,'scene-image-'));
-        let generated=null,lastError='';
-        for(const provider of ['gemini','pollinations']){
-          try{
-            generated=provider==='gemini'
-              ?await generateGeminiOriginalImage(dnaPrompt,imageDir,{model:'gemini-2.5-flash-image'})
-              :await generatePollinationsOriginalImage(dnaPrompt,imageDir,{width:1280,height:720});
-            break;
-          }catch(err){lastError=err?.message||String(err);}
-        }
-        if(!generated)throw new Error('No se pudo generar el visual IA de la escena '+scene.number+': '+lastError);
-        mediaResults[i]={number:scene.number,media:[{provider:generated.provider,id:'generated-'+scene.number,title:'Original AI visual',duration:0,downloadUrl:generated.outputPath,mediaType:'image'}],generatedAsset:true};
-        continue;
-      }
-      let clip=null,lastError='';
-      try{
-        clip=await generateFreeLtxVideoClip(dnaPrompt,dir,{durationSeconds:Math.min(8.5,Math.max(3,Number(scene.duration)||5)),width:704,height:396,improveTexture:false});
-        await validateGeneratedVideoClip(clip.outputPath);
-      }catch(err){lastError=err?.message||String(err);console.warn('LTX unavailable for scene '+scene.number+':',lastError);}
-      if(clip){
-        aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model};
-        continue;
-      }
-      // Video-AI quota can be temporarily exhausted on Render Free. Fall back to a
-      // newly generated image with the same DNA and let FFmpeg animate it (Ken Burns).
-      const imageDir=await fs.mkdtemp(path.join(dir,'scene-image-fallback-'));
-      let generated=null;
-      for(const provider of ['gemini','pollinations']){
-        try{
-          generated=provider==='gemini'
-            ?await generateGeminiOriginalImage(dnaPrompt,imageDir,{model:'gemini-2.5-flash-image'})
-            :await generatePollinationsOriginalImage(dnaPrompt,imageDir,{width:1280,height:720});
-          break;
-        }catch(err){lastError=err?.message||String(err);}
-      }
-      if(generated){
-        mediaResults[i]={number:scene.number,media:[{provider:generated.provider,id:'generated-'+scene.number,title:'Original AI visual fallback',duration:0,downloadUrl:generated.outputPath,mediaType:'image'}],generatedAsset:true};
-      }else{
-        // Final non-AI visual fallback keeps the job renderable when all image/video
-        // providers are rate-limited. The scene prompt/DNA still controls the search.
-        const q=String(scene.searchQuery||scene.title||referenceTitle).slice(0,180);
-        let rows=[];
-        try{rows=await searchPexels(q)}catch{}
-        if(!rows.length){try{rows=await searchPixabay(q)}catch{}}
-        const selected=rows.find(x=>x?.url||x?.downloadUrl);
-        if(!selected)throw new Error('No hay proveedor visual disponible para la escena '+scene.number+'. Último error IA: '+lastError);
-        mediaResults[i]={number:scene.number,media:[{...selected,downloadUrl:selected.downloadUrl||selected.url,mediaType:selected.mediaType||'video'}],fallbackReason:lastError};
-      }
+      if(style.constantImage)throw new Error('La referencia es de imagen constante; el modo gratuito exige vídeo IA real y no usa animación de imagen.');
+      const duration=Math.min(8.5,Math.max(3,Number(scene.duration)||5));
+      const clip=await generateFreeLtxVideoClip(dnaPrompt,dir,{durationSeconds:duration,width:704,height:396,improveTexture:false});
+      await validateGeneratedVideoClip(clip.outputPath);
+      aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model};
+      mediaResults[i]={number:scene.number,media:[{provider:clip.provider,id:'generated-video-'+scene.number,title:'Original AI video clip',duration,downloadUrl:clip.outputPath,mediaType:'video'}],generatedAsset:true};
+    }
+    if(aiClips.length!==scenes.length||aiClips.some(x=>!x?.path))throw new Error('La generación no produjo un clip de vídeo IA válido para cada escena.');
+    } catch(err) {
+      finishFreeVideoGeneration(false);
+      throw err;
     }
     if(job)job.progress=48;
 
@@ -1459,6 +1439,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
     });
     const validation=await validateRenderedMp4(outputPath,durationSeconds);
     const animatedMotion=await validateAnimatedMotion(outputPath);
+    if(!animatedMotion.motionDetected||Number(animatedMotion.uniqueFrames||0)<2)throw new Error('El MP4 final no demuestra movimiento de vídeo IA real. No se acepta como generación válida.');
     const stat=await fs.stat(outputPath);
     if(!stat.size)throw new Error('El MP4 alternativo está vacío.');
 
@@ -1486,6 +1467,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
         }};
       job.finishedAt=Date.now();
     }
+    finishFreeVideoGeneration(true);
     return{ok:true,jobId,reference,referenceTitle,sceneCount:scenes.length,size:stat.size,durationSeconds:validation.durationSeconds||durationSeconds,validation:job?.validation};
   }catch(err){
     if(job){job.status='error';job.progress=0;job.error=err?.message||String(err);job.finishedAt=Date.now();}
