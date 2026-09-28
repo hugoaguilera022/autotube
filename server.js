@@ -1357,7 +1357,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
   const errors=[];
   for(const space of spaces){
     try{
-      const base=space.startsWith('http')?space.replace(/\\/$/,''):'https://'+space.replace(/^https?:\\/\\//,'').replace(/\\.hf\\.space$/,'')+'.hf.space';
+      const base=space.startsWith('http')?space.replace(/\/$/,''):'https://'+space.replace(/^https?:\/\//,'').replace(/\.hf\.space$/,'')+'.hf.space';
       const headers=token?{Authorization:'Bearer '+token}:{};
       const infoResponse=await fetch(base+'/gradio_api/info',{headers,signal:AbortSignal.timeout(10000)});
       const infoText=await infoResponse.text();
