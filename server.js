@@ -1939,6 +1939,7 @@ async function persistPipelineCheckpoint(next){
     };
     await supabaseRequest('youtube_connections?on_conflict=id',{method:'POST',body:JSON.stringify({
       id:AUTOTUBE_CHECKPOINT_PERSIST_PREFIX+next.key,
+      tokens_encrypted:encryptTokens({}),
       profile:persisted,
       updated_at:new Date(persisted.updatedAt).toISOString()
     })});
