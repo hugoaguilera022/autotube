@@ -1417,8 +1417,10 @@ async function executeFullPipelineTest(reference,testId=null){
             ].join('; ');
             let clip=null;
             const referenceThumb=String(video?.thumbnail||'').trim();
+            const pollinationsAttempt=async()=>generatePollinationsVideoClip(prompt,dir,{durationSeconds:Math.min(5,Math.max(3,Number(scene.duration)||4)),aspectRatio:'16:9'});
             const attempts=i===0
               ? [
+                  pollinationsAttempt,
                   async()=>generateFreeWanVace13VideoClip(prompt,dir,{durationSeconds:5,firstFramePath:await (async()=>{
                     if(!referenceThumb)throw new Error('No hay miniatura de referencia disponible para VACE.');
                     return downloadRemoteImageToFile(referenceThumb,dir,'vace-reference-frame-'+i+'.jpg');
@@ -1427,6 +1429,7 @@ async function executeFullPipelineTest(reference,testId=null){
                   async()=>generateFreeWan21VideoClip(prompt,dir,{durationSeconds:5})
                 ]
               : [
+                  pollinationsAttempt,
                   async()=>generateFreeLtx25VideoClip(prompt,dir,{durationSeconds:3}),
                   async()=>generateFreeWan21VideoClip(prompt,dir,{durationSeconds:5}),
                   async()=>generateFreeWanVace13VideoClip(prompt,dir,{durationSeconds:5,firstFramePath:await (async()=>{
@@ -1435,8 +1438,8 @@ async function executeFullPipelineTest(reference,testId=null){
                   })()})
                 ];
             const modelNames=i===0
-              ? ['Wan2.1-VACE-1.3B','LTX-2.5','Wan2.1-T2V-1.3B']
-              : ['LTX-2.5','Wan2.1-T2V-1.3B','Wan2.1-VACE-1.3B'];
+              ? ['Pollinations','Wan2.1-VACE-1.3B','LTX-2.5','Wan2.1-T2V-1.3B']
+              : ['Pollinations','LTX-2.5','Wan2.1-T2V-1.3B','Wan2.1-VACE-1.3B'];
             for(let attempt=0;attempt<attempts.length;attempt++){
               try{
                 clip=await attempts[attempt]();
