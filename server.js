@@ -939,6 +939,35 @@ async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   }
 }
 
+async function generateFreeWan22I2vVideoClip(prompt,dir,options={}){
+  const {Client}=require('@gradio/client');
+  const space=String(process.env.WAN22_I2V_SPACE_URL||'zerogpu-aoti/wan2-2-fp8da-aoti-faster').trim();
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const firstFramePath=String(options.firstFramePath||'').trim();
+  if(!firstFramePath)throw new Error('Wan2.2 I2V requiere un frame de referencia.');
+  const app=await Client.connect(space,token?{token}:undefined);
+  const duration=Math.max(0.5,Math.min(5,Number(options.durationSeconds)||3.5));
+  const steps=Math.max(4,Math.min(8,Number(options.steps)||4));
+  const seed=Math.floor(Math.random()*2147483647);
+  const result=await app.predict('/generate_video',[
+    firstFramePath,
+    String(prompt||'').trim(),
+    steps,
+    'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects',
+    duration,
+    1,
+    1,
+    seed,
+    true
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const outputPath=await downloadGradioOutput(output,'https://'+space+'.hf.space',token,dir,'wan22-i2v-generated');
+  const stat=await fs.stat(outputPath);
+  if(!stat.size)throw new Error('Wan2.2 I2V devolvió un vídeo vacío.');
+  return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · Wan2.2 I2V',model:'Wan2.2 I2V A14B FP8 Lightning',durationSeconds:duration,status:'complete'};
+}
+
 /* Autonomous free-video provider manager. */
 const videoProviderState = new Map();
 const VIDEO_PROVIDER_COOLDOWN_MS = Math.max(30000, Number(process.env.AUTOTUBE_PROVIDER_COOLDOWN_MS)||180000);
@@ -950,7 +979,7 @@ function noteProviderSuccess(name){const st=providerState(name);st.status='healt
 function providerAvailable(name){const st=providerState(name);return st.status!=='blocked'&&Date.now()>=Number(st.cooldownUntil||0);}
 async function probeVideoProvider(name){const st=providerState(name);if(st.status==='blocked')return{ok:false,status:st.status,error:st.lastError};if(st.status==='healthy'&&Date.now()-st.lastSuccessAt<VIDEO_PROVIDER_PROBE_MS)return{ok:true,status:'healthy',cached:true};const raw={ 'LTX-2.5':process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space','Wan2.1':process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space','Wan2.1-VACE':process.env.WAN_VACE_SPACE_URL||'https://jdpadmin-wan2-1-vace-diffusers-demo.hf.space','LTX-0.9.8':process.env.LTX_SPACE||'https://lightricks-ltx-video-distilled.hf.space'}[name];if(!raw)return{ok:false,status:'unconfigured'};const url=String(raw).startsWith('http')?String(raw).replace(/\/$/,'')+'/gradio_api/info':'https://'+String(raw).replace(/\/$/,'')+'.hf.space/gradio_api/info';try{const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(12000)});if(!response.ok)throw new Error('HTTP '+response.status);noteProviderSuccess(name);return{ok:true,status:'healthy'};}catch(err){noteProviderFailure(name,err);return{ok:false,status:providerState(name).status,error:String(err.message||err)};}}
 async function getVideoProviderHealth(){const result={};for(const name of ['LTX-2.5','Wan2.1','Wan2.1-VACE','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
-async function generateBestFreeVideoClip(prompt,dir,options={}){const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);const referenceFramePath=String(options.firstFramePath||'').trim();const order=sceneIndex===0?['Wan2.1-VACE','LTX-2.5','Wan2.1','LTX-0.9.8']:['LTX-2.5','Wan2.1','LTX-0.9.8','Wan2.1-VACE'];const errors=[];for(const provider of order){if(provider==='Wan2.1-VACE'&&!referenceFramePath)continue;if(!providerAvailable(provider))continue;const health=await probeVideoProvider(provider);if(!health.ok)continue;try{let clip;if(provider==='Wan2.1-VACE')clip=await generateFreeWanVace13VideoClip(prompt,dir,{...options,firstFramePath:referenceFramePath});else if(provider==='LTX-2.5')clip=await generateFreeLtx25VideoClip(prompt,dir,options);else if(provider==='Wan2.1')clip=await generateFreeWan21VideoClip(prompt,dir,options);else clip=await generateFreeLtxVideoClip(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);if(!validation.ok)throw new Error('Clip IA inválido después de generarlo.');noteProviderSuccess(provider);return{...clip,providerKey:provider,validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));if(kind==='user_blocking')throw new Error('USER_BLOCKING_VIDEO_PROVIDER '+String(err.message||err));}}const health=await getVideoProviderHealth().catch(()=>({}));throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: ningún proveedor gratuito de vídeo IA pudo generar un clip válido. '+errors.join(' | ')+' | health='+JSON.stringify(health));}
+async function generateBestFreeVideoClip(prompt,dir,options={}){const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);const referenceFramePath=String(options.firstFramePath||'').trim();const order=referenceFramePath?(sceneIndex===0?['Wan2.2-I2V','Wan2.1-VACE','LTX-2.5','Wan2.1','LTX-0.9.8']:['Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8']):(sceneIndex===0?['LTX-2.5','Wan2.1','LTX-0.9.8']:['LTX-2.5','Wan2.1','LTX-0.9.8']);const errors=[];for(const provider of order){if((provider==='Wan2.1-VACE'||provider==='Wan2.2-I2V')&&!referenceFramePath)continue;if(!providerAvailable(provider))continue;const health=await probeVideoProvider(provider);if(!health.ok)continue;try{let clip;if(provider==='Wan2.2-I2V')clip=await generateFreeWan22I2vVideoClip(prompt,dir,{...options,firstFramePath:referenceFramePath});else if(provider==='Wan2.1-VACE')clip=await generateFreeWanVace13VideoClip(prompt,dir,{...options,firstFramePath:referenceFramePath});else if(provider==='LTX-2.5')clip=await generateFreeLtx25VideoClip(prompt,dir,options);else if(provider==='Wan2.1')clip=await generateFreeWan21VideoClip(prompt,dir,options);else clip=await generateFreeLtxVideoClip(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);if(!validation.ok)throw new Error('Clip IA inválido después de generarlo.');noteProviderSuccess(provider);return{...clip,providerKey:provider,validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));if(kind==='user_blocking')throw new Error('USER_BLOCKING_VIDEO_PROVIDER '+String(err.message||err));}}const health=await getVideoProviderHealth().catch(()=>({}));throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: ningún proveedor gratuito de vídeo IA pudo generar un clip válido. '+errors.join(' | ')+' | health='+JSON.stringify(health));}
 async function validateGeneratedVideoClip(file){
   const result=await new Promise((resolve,reject)=>{
     const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-f','null','-'],{stdio:['ignore','pipe','pipe']});
