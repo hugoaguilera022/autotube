@@ -1363,7 +1363,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
       const app=await Client.connect(space,token?{token}:undefined);
       const image=imagePath?await handle_file(imagePath):null;
       const seed=Math.floor(Math.random()*2147483647);
-      const result=await app.predict(0,[image,String(prompt||'').trim(),duration,false,seed,true,height,width]);
+      const result=await app.predict(2,[image,String(prompt||'').trim(),duration,false,seed,true,height,width]);
       const data=Array.isArray(result?.data)?result.data:[];
       const raw0=data[0];
       const raw=typeof raw0==='string'?(raw0):(raw0?.url||raw0?.path||raw0?.video?.url||raw0?.video?.path||'');
