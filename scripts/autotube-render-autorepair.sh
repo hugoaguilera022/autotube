@@ -65,7 +65,9 @@ p.write_text(head.rstrip()+"\n")
 Path("render-actions.txt").write_text(actions.strip()+"\n")
 PY
 
-git apply --check render-repair.patch && git apply render-repair.patch
+if [ -s render-repair.patch ]; then
+  git apply --check render-repair.patch && git apply render-repair.patch
+fi
 node --check server.js
 
 if [ -s render-actions.txt ]; then
