@@ -697,7 +697,7 @@ async function generatePollinationsVideoClip(prompt,dir,options={}) {
 
 async function generateFreeLtx25VideoClip(prompt,dir,options={}) {
   const spaceUrl=String(process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space').replace(/\/$/,'');
-  const duration=Math.max(1,Math.min(2,Number(options.durationSeconds)||2));
+  const duration=Math.max(3,Math.min(3,Number(options.durationSeconds)||3));
   const width=896;
   const height=512;
   const seed=Math.floor(Math.random()*2147483647);
@@ -757,6 +757,86 @@ async function generateFreeLtx25VideoClip(prompt,dir,options={}) {
   const stat=await fs.stat(outputPath);
   if(!stat.size)throw new Error('LTX-2.5 devolvió un vídeo vacío.');
   return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX-2.5',model:'LTX-2.5 distilled',durationSeconds:duration,status:'complete'};
+}
+
+async function downloadRemoteImageToFile(url,dir,name='reference-frame.jpg'){
+  const response=await fetch(String(url||''),{signal:AbortSignal.timeout(30000),headers:{Accept:'image/*','User-Agent':'AutoTube/1.0'}});
+  if(!response.ok)throw new Error('No se pudo descargar el frame de referencia: HTTP '+response.status);
+  const bytes=Buffer.from(await response.arrayBuffer());
+  if(bytes.length<1000)throw new Error('El frame de referencia está vacío.');
+  const outputPath=path.join(dir,name);
+  await fs.writeFile(outputPath,bytes);
+  return outputPath;
+}
+
+async function downloadGradioOutput(output,spaceUrl,token,dir,prefix){
+  const raw=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!raw)throw new Error('El modelo ZeroGPU terminó sin devolver un archivo.');
+  const url=String(raw).startsWith('http')?String(raw):spaceUrl+'/gradio_api/file='+String(raw).replace(/^\//,'');
+  const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(180000)});
+  if(!response.ok)throw new Error('No se pudo descargar el resultado ZeroGPU ('+response.status+').');
+  const outputPath=path.join(dir,prefix+'-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  const bytes=Buffer.from(await response.arrayBuffer());
+  if(bytes.length<10000)throw new Error('El vídeo ZeroGPU descargado es demasiado pequeño.');
+  await fs.writeFile(outputPath,bytes);
+  await validateGeneratedVideoClip(outputPath);
+  return outputPath;
+}
+
+async function generateFreeWan21VideoClip(prompt,dir,options={}){
+  const space=String(process.env.WAN21_SPACE_URL||'Heartsync/Wan-2.1-T2V-1.3B-LoRA').trim();
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const {Client}=require('@gradio/client');
+  const client=await Client.connect(space,token?{token}:undefined);
+  const duration=Math.max(3,Math.min(5,Number(options.durationSeconds)||5));
+  const fps=16;
+  const frames=81;
+  const result=await client.predict('/generate_video',[
+    'Wan2.1-T2V-1.3B',
+    String(prompt||'').trim(),
+    'worst quality, blurry, static, distorted anatomy, text, logos, watermark, copied frame',
+    '',
+    0,
+    'UniPCMultistepScheduler',
+    3,
+    480,
+    832,
+    frames,
+    5,
+    20,
+    fps
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const outputPath=await downloadGradioOutput(output,'https://'+space+'.hf.space',token,dir,'wan21-generated');
+  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan 2.1',model:'Wan2.1 T2V 1.3B',durationSeconds:duration,status:'complete'};
+}
+
+async function generateFreeWanVace13VideoClip(prompt,dir,options={}){
+  const firstFramePath=String(options.firstFramePath||'').trim();
+  if(!firstFramePath)throw new Error('Wan2.1 VACE requiere un frame de referencia.');
+  const space=String(process.env.WAN_VACE_SPACE_URL||'jdpadmin/wan2.1-vace-diffusers-demo').trim();
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const {Client}=require('@gradio/client');
+  const client=await Client.connect(space,token?{token}:undefined);
+  const frames=81;
+  const result=await client.predict('/run',[
+    String(prompt||'').trim(),
+    firstFramePath,
+    firstFramePath,
+    null,
+    null,
+    null,
+    frames,
+    20,
+    5,
+    Math.floor(Math.random()*2147483647),
+    true
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const outputPath=await downloadGradioOutput(output,'https://'+space+'.hf.space',token,dir,'wan-vace-generated');
+  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.1 VACE',model:'Wan2.1 VACE 1.3B',durationSeconds:Math.max(3,(frames-1)/16),status:'complete'};
 }
 
 async function generateFreeLtxVideoClip(prompt,dir,options={}) {
@@ -1232,16 +1312,29 @@ async function executeFullPipelineTest(reference,testId=null){
           const scene=plan.scenes[i];
           try{
             const prompt=String(scene.visualPrompt||scene.title||referenceTitle)+'; '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3200)+'; '+String(scene.animationNotes||'').slice(0,1200)+'; '+String(scene.cameraMovement||'').slice(0,800)+'; ORIGINAL MATERIAL ONLY.';
-            let clip;
-            try{
-              clip=await generateFreeLtx25VideoClip(prompt,dir,{durationSeconds:2});
-            }catch(primaryErr){
-              console.warn('LTX-2.5 ZeroGPU unavailable for AI clip '+(i+1)+':',primaryErr.message||String(primaryErr));
-              clip=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:3,width:704,height:396,improveTexture:false});
+            let clip=null;
+            const attempts=[
+              async()=>generateFreeLtx25VideoClip(prompt,dir,{durationSeconds:3}),
+              async()=>generateFreeWan21VideoClip(prompt,dir,{durationSeconds:5}),
+              async()=>generateFreeWanVace13VideoClip(prompt,dir,{durationSeconds:5,firstFramePath:await (async()=>{
+                const thumb=String(video?.thumbnail||'').trim();
+                if(!thumb)throw new Error('No hay miniatura de referencia disponible para VACE.');
+                return downloadRemoteImageToFile(thumb,dir,'vace-reference-frame.jpg');
+              })()})
+            ];
+            const modelNames=['LTX-2.5','Wan2.1-T2V-1.3B','Wan2.1-VACE-1.3B'];
+            for(let attempt=0;attempt<attempts.length;attempt++){
+              try{
+                clip=await attempts[attempt]();
+                await validateGeneratedVideoClip(clip.outputPath);
+                console.log('AutoTube free AI clip generated:',i+1,modelNames[attempt],clip.model);
+                break;
+              }catch(modelErr){
+                console.warn('AI video model '+modelNames[attempt]+' unavailable for clip '+(i+1)+':',modelErr.message||String(modelErr));
+              }
             }
-            await validateGeneratedVideoClip(clip.outputPath);
+            if(!clip)throw new Error('Los tres modelos gratuitos de vídeo IA fallaron para la escena '+(i+1)+'.');
             aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model});
-            console.log('AutoTube free AI clip generated:',i+1,clip.provider,clip.model);
           }catch(err){
             console.warn('AI video clip '+(i+1)+' unavailable:',err.message||String(err));
           }
@@ -1772,4 +1865,3 @@ async function runAutonomousCycle(){
 }
 setTimeout(()=>{runAutonomousCycle().catch(err=>console.error('AutoTube autonomous launch error:',err));},20000);
 setInterval(()=>{runAutonomousCycle().catch(err=>console.error('AutoTube autonomous interval error:',err));},autonomousIntervalMs);
-
