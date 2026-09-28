@@ -634,32 +634,46 @@ async function generatePollinationsVideoClip(prompt,dir,options={}) {
 }
 
 async function generateFreeLtx25VideoClip(prompt,dir,options={}) {
-  const {Client}=require('@gradio/client');
-  const space=String(process.env.LTX25_SPACE||'Lightricks/LTX-2.5').trim();
+  const spaceUrl=String(process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space').replace(/\/$/,'');
   const duration=Math.max(1,Math.min(2,Number(options.durationSeconds)||2));
   const width=896;
   const height=512;
   const seed=Math.floor(Math.random()*2147483647);
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
-  const client=await Client.connect(space,token?{token}:undefined,{httpx_kwargs:{timeout:300000}});
-  const result=await client.predict('/run',[
-    String(prompt||'').trim(),
-    null,
-    height,
-    width,
-    duration,
-    seed,
-    'conv',
-    false,
-    false,
-    false
-  ]);
-  const data=Array.isArray(result?.data)?result.data:[];
+  const headers={'Content-Type':'application/json'};
+  if(token)headers.Authorization='Bearer '+token;
+  const submit=await fetch(spaceUrl+'/gradio_api/call/run',{
+    method:'POST',
+    headers,
+    body:JSON.stringify({data:[String(prompt||'').trim(),null,height,width,duration,seed,'conv',false,false,false]}),
+    signal:AbortSignal.timeout(60000)
+  });
+  const submitRaw=await submit.text();
+  let submitData=null;try{submitData=submitRaw?JSON.parse(submitRaw):null}catch{}
+  if(!submit.ok)throw new Error('LTX-2.5 ZeroGPU submit '+submit.status+': '+submitRaw.slice(0,500));
+  const eventId=String(submitData?.event_id||'').trim();
+  if(!eventId)throw new Error('LTX-2.5 ZeroGPU no devolvió event_id.');
+  const result=await fetch(spaceUrl+'/gradio_api/call/run/'+encodeURIComponent(eventId),{
+    headers:token?{Authorization:'Bearer '+token}:{},
+    signal:AbortSignal.timeout(300000)
+  });
+  const stream=await result.text();
+  if(!result.ok)throw new Error('LTX-2.5 ZeroGPU result '+result.status+': '+stream.slice(0,700));
+  const events=stream.split(/\r?\n\r?\n/);
+  let completeData=null;
+  for(const event of events){
+    const type=(event.match(/^event:\s*(.+)$/m)||[])[1]?.trim();
+    const dataLine=(event.match(/^data:\s*(.+)$/m)||[])[1];
+    if(type==='error')throw new Error('LTX-2.5 ZeroGPU error: '+String(dataLine||event).slice(0,700));
+    if(type==='complete'&&dataLine){try{completeData=JSON.parse(dataLine)}catch{}}
+  }
+  const data=Array.isArray(completeData)?completeData:(Array.isArray(completeData?.data)?completeData.data:[]);
   const output=data[0];
   const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
-  if(!url)throw new Error('LTX-2.5 ZeroGPU no devolvió el vídeo.');
-  const response=await fetch(String(url),{signal:AbortSignal.timeout(180000)});
-  if(!response.ok)throw new Error('LTX-2.5 ZeroGPU no pudo descargar el vídeo generado ('+response.status+').');
+  if(!url)throw new Error('LTX-2.5 ZeroGPU terminó sin devolver el vídeo.');
+  const fileUrl=String(url).startsWith('http')?String(url):spaceUrl+'/gradio_api/file='+String(url).replace(/^\//,'');
+  const response=await fetch(fileUrl,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(180000)});
+  if(!response.ok)throw new Error('LTX-2.5 ZeroGPU no pudo descargar el vídeo ('+response.status+').');
   const outputPath=path.join(dir,'ltx25-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
   if(response.body?.getReader){
     const handle=await fs.open(outputPath,'w');
