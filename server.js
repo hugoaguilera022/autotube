@@ -1401,6 +1401,16 @@ async function generateWan22RestVideoClip(prompt,dir,options={}) {
   if(!uploaded)throw new Error('Wan2.2 upload no devolvió ruta.');
   const fileData={path:String(uploaded),meta:{_type:'gradio.FileData'},orig_name:path.basename(imagePath)};
   const headers={'Content-Type':'application/json'}; if(token)headers.Authorization='Bearer '+token;
+  const uploadHeaders={}; if(token)uploadHeaders.Authorization='Bearer '+token;
+  const form=new FormData();
+  form.append('files',new Blob([imageBytes],{type:mime}),path.basename(imagePath));
+  const upload=await fetch(space+'/gradio_api/upload',{method:'POST',headers:uploadHeaders,body:form,signal:AbortSignal.timeout(30000)});
+  const uploadText=await upload.text();
+  if(!upload.ok)throw new Error('Wan2.2 REST upload HTTP '+upload.status+': '+uploadText.slice(0,900));
+  let uploadParsed=null;try{uploadParsed=JSON.parse(uploadText)}catch{}
+  const uploadedPath=Array.isArray(uploadParsed)?uploadParsed[0]:uploadParsed?.path||uploadParsed?.[0];
+  if(!uploadedPath)throw new Error('Wan2.2 REST upload no devolvió path: '+uploadText.slice(0,900));
+  const imageFile={path:String(uploadedPath),meta:{_type:'gradio.FileData'},orig_name:path.basename(imagePath)};
   let data;
   if(options.mode==='openking'){
     data=[String(prompt||'').trim(),fileData,4,'blurry, jittery, distorted anatomy, text, logos, watermark',3,1,1,Math.floor(Math.random()*2147483647),true];
