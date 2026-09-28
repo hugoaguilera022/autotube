@@ -2701,6 +2701,46 @@ app.get('/api/url-to-video/:jobId/download',async(req,res)=>{
   catch{res.status(404).json({ok:false,error:'El MP4 ya no está disponible. Genera un nuevo job.'})}
 });
 
+app.post('/api/ai/story-clip',async(req,res)=>{
+  const body=req.body||{};
+  const scene=body.scene&&typeof body.scene==='object'?body.scene:{};
+  const referenceProfile=body.referenceProfile&&typeof body.referenceProfile==='object'?body.referenceProfile:{};
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-story-'));
+  try{
+    const prompt=[
+      'Create ONE original cinematic 16:9 illustration for this story scene.',
+      String(scene.visualPrompt||scene.title||'original cinematic scene'),
+      String(scene.animationNotes||''),
+      String(scene.cameraMovement||''),
+      referenceProfile?.videoProfile?.visualStyle&&('visual language: '+referenceProfile.videoProfile.visualStyle),
+      referenceProfile?.videoProfile?.composition&&('composition: '+referenceProfile.videoProfile.composition),
+      referenceProfile?.videoProfile?.palette&&('palette: '+referenceProfile.videoProfile.palette),
+      referenceProfile?.videoProfile?.lighting&&('lighting: '+referenceProfile.videoProfile.lighting),
+      'Completely new material. Do not reproduce identifiable frames, characters, logos, text, brands or copyrighted artwork.'
+    ].filter(Boolean).join('; ');
+    let image;
+    try{
+      image=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
+    }catch(primaryErr){
+      image=await generatePollinationsOriginalImage(prompt,dir,{width:854,height:480});
+    }
+    const output=path.join(dir,'story-scene.mp4');
+    const seconds=Math.max(1,Math.min(30,Number(scene.duration)||5));
+    await new Promise((resolve,reject)=>{
+      const vf='scale=854:480:force_original_aspect_ratio=increase,crop=854:480,zoompan=z=1+0.0012*on:d=1:s=854x480:fps=20,format=yuv420p';
+      const p=spawn(ffmpegPath,['-hide_banner','-loglevel','error','-loop','1','-i',image.outputPath,'-vf',vf,'-t',String(seconds),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart',output]);
+      let err='';p.stderr.on('data',d=>err+=d);p.on('close',code=>code===0?resolve(true):reject(new Error('Story image animation FFmpeg '+code+': '+err.slice(0,700))));
+    });
+    await validateGeneratedVideoClip(output);
+    res.setHeader('Content-Type','video/mp4');
+    res.setHeader('Content-Disposition','inline; filename="autotube-story-scene.mp4"');
+    return res.sendFile(output);
+  }catch(err){
+    return res.status(503).json({ok:false,error:err?.message||String(err)});
+  }finally{
+    setTimeout(()=>fs.rm(dir,{recursive:true,force:true}).catch(()=>{}),1500);
+  }
+});
 app.get('/api/full-pipeline-test',async(req,res)=>{
   const reference=String(req.query?.reference||'').trim();
   if(!reference)return res.status(400).json({ok:false,error:'Añade ?reference=https://www.youtube.com/watch?v=...'});
