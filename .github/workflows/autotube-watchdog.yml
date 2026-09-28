@@ -46,8 +46,18 @@ jobs:
               age=$((now-created_ts))
               idle=$((now-updated_ts))
 
-              if [ "$age" -ge 600 ] || [ "$idle" -ge 600 ]; then
-                echo "Cancelling stale canonical run $id (age=${age}s idle=${idle}s)."
+              # Queued/pending runs have no stage progress, so 10m is enough.
+              # In-progress generation can legitimately take much longer; only cancel
+              # it after 30m from creation, not after a short idle interval.
+              status="$(echo "$runs" | jq -r --arg id "$id" '.[] | select((.databaseId|tostring)==$id) | .status')"
+              stale=0
+              if [ "$status" = "pending" ] || [ "$status" = "queued" ]; then
+                [ "$age" -ge 600 ] && stale=1
+              elif [ "$status" = "in_progress" ]; then
+                [ "$age" -ge 1800 ] && stale=1
+              fi
+              if [ "$stale" -eq 1 ]; then
+                echo "Cancelling stale canonical run $id (status=$status age=${age}s idle=${idle}s)."
                 if gh run cancel "$id" --repo "$REPOSITORY" --force; then
                   stale_cancelled=1
                 else
