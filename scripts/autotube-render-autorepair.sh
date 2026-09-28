@@ -31,7 +31,7 @@ Preserve real AI video generation, reference analysis, strict motion/video/MP4 Q
 Never replace AI video with static images, stock, pan/zoom or fake video.
 Never weaken validation. Do not change secrets, authentication, billing, permissions, repository, branch, or paid-plan settings.
 Workflow files MAY be changed whenever the required web/production fix needs a change in GitHub automation or deployment configuration, not only when the workflow itself caused the failure; changes must be necessary, validated, and must not alter secrets/permissions.
-Render operational configuration changes ARE allowed when they are required to repair the service: safe start/build command, health check, or non-secret AUTOTUBE_* operational environment variables.
+Render configuration changes ARE allowed whenever they are required to implement the web/production solution, not only when Render caused the failure. This includes safe start/build command, health check, non-secret AUTOTUBE_* operational environment variables, service runtime configuration, and other non-billing operational settings supported by the Render API. The repair agent may choose GitHub, Render, or both according to where the solution must be implemented.
 Never create or modify secret/token/key/password values. If a secret is missing, return NO_SAFE_PATCH rather than inventing it.
 Maximum 2 existing application files. No new dependency unless clearly necessary. Keep valid Node.js.
 
