@@ -1,93 +1,21 @@
 name: AutoTube autonomous code repair
-
 on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
-
-concurrency:
-  group: autotube-autonomous-code-repair
-  cancel-in-progress: false
-
 permissions:
   actions: write
   contents: write
   issues: write
-
 jobs:
   repair:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - name: Inspect recent canonical E2E failures
-        id: inspect
+      - uses: actions/checkout@v4
+      - name: Repair failed canonical E2E
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          runs="$(gh run list --repo "$REPOSITORY" --workflow "AutoTube real YouTube to MP4 E2E" --limit 8 --json databaseId,status,conclusion,headSha,createdAt,updatedAt)"
-          completed="$(echo "$runs" | jq '[.[] | select(.status=="completed")]')"
-          latest="$(echo "$completed" | jq '.[0] // empty')"
-          if [ -z "$latest" ] || [ "$(echo "$latest" | jq -r '.conclusion')" = "success" ]; then echo 'REPAIR_RESULT=skip' >> "$GITHUB_OUTPUT"; exit 0; fi
-          count="$(echo "$completed" | jq '[.[0:3][] | select(.conclusion=="failure")] | length')"
-          if [ "$count" -lt 3 ]; then echo 'REPAIR_RESULT=waiting' >> "$GITHUB_OUTPUT"; exit 0; fi
-          run_id="$(echo "$latest" | jq -r '.databaseId')"
-          gh run view "$run_id" --repo "$REPOSITORY" --log > failure.log || true
-          tail -n 1600 failure.log > failure-tail.log
-          echo 'REPAIR_RESULT=ready' >> "$GITHUB_OUTPUT"
-
-      - name: Checkout current main
-        if: ${{ steps.inspect.outputs.REPAIR_RESULT == 'ready' }}
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 2
-
-      - name: Generate bounded Gemini repair patch
-        id: patch
-        if: ${{ steps.inspect.outputs.REPAIR_RESULT == 'ready' }}
-        env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GEMINI_API_KEY:-}" ]; then echo 'REPAIR_RESULT=missing_gemini_secret' >> "$GITHUB_OUTPUT"; exit 0; fi
-          python - <<'PY'
-          import json,os,urllib.request
-          log=open('failure-tail.log','r',errors='replace').read()
-          prompt='''Repair AutoTube from the concrete failure below. Return ONLY a unified git diff or NO_SAFE_PATCH. Make the smallest safe fix. Preserve real AI video generation, animated-motion validation, reference analysis and final MP4 validation. Never add static-image, stock, pan/zoom or fake-video fallback. Never weaken validation. Never modify .github/workflows, secrets, authentication, billing or deployment permissions. At most 2 existing application files. No new dependency unless proven missing.\n\nFAILURE LOG:\n'''+log
-          payload={'contents':[{'parts':[{'text':prompt}]}],'generationConfig':{'temperature':0.0,'maxOutputTokens':12000}}
-          req=urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key='+os.environ['GEMINI_API_KEY'],data=json.dumps(payload).encode(),headers={'content-type':'application/json'},method='POST')
-          with urllib.request.urlopen(req,timeout=90) as r: data=json.load(r)
-          out=data['candidates'][0]['content']['parts'][0]['text'].strip()
-          if out.startswith('```'): out=out.split('\n',1)[1].rsplit('\n',1)[0]
-          open('repair.patch','w').write(out+'\n')
-          PY
-          if grep -qx 'NO_SAFE_PATCH' repair.patch; then echo 'REPAIR_RESULT=no_safe_patch' >> "$GITHUB_OUTPUT"; exit 0; fi
-          git apply --check repair.patch && git apply repair.patch
-          node --check server.js
-          for f in $(git diff --name-only --diff-filter=AM | grep -E '\.m?js$' || true); do node --check "$f"; done
-          npm install --ignore-scripts --no-audit --no-fund
-          git diff --check
-          changed="$(git diff --name-only)"
-          count="$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l)"
-          if [ "$count" -gt 2 ] || printf '%s\n' "$changed" | grep -Eq '(^|/)(\.github/|\.env|package-lock\.json$)'; then git reset --hard HEAD; echo 'REPAIR_RESULT=rejected_scope' >> "$GITHUB_OUTPUT"; exit 0; fi
-          if git diff --quiet; then echo 'REPAIR_RESULT=no_change' >> "$GITHUB_OUTPUT"; exit 0; fi
-          git config user.name 'AutoTube Repair Bot'; git config user.email 'actions@users.noreply.github.com'
-          git add -A && git commit -m '[autotube-auto-repair] fix canonical E2E failure' && git push origin HEAD:main
-          echo 'REPAIR_RESULT=patched' >> "$GITHUB_OUTPUT"
-
-      - name: Restart canonical E2E after repair
-        if: ${{ steps.patch.outputs.REPAIR_RESULT == 'patched' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-        run: gh workflow run "AutoTube real YouTube to MP4 E2E" --repo "$REPOSITORY" --ref main
-
-      - name: Open issue if repair is blocked
-        if: ${{ steps.inspect.outputs.REPAIR_RESULT == 'ready' && steps.patch.outputs.REPAIR_RESULT != 'patched' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          RESULT: ${{ steps.patch.outputs.REPAIR_RESULT || 'unknown' }}
-        run: gh issue create --repo "$REPOSITORY" --title "AutoTube autonomous repair needs attention" --body "Three canonical E2E failures occurred and no safe automatic patch was applied. Result: $RESULT"
+        run: bash scripts/autotube-autorepair.sh
