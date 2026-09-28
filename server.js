@@ -705,19 +705,54 @@ async function generateNarrationTts(text,language='es',voiceStyle='Natural y cer
 const generateGeminiTts=generateNarrationTts;
 
 const originalImageProviderState=new Map();
-function originalImageCooldownActive(provider='gemini'){return Date.now()<Number(originalImageProviderState.get(provider)||0);}
-function noteOriginalImageCooldown(provider='gemini',ms=120000){originalImageProviderState.set(provider,Date.now()+Math.max(15000,Number(ms)||120000));}
-function classifyOriginalImageError(err){const m=String(err?.message||err||'').toLowerCase();if(/429|quota|rate limit|too many requests/.test(m))return'quota';if(/401|403|api key|unauthori/.test(m))return'auth';if(/timeout|timed out|econnreset|eai_again|socket hang up/.test(m))return'network';return'other';}
+function originalImageState(provider='unknown'){const key=String(provider||'unknown');if(!originalImageProviderState.has(key))originalImageProviderState.set(key,{cooldownUntil:0,failures:0,lastError:'',lastFailureAt:0,lastSuccessAt:0});return originalImageProviderState.get(key);}
+function originalImageCooldownActive(provider='unknown'){return Date.now()<Number(originalImageState(provider).cooldownUntil||0);}
+function noteOriginalImageCooldown(provider='unknown',ms=120000,err=''){const st=originalImageState(provider);st.cooldownUntil=Date.now()+Math.max(15000,Number(ms)||120000);st.failures++;st.lastFailureAt=Date.now();st.lastError=String(err||'');}
+function noteOriginalImageSuccess(provider='unknown'){const st=originalImageState(provider);st.cooldownUntil=0;st.failures=0;st.lastSuccessAt=Date.now();st.lastError='';}
+function classifyOriginalImageError(err){const m=String(err?.message||err||'').toLowerCase();if(/429|quota|rate limit|too many requests|limit: 0/.test(m))return'quota';if(/401|403|api key|unauthori|forbidden/.test(m))return'auth';if(/404|model.*not found|unsupported model/.test(m))return'model';if(/timeout|timed out|econnreset|eai_again|socket hang up|network/.test(m))return'network';if(/500|502|503|504|service unavailable|temporarily unavailable/.test(m))return'capacity';return'other';}
+async function validateGeneratedOriginalImage(file){
+  const probe=await new Promise((resolve,reject)=>{const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-f','null','-'],{stdio:['ignore','pipe','pipe']});let e='';p.stderr.on('data',d=>{e+=d.toString();if(e.length>12000)e=e.slice(-12000)});p.on('error',reject);p.on('close',code=>code===0?resolve(e):reject(new Error('Imagen inválida para FFmpeg: '+e.slice(-1200))));});
+  const stat=await fs.stat(file);if(stat.size<1000)throw new Error('Imagen generada demasiado pequeña.');
+  const t=String(probe);const vm=t.split(/\r?\n/).find(x=>/Video:/i.test(x))||'';const size=vm.match(/(\d{2,5})x(\d{2,5})/);if(!size)throw new Error('No se pudo verificar la resolución de la imagen.');
+  return{ok:true,width:Number(size[1]),height:Number(size[2]),bytes:stat.size};
+}
+async function generateHuggingFaceOriginalImage(prompt,dir,options={}){
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  if(!token)throw new Error('HF image token no configurado.');
+  const model=String(options.model||process.env.AUTOTUBE_HF_IMAGE_MODEL||'black-forest-labs/FLUX.1-schnell').trim();
+  const response=await fetch('https://router.huggingface.co/hf-inference/models/'+encodeURIComponent(model),{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',Accept:'image/png'},body:JSON.stringify({inputs:String(prompt||'').trim(),parameters:{width:Number(options.width)||854,height:Number(options.height)||480,num_inference_steps:4}}),signal:AbortSignal.timeout(120000)});
+  const contentType=String(response.headers.get('content-type')||'').toLowerCase();const raw=await response.arrayBuffer();
+  if(!response.ok){let detail='';try{detail=Buffer.from(raw).toString('utf8').slice(0,600)}catch{}throw new Error('Hugging Face image '+response.status+': '+detail);}
+  if(!contentType.startsWith('image/'))throw new Error('Hugging Face no devolvió una imagen ('+contentType+').');
+  const bytes=Buffer.from(raw);if(bytes.length<1000)throw new Error('Hugging Face devolvió una imagen vacía.');
+  const outputPath=path.join(dir,'hf-original-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.png');await fs.writeFile(outputPath,bytes);await validateGeneratedOriginalImage(outputPath);
+  return{outputPath,bytes:bytes.length,provider:'Hugging Face Inference · '+model,model,status:'complete'};
+}
 async function generateOriginalImageWithCascade(prompt,dir,options={}){
   const errors=[];
-  if(!originalImageCooldownActive('gemini')){
-    try{return await generateGeminiOriginalImage(prompt,dir,{model:String(options.geminiModel||'gemini-2.5-flash-image')});}
-    catch(err){const kind=classifyOriginalImageError(err);errors.push('Gemini: '+String(err?.message||err));if(kind==='quota'||kind==='auth')noteOriginalImageCooldown('gemini',kind==='quota'?24*60*60*1000:15*60*1000);console.warn('[OriginalImageCascade] Gemini failed; advancing to next provider:',String(err?.message||err));}
-  }else errors.push('Gemini: cooldown activo');
-  if(!originalImageCooldownActive('pollinations')){
-    try{return await generatePollinationsOriginalImage(prompt,dir,{width:Number(options.width)||854,height:Number(options.height)||480});}
-    catch(err){errors.push('Pollinations: '+String(err?.message||err));noteOriginalImageCooldown('pollinations',classifyOriginalImageError(err)==='quota'?5*60*1000:60000);console.warn('[OriginalImageCascade] Pollinations failed:',String(err?.message||err));}
-  }else errors.push('Pollinations: cooldown activo');
+  const providers=[
+    ...(String(process.env.AUTOTUBE_ALLOW_HF_IMAGE||'1')!=='0'&&(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['huggingface']:[]),
+    'gemini',
+    'pollinations'
+  ];
+  for(const provider of providers){
+    if(originalImageCooldownActive(provider)){errors.push(provider+': cooldown activo');continue;}
+    try{
+      let image;
+      if(provider==='huggingface')image=await generateHuggingFaceOriginalImage(prompt,dir,{model:options.hfModel,width:Number(options.width)||854,height:Number(options.height)||480});
+      else if(provider==='gemini')image=await generateGeminiOriginalImage(prompt,dir,{model:String(options.geminiModel||'gemini-2.5-flash-image')});
+      else image=await generatePollinationsOriginalImage(prompt,dir,{width:Number(options.width)||854,height:Number(options.height)||480});
+      await validateGeneratedOriginalImage(image.outputPath);
+      noteOriginalImageSuccess(provider);
+      console.log('[OriginalImageCascade] provider success:',provider,image.model||'');
+      return{...image,providerKey:provider,generationType:'ai-image'};
+    }catch(err){
+      const kind=classifyOriginalImageError(err);const msg=String(err?.message||err);errors.push(provider+': '+kind+': '+msg.slice(0,700));
+      const cooldown=kind==='quota'?24*60*60*1000:kind==='auth'||kind==='model'?60*60*1000:kind==='capacity'||kind==='network'?90000:60000;
+      noteOriginalImageCooldown(provider,cooldown,msg);
+      console.warn('[OriginalImageCascade] '+provider+' failed; provider quarantined for '+Math.round(cooldown/1000)+'s; advancing:',msg);
+    }
+  }
   throw new Error('ORIGINAL_IMAGE_PROVIDERS_EXHAUSTED: '+errors.join(' | '));
 }
 
@@ -2690,12 +2725,7 @@ app.post('/api/ai/story-clip',async(req,res)=>{
       referenceProfile?.videoProfile?.lighting&&('lighting: '+referenceProfile.videoProfile.lighting),
       'Completely new material. Do not reproduce identifiable frames, characters, logos, text, brands or copyrighted artwork.'
     ].filter(Boolean).join('; ');
-    let image;
-    try{
-      image=await generateGeminiOriginalImage(prompt,dir,{model:'gemini-2.5-flash-image'});
-    }catch(primaryErr){
-      image=await generatePollinationsOriginalImage(prompt,dir,{width:854,height:480});
-    }
+    const image=await generateOriginalImageWithCascade(prompt,dir,{width:854,height:480});
     const output=path.join(dir,'story-scene.mp4');
     const seconds=Math.max(1,Math.min(30,Number(scene.duration)||5));
     await new Promise((resolve,reject)=>{
