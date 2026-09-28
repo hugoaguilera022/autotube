@@ -776,6 +776,54 @@ async function generateHuggingFaceProviderVideoClip(prompt,dir,options={}) {
   }finally{clearTimeout(timer)}
 }
 
+async function generateHuggingFaceVideoModelCascade(prompt,dir,options={}) {
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  if(!token)throw new Error('HF_TOKEN no configurado.');
+  const duration=Math.max(2,Math.min(5,Number(options.durationSeconds)||3));
+  const imagePath=String(options.firstFramePath||'').trim();
+  const models=[
+    process.env.HF_VIDEO_MODEL,
+    'Wan-AI/Wan2.2-T2V-A14B',
+    'Wan-AI/Wan2.2-I2V-A14B',
+    'Lightricks/LTX-2.3',
+    'tencent/HunyuanVideo-I2V',
+    'tencent/HunyuanVideo-1.5',
+    'THUDM/CogVideoX1.5-5B',
+    'genmo/mochi-1-preview'
+  ].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
+  const providers=[
+    process.env.HF_VIDEO_PROVIDER,
+    'fal-ai',
+    'replicate',
+    'hf-inference'
+  ].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
+  const errors=[];
+  const {InferenceClient}=require('@huggingface/inference');
+  const client=new InferenceClient(token);
+  for(const model of models){
+    for(const provider of providers){
+      try{
+        let blob;
+        if(imagePath && /I2V|HunyuanVideo-I2V|Wan2\.2-I2V/i.test(model)){
+          blob=await client.imageToVideo({provider,model,image:await fs.readFile(imagePath),inputs:String(prompt||'').trim()});
+        }else{
+          blob=await client.textToVideo({provider,model,inputs:String(prompt||'').trim()});
+        }
+        const bytes=Buffer.from(await blob.arrayBuffer());
+        if(bytes.length<10000)throw new Error('respuesta de vídeo vacía');
+        const outputPath=path.join(dir,'hf-cascade-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+        await fs.writeFile(outputPath,bytes);
+        await validateGeneratedVideoClip(outputPath);
+        return{outputPath,bytes:bytes.length,provider:'Hugging Face Inference Providers · '+provider,model,durationSeconds:duration,status:'complete'};
+      }catch(err){
+        errors.push(model+'@'+provider+': '+String(err?.message||err).slice(0,260));
+        console.warn('HF high-quality model failed:',model,provider,err?.message||String(err));
+      }
+    }
+  }
+  throw new Error('Ningún modelo HF de alta calidad disponible: '+errors.join(' | '));
+}
+
 async function generateFreeLtx25VideoClip(prompt,dir,options={}) {
   const {Client,handle_file}=require('@gradio/client');
   const configured=String(process.env.LTX25_SPACE_URL||'').trim().replace(/\/$/,'');
@@ -1476,6 +1524,7 @@ async function executeFullPipelineTest(reference,testId=null){
             const pollinationsAttempt=async()=>generatePollinationsVideoClip(prompt,dir,{durationSeconds:Math.min(5,Math.max(3,Number(scene.duration)||4)),aspectRatio:'16:9'});
             const attempts=i===0
               ? [
+                  async()=>generateHuggingFaceVideoModelCascade(prompt,dir,{durationSeconds:3}),
                   async()=>generateHuggingFaceProviderVideoClip(prompt,dir,{durationSeconds:3}),
                   pollinationsAttempt,
                   async()=>generateFreeWanVace13VideoClip(prompt,dir,{durationSeconds:5,firstFramePath:await (async()=>{
@@ -1496,8 +1545,8 @@ async function executeFullPipelineTest(reference,testId=null){
                   })()})
                 ];
             const modelNames=i===0
-              ? ['HuggingFace','Pollinations','Wan2.1-VACE-1.3B','LTX-2.5','Wan2.1-T2V-1.3B']
-              : ['HuggingFace','Pollinations','LTX-2.5','Wan2.1-T2V-1.3B','Wan2.1-VACE-1.3B'];
+              ? ['HF high-quality cascade (Wan2.2/LTX-2.3/Hunyuan/CogVideoX/Mochi)','HuggingFace','Pollinations','Wan2.1-VACE-1.3B','LTX-2.5','Wan2.1-T2V-1.3B']
+              : ['HF high-quality cascade (Wan2.2/LTX-2.3/Hunyuan/CogVideoX/Mochi)','HuggingFace','Pollinations','LTX-2.5','Wan2.1-T2V-1.3B','Wan2.1-VACE-1.3B'];
             for(let attempt=0;attempt<attempts.length;attempt++){
               try{
                 clip=await attempts[attempt]();
