@@ -1223,21 +1223,21 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       try{
         const clip=await generateHuggingFaceProviderVideoClip(prompt,dir,options);
         const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);
-        return{...clip,providerKey:provider,validation};
+        return{...clip,providerKey:provider,generationType:'ai-video',validation};
       }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
     }
     if(provider==='Replicate'){
       try{
         const clip=await generateReplicateOfficialVideoClip(prompt,dir,options);
         const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);
-        return{...clip,providerKey:provider,validation};
+        return{...clip,providerKey:provider,generationType:'ai-video',validation};
       }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
     }
     if(provider==='Pollinations'){
       try{
         const clip=await generatePollinationsVideoClip(prompt,dir,options);
         const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);
-        return{...clip,providerKey:provider,validation};
+        return{...clip,providerKey:provider,generationType:'ai-video',validation};
       }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
     }
     if(!providerAvailable(provider))continue;
@@ -1252,7 +1252,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       const validation=await validateGeneratedVideoClip(clip.outputPath);
       if(!validation.ok)throw new Error('Clip IA inválido después de generarlo.');
       noteProviderSuccess(provider);
-      return{...clip,providerKey:provider,validation};
+      return{...clip,providerKey:provider,generationType:'ai-video',validation};
     }catch(err){
       const kind=classifyVideoProviderError(err); noteProviderFailure(provider,err);
       errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));
@@ -1267,7 +1267,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       const clip=await generateLocalMotionFallbackClip(dir,{...options,firstFramePath:referenceFramePath});
       const validation=await validateGeneratedVideoClip(clip.outputPath);
       if(!validation.ok)throw new Error('El fallback local no pasó la validación.');
-      return{...clip,providerKey:'Local-FFmpeg',validation,fallback:true,providerFailures:errors};
+      return{...clip,providerKey:'Local-FFmpeg',generationType:'deterministic-fallback',validation,fallback:true,providerFailures:errors};
     }catch(err){
       errors.push('Local-FFmpeg: '+String(err.message||err).slice(0,500));
     }
@@ -1275,6 +1275,8 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: ningún proveedor de vídeo IA ni fallback local pudo generar un clip válido. '+errors.join(' | '));
 }
 
+function requireRealAiVideoGeneration(){return String(process.env.AUTOTUBE_REQUIRE_REAL_AI_VIDEO??'1').trim()!=='0';}
+function classifyGenerationType(clip){return String(clip?.generationType||clip?.providerKey||clip?.provider||'').toLowerCase().includes('local-ffmpeg')?'deterministic-fallback':'ai-video';}
 async function generateLocalMotionFallbackClip(dir,options={}) {
   const sourcePath=String(options.firstFramePath||options.sceneImagePath||'').trim();
   if(!sourcePath)throw new Error('Fallback local requiere una imagen de escena.');
@@ -2238,11 +2240,13 @@ async function executeUrlToVideo(reference,jobId,options={}){
         if(style.constantImage)throw new Error('La referencia es de imagen constante; el modo gratuito exige vídeo IA real y no usa animación de imagen.');
         const duration=Math.min(8.5,Math.max(3,Number(scene.duration)||5));
         const clip=await generateBestFreeVideoClip(dnaPrompt,dir,{durationSeconds:duration,width:704,height:396,improveTexture:false,sceneIndex:i,firstFramePath});
-        aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model,providerKey:clip.providerKey,validation:clip.validation};
+        aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model,providerKey:clip.providerKey,generationType:clip.generationType||classifyGenerationType(clip),validation:clip.validation};
         mediaResults[i]={number:scene.number,media:[{provider:clip.provider,id:'generated-video-'+scene.number,title:'Original AI video clip',duration,downloadUrl:clip.outputPath,mediaType:'video',model:clip.model}],generatedAsset:true};
         if(job)job.providerHealth=Object.fromEntries([...videoProviderState.entries()].map(([k,v])=>[k,{...v}]));
       }
       if(aiClips.length!==scenes.length||aiClips.some(x=>!x?.path))throw new Error('La generación no produjo un clip de vídeo IA válido para cada escena.');
+      const fallbackScenes=aiClips.map((x,i)=>({scene:Number(scenes[i]?.number||i+1),generationType:x?.generationType||classifyGenerationType(x),provider:x?.providerKey||x?.provider||''})).filter(x=>x.generationType!=='ai-video');
+      if(requireRealAiVideoGeneration()&&fallbackScenes.length){throw new Error('REAL_AI_VIDEO_REQUIRED: '+fallbackScenes.map(x=>'escena '+x.scene+' ('+x.provider+')').join(', ')+' solo pudo generarse con fallback determinista. El E2E real exige vídeo generado por IA; se debe probar otra vía/proveedor.');}
     } catch(err) {finishFreeVideoGeneration(false);throw err;}
         if(job)job.progress=48;
 
