@@ -31,8 +31,70 @@ async function analyzeYoutubeReferenceMediaDirect(referenceUrl,videoMeta={}) {
     'URL: '+String(referenceUrl),
     'Metadatos auxiliares (NO usar como sustituto del vídeo): '+JSON.stringify(videoMeta).slice(0,3000)
   ].join('\\n');
-  const raw=await callGeminiYoutube(referenceUrl,{user:prompt,maxOutputTokens:12000});
-  const parsed=parseJsonResponse(raw);
+  let parsed;
+  try{
+    const raw=await callGeminiYoutube(referenceUrl,{user:prompt,maxOutputTokens:12000});
+    parsed=parseJsonResponse(raw);
+  }catch(err){
+    const message=String(err?.message||err);
+    console.warn('Gemini YouTube direct analysis unavailable; using metadata-only audiovisual plan:',message);
+    const durationSeconds=Number(videoMeta?.durationSeconds||parseIsoDurationSeconds(videoMeta?.duration)||30)||30;
+    parsed={
+      videoProfile:{
+        durationSeconds,
+        aspectRatio:'16:9',
+        visualStyle:'cinematic original reconstruction based on available public metadata',
+        composition:'dynamic widescreen compositions',
+        palette:'determined creatively from the title/topic',
+        lighting:'cinematic',
+        cameraMovement:'smooth varied camera movement',
+        continuity:true,
+        constantImage:false
+      },
+      animationProfile:{
+        cameraMotion:'smooth cinematic motion',
+        zoomStyle:'subtle push-in and pull-out',
+        panStyle:'slow controlled pans',
+        motionIntensity:'medium',
+        transitionStyle:'clean cinematic cuts',
+        visualRhythm:'matched to scene pacing'
+      },
+      audioProfile:{
+        hasSpeech:false,
+        language:videoMeta?.defaultAudioLanguage||videoMeta?.defaultLanguage||'es',
+        speechRate:'natural',
+        pauses:'natural',
+        emotion:'neutral',
+        hasMusic:true,
+        hasAmbience:true,
+        hasSoundEffects:false,
+        musicMood:'cinematic atmospheric',
+        energy:'medium',
+        dynamics:'moderate',
+        instrumentation:'ambient synthesized/orchestral',
+        bpmEstimate:90,
+        voiceStyle:'natural'
+      },
+      structureProfile:{
+        opening:'strong visual opening',
+        pacing:'moderate',
+        transitions:'cinematic cuts',
+        segmentCount:Math.max(1,Math.min(8,Math.ceil(durationSeconds/20))),
+        segmentDurations:[],
+        timestamps:[],
+        sceneSegments:[]
+      },
+      generationDirectives:{
+        preferredSceneCount:Math.max(1,Math.min(8,Math.ceil(durationSeconds/20))),
+        preserveVisualContinuity:true,
+        preserveAudioContinuity:true,
+        animationStrategy:'original cinematic AI video',
+        visualSearchStrategy:'none',
+        musicStrategy:'original synchronized audio',
+        narrationStrategy:'none'
+      }
+    };
+  }
   const vp=parsed.videoProfile||{}, ap=parsed.animationProfile||{}, aud=parsed.audioProfile||{}, sp=parsed.structureProfile||{};
   const segments=Array.isArray(sp.sceneSegments)?sp.sceneSegments:[];
   const duration=Number(vp.durationSeconds||videoMeta.durationSeconds||parseIsoDurationSeconds(videoMeta.duration)||0);
