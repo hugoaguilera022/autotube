@@ -815,26 +815,54 @@ async function generatePollinationsVideoClip(prompt,dir,options={}) {
 async function generateHuggingFaceProviderVideoClip(prompt,dir,options={}) {
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   if(!token)throw new Error('HF_TOKEN no configurado.');
-  const model=String(process.env.HF_VIDEO_MODEL||'Wan-AI/Wan2.1-T2V-1.3B').trim();
-  const provider=String(process.env.HF_VIDEO_PROVIDER||'fal-ai').trim();
-  const duration=Math.max(2,Math.min(4,Number(options.durationSeconds)||3));
-  const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(new Error('HF video timeout')),240000);
-  try{
-    const {InferenceClient}=require('@huggingface/inference');
-    const client=new InferenceClient(token);
-    const blob=await client.textToVideo({
-      provider,
-      model,
-      inputs:String(prompt||'').trim()
-    });
-    const bytes=Buffer.from(await blob.arrayBuffer());
-    if(bytes.length<10000)throw new Error('Hugging Face devolvió un vídeo vacío.');
-    const outputPath=path.join(dir,'hf-provider-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-    await fs.writeFile(outputPath,bytes);
-    await validateGeneratedVideoClip(outputPath);
-    return{outputPath,bytes:bytes.length,provider:'Hugging Face Inference Providers · '+provider,model,durationSeconds:duration,status:'complete'};
-  }finally{clearTimeout(timer)}
+  const configuredModel=String(process.env.HF_VIDEO_MODEL||'').trim();
+  const configuredProvider=String(process.env.HF_VIDEO_PROVIDER||'').trim();
+  const duration=Math.max(2,Math.min(5,Number(options.durationSeconds)||3));
+  const imagePath=String(options.firstFramePath||'').trim();
+  const candidates=[
+    ...(configuredModel?[{model:configuredModel,provider:configuredProvider||'auto'}]:[]),
+    {model:'Wan-AI/Wan2.1-T2V-1.3B',provider:'fal-ai'},
+    {model:'Wan-AI/Wan2.2-TI2V-5B',provider:'replicate'},
+    {model:'Wan-AI/Wan2.2-I2V-A14B',provider:'fal-ai'},
+    {model:'Lightricks/LTX-Video-0.9.8-13B-distilled',provider:'fal-ai'}
+  ];
+  const unique=candidates.filter((x,i,a)=>a.findIndex(y=>y.model===x.model&&y.provider===x.provider)===i);
+  const errors=[];
+  const {InferenceClient}=require('@huggingface/inference');
+  for(const candidate of unique){
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(new Error('HF video timeout')),240000);
+    try{
+      const client=new InferenceClient(token);
+      let blob;
+      const wantsI2V=Boolean(imagePath)&&/I2V|TI2V|image-to-video/i.test(candidate.model);
+      if(wantsI2V){
+        blob=await client.imageToVideo({
+          provider:candidate.provider,
+          model:candidate.model,
+          image:await fs.readFile(imagePath),
+          prompt:String(prompt||'').trim()
+        });
+      }else{
+        blob=await client.textToVideo({
+          provider:candidate.provider,
+          model:candidate.model,
+          inputs:String(prompt||'').trim()
+        });
+      }
+      const bytes=Buffer.from(await blob.arrayBuffer());
+      if(bytes.length<10000)throw new Error('Hugging Face devolvió un vídeo vacío.');
+      const outputPath=path.join(dir,'hf-provider-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+      await fs.writeFile(outputPath,bytes);
+      const validation=await validateGeneratedVideoClip(outputPath);
+      if(!validation.ok)throw new Error('Vídeo HF inválido después de generarlo.');
+      return{outputPath,bytes:bytes.length,provider:'Hugging Face Inference Providers · '+candidate.provider,model:candidate.model,durationSeconds:duration,status:'complete',routeMode:wantsI2V?'I2V':'T2V'};
+    }catch(err){
+      errors.push(candidate.model+'@'+candidate.provider+': '+String(err?.message||err).slice(0,320));
+      console.warn('HF video candidate failed:',candidate.model,candidate.provider,err?.message||String(err));
+    }finally{clearTimeout(timer)}
+  }
+  throw new Error('Ninguna ruta HF de vídeo disponible: '+errors.join(' | '));
 }
 
 async function generateHuggingFaceVideoModelCascade(prompt,dir,options={}) {
