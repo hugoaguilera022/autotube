@@ -470,6 +470,28 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       let audioInput=null;
       if(audio){audioInput=path.join(dir,'voice-'+i+'.wav');await downloadAudioBuffer(audio,audioInput);}
       const isImage=String(aiClip?.mediaType||media?.mediaType||found?.mediaType||scene.mediaType||'video').toLowerCase()==='image';
+      // Fast path for the autonomous AI-video pipeline: generated clips are already
+      // H.264 MP4 at 1280x720. Re-encoding every long scene was the dominant CPU
+      // cost and caused Render Free restarts. Extend by stream-copying the video
+      // and encode only a tiny silent AAC track; final music is mixed afterwards.
+      const fastAiVideo=Boolean(aiClip?.path)&&!audio&&!isImage;
+      if(fastAiVideo){
+        await runFfmpeg([
+          '-y','-hide_banner','-loglevel','error',
+          '-stream_loop','-1','-i',input,
+          '-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100',
+          '-t',String(duration),
+          '-map','0:v:0','-map','1:a:0',
+          '-c:v','copy','-c:a','aac','-b:a','96k','-ar','44100','-ac','2',
+          '-shortest','-avoid_negative_ts','make_zero','-movflags','+faststart',output
+        ]);
+        const fastStat=await fs.stat(output);
+        if(!fastStat.size)throw new Error('FFmpeg creó una escena AI vacía (escena '+scene.number+').');
+        clips.push(output);
+        console.log('AutoTube fast AI-video stream-copy scene:',scene.number,'duration=',duration,'size=',fastStat.size);
+        onProgress(Math.min(78,Math.round(((i+1)/total)*70)+5));
+        continue;
+      }
       const args=['-y','-hide_banner','-loglevel','error'];
       if(isImage)args.push('-loop','1','-i',input);else args.push('-stream_loop','-1','-i',input);
       if(audioInput)args.push('-i',audioInput);else args.push('-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=44100');
