@@ -25,7 +25,7 @@ jobs:
           set -euo pipefail
           runs="$(gh run list --repo "$REPOSITORY" --limit 30 --json databaseId,workflowName,status,conclusion,createdAt)"
           echo "$runs" | jq -r '.[] | [.databaseId,.workflowName,.status,.conclusion,.createdAt] | @tsv'
-          active="$(echo "$runs" | jq '[.[] | select((.workflowName=="AutoTube real YouTube to MP4 E2E" or .workflowName=="AutoTube bounded self-heal") and (.status=="queued" or .status=="in_progress"))] | length')"
+          active="$(echo "$runs" | jq '[.[] | select((.workflowName=="AutoTube real YouTube to MP4 E2E" or .workflowName=="AutoTube bounded self-heal" or .workflowName=="AutoTube bounded autonomous repair") and (.status=="queued" or .status=="in_progress"))] | length')"
           if [ "$active" -eq 0 ]; then
             echo "No active canonical E2E/self-heal run. Starting a fresh canonical E2E."
             gh workflow run "AutoTube real YouTube to MP4 E2E" --repo "$REPOSITORY" --ref main
