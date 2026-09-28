@@ -17,14 +17,14 @@ jobs:
   maintain:
     runs-on: ubuntu-latest
     steps:
-      - name: Keep only the canonical E2E
+      - name: Keep only the canonical pipeline
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           gh run list --repo "$REPOSITORY" --status in_progress --limit 100 --json databaseId,workflowName --jq '.[] | [.databaseId,.workflowName] | @tsv' | while IFS=$'\t' read -r id name; do
-            if [ "$name" != "AutoTube real YouTube to MP4 E2E" ] && [ "$name" != "AutoTube bounded self-heal" ]; then
+            if [ "$name" != "AutoTube real YouTube to MP4 E2E" ] && [ "$name" != "AutoTube bounded self-heal" ] && [ "$name" != "AutoTube bounded autonomous repair" ]; then
               echo "Cancelling competing run $id ($name)"
               gh run cancel "$id" --repo "$REPOSITORY" || true
             fi
