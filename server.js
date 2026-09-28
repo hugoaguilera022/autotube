@@ -1923,6 +1923,7 @@ async function executeFullPipelineTest(reference,testId=null){
       });
     }else if(resumedStages.includes('music')&&checkpoint?.musicFile){
       try{const musicBuffer=await fs.readFile(checkpoint.musicFile);music={buffer:musicBuffer,provider:'checkpoint'};}catch{invalidatePipelineCheckpoint(reference,'music');throw new Error('El checkpoint de música ya no es válido; se regenerará desde música.');}
+    }
 
     if(!resumedStages.includes('render-all-scenes')) await run('render-all-scenes',async()=>{
       const output=path.join(renderJobDir,String(testId||('fulltest_'+Date.now()))+'.mp4');
