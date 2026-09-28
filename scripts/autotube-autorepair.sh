@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
-runs="$(gh run list --repo "$REPOSITORY" --workflow "AutoTube real YouTube to MP4 E2E" --limit 8 --json databaseId,status,conclusion)"
-completed="$(echo "$runs" | jq '[.[] | select(.status=="completed")]')"
-latest="$(echo "$completed" | jq '.[0] // empty')"
-[ -n "$latest" ] || exit 0
-[ "$(echo "$latest" | jq -r .conclusion)" = "success" ] && exit 0
-count="$(echo "$completed" | jq '[.[0:3][] | select(.conclusion=="failure")] | length')"
-[ "$count" -ge 3 ] || exit 0
-[ -n "${GEMINI_API_KEY:-}" ] || { gh issue create --repo "$REPOSITORY" --title "AutoTube repair needs Gemini secret" --body "Three E2E failures detected but GEMINI_API_KEY is unavailable."; exit 0; }
-run_id="$(echo "$latest" | jq -r .databaseId)"
+run_id="${RUN_ID:-}"
+if [ -z "$run_id" ]; then
+  echo "No triggering E2E run id was supplied; refusing to guess from unrelated runs."
+  exit 0
+fi
+run_json="$(gh run view "$run_id" --repo "$REPOSITORY" --json databaseId,status,conclusion,attempt,headSha)"
+[ "$(echo "$run_json" | jq -r .conclusion)" = "failure" ] || exit 0
+attempt="$(echo "$run_json" | jq -r ".attempt // 1")"
+[ "$attempt" -ge 3 ] || exit 0
+[ -n "${GEMINI_API_KEY:-}" ] || { gh issue create --repo "$REPOSITORY" --title "AutoTube repair needs Gemini secret" --body "Canonical E2E run $run_id exhausted its retry budget, but GEMINI_API_KEY is unavailable."; exit 0; }
 gh run view "$run_id" --repo "$REPOSITORY" --log > failure.log || true
 tail -n 2200 failure.log > failure-tail.log
-signature="$(sed -E 's/[0-9]{10,}/<ID>/g; s/[0-9a-f]{7,40}/<SHA>/g' failure-tail.log | sha256sum | cut -d' ' -f1)"
+signature="$(grep -Eai 'error|failed|failure|exception|timeout|429|502|503|504|ZeroGPU|ECONNRESET|ETIMEDOUT|no se pudo|incomplete' failure-tail.log | sed -E 's/[0-9]{10,}/<ID>/g; s/[0-9a-f]{7,40}/<SHA>/g; s/[[:space:]]+/ /g' | tail -n 120 | sha256sum | cut -d' ' -f1)"
 echo "Failure signature: $signature"
 if git log --all --oneline --grep="failure-signature:$signature" -n 1 | grep -q .; then
   gh issue create --repo "$REPOSITORY" --title "AutoTube repair circuit breaker: repeated failure" --body "Same failure signature already repaired: $signature. No duplicate patch created." || true
@@ -47,4 +48,4 @@ printf "%s\n" "$changed" | grep -Eq "(^|/)\.github/|(^|/)\.env|(^|/)package-lock
 git config user.name "AutoTube Repair Bot"
 git config user.email "actions@users.noreply.github.com"
 git add -A && git commit -m "[autotube-auto-repair] fix E2E failure failure-signature:$signature" && git push origin HEAD:main
-gh workflow run "AutoTube real YouTube to MP4 E2E" --repo "$REPOSITORY" --ref main
+echo "Repair pushed to main; canonical E2E will start from the push trigger. No duplicate manual dispatch."
