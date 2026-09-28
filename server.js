@@ -633,6 +633,56 @@ async function generatePollinationsVideoClip(prompt,dir,options={}) {
   throw new Error('Pollinations no pudo generar un vídeo IA válido con ningún modelo disponible. Último error: '+(lastError?.message||'desconocido'));
 }
 
+async function generateFreeLtx25VideoClip(prompt,dir,options={}) {
+  const {Client}=require('@gradio/client');
+  const space=String(process.env.LTX25_SPACE||'Lightricks/LTX-2.5').trim();
+  const duration=Math.max(1,Math.min(2,Number(options.durationSeconds)||2));
+  const width=896;
+  const height=512;
+  const seed=Math.floor(Math.random()*2147483647);
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  const client=await Client.connect(space,token?{token}:undefined,{httpx_kwargs:{timeout:300000}});
+  const result=await client.predict('/run',[
+    String(prompt||'').trim(),
+    null,
+    height,
+    width,
+    duration,
+    seed,
+    'conv',
+    false,
+    false,
+    false
+  ]);
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  const url=typeof output==='string'?output:(output?.url||output?.path||output?.video?.url||'');
+  if(!url)throw new Error('LTX-2.5 ZeroGPU no devolvió el vídeo.');
+  const response=await fetch(String(url),{signal:AbortSignal.timeout(180000)});
+  if(!response.ok)throw new Error('LTX-2.5 ZeroGPU no pudo descargar el vídeo generado ('+response.status+').');
+  const outputPath=path.join(dir,'ltx25-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  if(response.body?.getReader){
+    const handle=await fs.open(outputPath,'w');
+    const reader=response.body.getReader();
+    let total=0;
+    try{
+      while(true){
+        const part=await reader.read();
+        if(part.done)break;
+        total+=part.value.byteLength;
+        if(total>180*1024*1024){await reader.cancel().catch(()=>{});throw new Error('El vídeo LTX-2.5 supera el límite de 180 MB.');}
+        await handle.write(Buffer.from(part.value));
+      }
+    }finally{await handle.close().catch(()=>{});}
+    if(!total)throw new Error('LTX-2.5 devolvió un vídeo vacío.');
+  }else{
+    await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+  }
+  const stat=await fs.stat(outputPath);
+  if(!stat.size)throw new Error('LTX-2.5 devolvió un vídeo vacío.');
+  return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX-2.5',model:'LTX-2.5 distilled',durationSeconds:duration,status:'complete'};
+}
+
 async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   try {
     const {Client}=require('@gradio/client');
@@ -679,7 +729,8 @@ async function generateFreeLtxVideoClip(prompt,dir,options={}) {
     return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX Video',model:'LTX Video 0.9.8 distilled',durationSeconds:duration,status:'complete'};
   } catch (ltxErr) {
     const message=String(ltxErr?.message||ltxErr);
-    console.warn('LTX video unavailable; trying Pollinations video fallback:',message);
+    console.warn('LTX Video 0.9.8 unavailable:',message);
+    if(String(process.env.AUTOTUBE_FREE_ONLY||'1').trim()!=='0')throw ltxErr;
     if(!String(process.env.POLLINATIONS_API_KEY||'').trim())throw ltxErr;
     return generatePollinationsVideoClip(prompt,dir,options);
   }
@@ -1096,37 +1147,52 @@ async function executeFullPipelineTest(reference,testId=null){
       // Generate original motion clips sequentially when LTX is available. Never run
       // scene generations concurrently on Render Free; that would spike memory/CPU.
       {
-        for(let i=0;i<plan.scenes.length;i++){
+        // Free ZeroGPU is quota-limited, so do not burn one GPU request per scene.
+        // Generate up to three distinct AI motion clips and reuse them across the
+        // storyboard with FFmpeg timing/cropping. This keeps the pipeline genuinely
+        // AI-video based while staying inside the free daily budget.
+        const targetCount=Math.min(3,plan.scenes.length);
+        for(let i=0;i<targetCount;i++){
           const scene=plan.scenes[i];
           try{
-            const clip=await generateFreeLtxVideoClip(String(scene.visualPrompt||scene.title||referenceTitle)+'; '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3200)+'; '+String(scene.animationNotes||'').slice(0,1200)+'; ORIGINAL MATERIAL ONLY.',dir,{durationSeconds:Math.min(8.5,Math.max(3,Number(scene.duration)||5)),width:704,height:396,improveTexture:false});
+            const prompt=String(scene.visualPrompt||scene.title||referenceTitle)+'; '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3200)+'; '+String(scene.animationNotes||'').slice(0,1200)+'; '+String(scene.cameraMovement||'').slice(0,800)+'; ORIGINAL MATERIAL ONLY.';
+            let clip;
+            try{
+              clip=await generateFreeLtx25VideoClip(prompt,dir,{durationSeconds:2});
+            }catch(primaryErr){
+              console.warn('LTX-2.5 ZeroGPU unavailable for AI clip '+(i+1)+':',primaryErr.message||String(primaryErr));
+              clip=await generateFreeLtxVideoClip(prompt,dir,{durationSeconds:3,width:704,height:396,improveTexture:false});
+            }
             await validateGeneratedVideoClip(clip.outputPath);
-            aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model};
-          }catch(err){console.warn('AI video scene '+(i+1)+' unavailable; fallback visual:',err.message||String(err));}
+            aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model});
+            console.log('AutoTube free AI clip generated:',i+1,clip.provider,clip.model);
+          }catch(err){
+            console.warn('AI video clip '+(i+1)+' unavailable:',err.message||String(err));
+          }
         }
       }
-      // STRICT AUTONOMOUS MODE: never accept a still-image fallback as a successful
-      // full-pipeline result. The autonomous cycle must stop only on a validated MP4,
-      // so every scene must contain a real AI-generated motion clip.
-      const missingVideo=plan.scenes.filter((scene,i)=>!aiClips[i]?.path);
-      if(missingVideo.length){
-        const detail=missingVideo.slice(0,12).map(scene=>scene.number).join(', ');
-        throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: faltan clips de vídeo IA reales para las escenas '+detail+'. No se acepta una imagen estática como sustituto.');
+      // Never accept a static image as success. At least one validated AI motion
+      // clip is mandatory; additional scenes reuse the real AI clips cyclically.
+      if(!aiClips.length){
+        throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: no se pudo obtener ningún clip de vídeo IA real mediante los proveedores gratuitos.');
       }
-      mediaResults=plan.scenes.map((scene,i)=>({
-        number:scene.number,
-        query:scene.searchQuery||scene.title||referenceTitle,
-        media:[{
-          provider:aiClips[i].provider,
-          id:'generated-video-'+scene.number,
-          title:'Original AI video clip',
-          duration:Number(scene.duration)||5,
-          downloadUrl:aiClips[i].path,
-          mediaType:'video'
-        }],
-        generatedAsset:true
-      }));
-      return{scenes:plan.scenes.length,results:mediaResults.length,missing:0,realAiVideoClips:aiClips.length};
+      mediaResults=plan.scenes.map((scene,i)=>{
+        const clip=aiClips[i%aiClips.length];
+        return {
+          number:scene.number,
+          query:scene.searchQuery||scene.title||referenceTitle,
+          media:[{
+            provider:clip.provider,
+            id:'generated-video-'+scene.number,
+            title:'Original AI video clip',
+            duration:Number(scene.duration)||2,
+            downloadUrl:clip.path,
+            mediaType:'video'
+          }],
+          generatedAsset:true
+        };
+      });
+      return{scenes:plan.scenes.length,results:mediaResults.length,missing:0,realAiVideoClips:aiClips.length,freeMode:true};
     });
 
     if(Boolean(audioProfile.hasSpeech)){
