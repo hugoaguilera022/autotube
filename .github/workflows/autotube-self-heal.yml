@@ -6,7 +6,7 @@ on:
     types: [completed]
 
 concurrency:
-  group: autotube-finalization
+  group: autotube-self-heal
   cancel-in-progress: false
 
 permissions:
