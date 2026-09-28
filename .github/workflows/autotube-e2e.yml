@@ -82,6 +82,13 @@ jobs:
                     break
                   fi
 
+                  elapsed="$(echo "$status" | jq -r '.elapsedMs // 0' 2>/dev/null || echo 0)"
+                  if [ "$state" = "running" ] && [ "$poll" -ge 60 ]; then
+                    last_error="Pipeline remained running for more than 10 minutes without completing"
+                    echo "$last_error"
+                    break
+                  fi
+
                   if [ "$state" = "failed" ] ||                      { [ "$state" != "running" ] &&                        [ "$(echo "$status" | jq -r '.ok // true' 2>/dev/null || true)" = "false" ]; }; then
                     last_error="$(echo "$status" | jq -r '.error // .message // "pipeline failed"' 2>/dev/null || echo "pipeline failed")"
                     echo "Detected pipeline failure: $last_error"
