@@ -535,8 +535,9 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       out=path.join(dir,'autotube-final.mp4');
       await runFfmpeg(['-y','-hide_banner','-loglevel','error',
         '-i',videoOnly,'-stream_loop','-1','-i',musicFile,
-        '-filter_complex','[0:a]aresample=44100,volume=1.0[base];[1:a]aresample=44100,volume=0.12[music];[base][music]amix=inputs=2:duration=first:dropout_transition=2,alimiter=limit=0.95[a]',
-        '-map','0:v:0','-map','[a]','-c:v','copy','-c:a','aac','-ar','44100','-ac','2','-b:a','160k','-threads','1','-movflags','+faststart','-shortest',out]);
+        // Render Free stability: avoid amix/filter_complex on the final mux.
+        // Keep the already-rendered video bitstream and mux the generated music directly.
+        '-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-ar','44100','-ac','2','-b:a','128k','-threads','1','-movflags','+faststart','-shortest',out]);
     }
     const stat=await fs.stat(out);
     if(!stat.size)throw new Error('El MP4 final está vacío.');
