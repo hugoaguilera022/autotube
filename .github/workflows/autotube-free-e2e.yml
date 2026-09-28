@@ -1,0 +1,108 @@
+name: AutoTube free E2E render
+
+on:
+  push:
+    paths:
+      - '.github/workflows/autotube-free-e2e.yml'
+  workflow_dispatch:
+    inputs:
+      reference:
+        description: 'YouTube reference URL'
+        required: false
+        default: 'https://www.youtube.com/watch?v=qMUk5jrgENE'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autotube-free-e2e
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      AUTOTUBE_AUTONOMOUS_ENABLED: '0'
+      PORT: '10000'
+      AUTOTUBE_AUTONOMOUS_REFERENCE: ${{ inputs.reference || 'https://www.youtube.com/watch?v=qMUk5jrgENE' }}
+    steps:
+      - name: Checkout AutoTube
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start AutoTube locally
+        run: |
+          nohup node server.js > /tmp/autotube-e2e.log 2>&1 &
+          echo $! > /tmp/autotube-e2e.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:10000/api/health >/tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/autotube-e2e.log
+          exit 1
+
+      - name: Run full YouTube-to-MP4 pipeline
+        id: pipeline
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="$AUTOTUBE_AUTONOMOUS_REFERENCE"
+          START_JSON=$(curl -fsS --get --data-urlencode "reference=$REF" http://127.0.0.1:10000/api/full-pipeline-test)
+          echo "$START_JSON" | tee /tmp/start.json
+          JOB_ID=$(node -e "const x=require('/tmp/start.json'); process.stdout.write(String(x.jobId||''))")
+          test -n "$JOB_ID"
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+
+          for i in $(seq 1 150); do
+            STATUS=$(curl -fsS "http://127.0.0.1:10000/api/full-pipeline-test/$JOB_ID" || true)
+            echo "$STATUS" > /tmp/status.json
+            node -e "const x=require('/tmp/status.json'); console.log(JSON.stringify({status:x.status,ok:x.ok,elapsedMs:x.elapsedMs,error:x.error||null},null,2))"
+            if node -e "const x=require('/tmp/status.json'); process.exit(x.status==='done'&&x.ok?0:1)"; then
+              curl -fsS "http://127.0.0.1:10000/api/full-pipeline-test/$JOB_ID/download" -o /tmp/autotube-verified-final.mp4
+              test -s /tmp/autotube-verified-final.mp4
+              exit 0
+            fi
+            if node -e "const x=require('/tmp/status.json'); process.exit(x.status==='failed'||x.status==='blocked_user_action'?0:1)"; then
+              cat /tmp/status.json
+              exit 1
+            fi
+            sleep 10
+          done
+          cat /tmp/status.json
+          exit 1
+
+      - name: Validate final MP4 independently
+        run: |
+          ffprobe -v error -show_entries format=duration,size             -show_entries stream=codec_type,codec_name,width,height,r_frame_rate             -of json /tmp/autotube-verified-final.mp4 | tee /tmp/ffprobe.json
+          test "$(stat -c%s /tmp/autotube-verified-final.mp4)" -gt 0
+
+      - name: Upload verified MP4 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-verified-final-mp4
+          path: /tmp/autotube-verified-final.mp4
+          retention-days: 1
+
+      - name: Upload pipeline logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotube-e2e-logs
+          path: |
+            /tmp/autotube-e2e.log
+            /tmp/start.json
+            /tmp/status.json
+            /tmp/ffprobe.json
+          retention-days: 1
