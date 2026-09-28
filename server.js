@@ -475,7 +475,10 @@ async function renderAutotubeVideo({scenes,mediaResults=[],aiClips=[],narrationA
       // cost and caused Render Free restarts. Extend by stream-copying the video
       // and encode only a tiny silent AAC track; final music is mixed afterwards.
       const fastAiVideo=Boolean(aiClip?.path)&&!audio&&!isImage;
-      if(fastAiVideo){
+      // Pollinations/LTX AI clips are already encoded MP4s. Never re-encode them
+      // on Render Free unless narration must be mixed into the scene.
+      const fastGeneratedVideo=Boolean(aiClip?.path)&&!audio&&!isImage;
+      if(fastGeneratedVideo){
         await runFfmpeg([
           '-y','-hide_banner','-loglevel','error',
           '-stream_loop','-1','-i',input,
