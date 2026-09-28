@@ -1305,7 +1305,7 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
   const imageDataUri='data:'+mime+';base64,'+imageBytes.toString('base64');
   const headers={'Content-Type':'application/json'};
   if(token)headers.Authorization='Bearer '+token;
-  const duration=Math.max(0.5,Math.min(3.5,Number(options.durationSeconds)||2));
+  const duration=Math.max(3,Math.min(3.5,Number(options.durationSeconds)||3));
   const data=[imageDataUri,String(prompt||'').trim(),4,String(options.negativePrompt||'blurry, jittery, distorted anatomy, text, logos, watermark').trim(),duration,1,1,Math.floor(Math.random()*2147483647),true];
   const submit=await fetch(space+'/gradio_api/call/generate_video',{method:'POST',headers,body:JSON.stringify({data}),signal:AbortSignal.timeout(30000)});
   const txt=await submit.text();
@@ -1383,46 +1383,61 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
   throw new Error('LTX-2.3 ZeroGPU routes failed: '+errors.join(' | '));
 }
 
-async function generateFreeWan22ZeroGpuVideoClip(prompt,dir,options={}) {
-  const {Client,handle_file}=require('@gradio/client');
-  const spaceUrl=String(process.env.WAN22_ZEROGPU_SPACE_URL||'https://alexcheng0072-wan27-free-video-generator.hf.space').trim().replace(/\/$/,'');
+async function generateWan22RestVideoClip(prompt,dir,options={}) {
+  const space=String(options.spaceUrl||'').trim().replace(/\/$/,'');
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
-  const duration=Math.max(2,Math.min(5,Number(options.durationSeconds)||3));
-  const ratio=String(options.aspectRatio||'16:9');
-  const aspectRatio=ratio==='9:16'?'480x832':ratio==='1:1'?'640x640':'832x480';
-  const firstFramePath=String(options.firstFramePath||'').trim();
-  const promptText=String(prompt||'').trim();
-  if(!promptText)throw new Error('Wan2.2 ZeroGPU requiere un prompt.');
-  const app=await Client.connect(spaceUrl,token?{token}:undefined);
-  const image=firstFramePath?await handle_file(firstFramePath):null;
-  const result=await app.predict('/generate_video',[image,promptText,aspectRatio,duration]);
-  const data=Array.isArray(result?.data)?result.data:[];
-  const output=data[0];
-  const outputPath=await downloadGradioOutput(output,spaceUrl,token,dir,'wan22-zerogpu-generated');
-  const validation=await validateGeneratedVideoClip(outputPath);
-  if(!validation.ok)throw new Error('Wan2.2 ZeroGPU produjo un clip inválido.');
-  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.2 TI2V',model:'FastWan2.2-TI2V-5B-FullAttn-Diffusers',durationSeconds:validation.durationSeconds,status:'complete'};
-}
-
-async function generateFreeOpenKingWan22VideoClip(prompt,dir,options={}) {
-  const {Client,handle_file}=require('@gradio/client');
-  const spaceUrl=String(process.env.OPENKING_WAN22_SPACE_URL||'https://openking-wan2-video-generation.hf.space').trim().replace(/\/$/,'');
-  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
-  const duration=Math.max(2,Math.min(4,Number(options.durationSeconds)||3));
-  const width=832,height=480,frames=Math.max(49,Math.min(97,Math.round(duration*24)));
   const imagePath=String(options.firstFramePath||'').trim();
-  const app=await Client.connect(spaceUrl,token?{token}:undefined);
-  const image=imagePath?await handle_file(imagePath):null;
-  const seed=Math.floor(Math.random()*2147483647);
-  const result=await app.predict('/generate_video',[
-    String(prompt||'').trim(),image,width,height,frames,8,5.0,seed
-  ]);
-  const data=Array.isArray(result?.data)?result.data:[];
-  const output=data[0];
-  const outputPath=await downloadGradioOutput(output,spaceUrl,token,dir,'openking-wan22-generated');
-  const validation=await validateGeneratedVideoClip(outputPath);
-  if(!validation.ok)throw new Error('OpenKing Wan2.2 produjo un clip inválido.');
-  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · OpenKing Wan2.2',model:'Wan2.2 TI2V-5B',durationSeconds:validation.durationSeconds,status:'complete'};
+  if(!imagePath)throw new Error('Wan2.2 REST requiere un frame inicial.');
+  const imageBytes=await fs.readFile(imagePath); if(!imageBytes.length)throw new Error('Frame inicial vacío.');
+  const mime=/\.png$/i.test(imagePath)?'image/png':'image/jpeg';
+  const imageDataUri='data:'+mime+';base64,'+imageBytes.toString('base64');
+  const headers={'Content-Type':'application/json'}; if(token)headers.Authorization='Bearer '+token;
+  let endpoint='/generate_video',data;
+  if(options.mode==='openking'){
+    data=[String(prompt||'').trim(),imageDataUri,832,480,73,8,5,Math.floor(Math.random()*2147483647)];
+  }else{
+    const duration=Math.max(3,Math.min(5,Number(options.durationSeconds)||3));
+    data=[imageDataUri,String(prompt||'').trim(),'832x480',duration];
+  }
+  const submit=await fetch(space+'/gradio_api/call'+endpoint,{method:'POST',headers,body:JSON.stringify({data}),signal:AbortSignal.timeout(30000)});
+  const txt=await submit.text(); if(!submit.ok)throw new Error('Wan2.2 REST submit HTTP '+submit.status+': '+txt.slice(0,1000));
+  let parsed=null;try{parsed=JSON.parse(txt)}catch{}
+  const eventId=String(parsed?.event_id||'').trim(); if(!eventId)throw new Error('Wan2.2 REST no devolvió event_id.');
+  const stream=await fetch(space+'/gradio_api/call'+endpoint+'/'+encodeURIComponent(eventId),{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(240000)});
+  if(!stream.ok)throw new Error('Wan2.2 REST SSE HTTP '+stream.status);
+  const reader=stream.body?.getReader(); if(!reader)throw new Error('Wan2.2 REST no devolvió SSE.');
+  const decoder=new TextDecoder(); let buffer='',completed=null,errorMessage='';
+  while(true){
+    const part=await reader.read(); if(part.done)break; buffer+=decoder.decode(part.value,{stream:true});
+    const events=buffer.split(/\n\n/); buffer=events.pop()||'';
+    for(const block of events){
+      const ev=(block.match(/(?:^|\n)event:\s*([^\n]+)/)||[])[1]?.trim()||'';
+      const dl=(block.match(/(?:^|\n)data:\s*([\s\S]+)/)||[])[1]?.trim()||'';
+      if(ev==='error'||ev==='exception')errorMessage=dl||('Wan2.2 '+options.mode+' error');
+      if(ev==='complete'){try{completed=JSON.parse(dl)}catch{}}
+    }
+    if(completed!==null||errorMessage)break;
+  }
+  await reader.cancel().catch(()=>{});
+  if(errorMessage)throw new Error('Wan2.2 '+options.mode+' generation error: '+String(errorMessage).slice(0,1600));
+  const arr=Array.isArray(completed)?completed:(completed?.data||[]),candidates=[];
+  const collect=v=>{if(v==null)return;if(typeof v==='string')candidates.push(v);else if(Array.isArray(v))v.forEach(collect);else if(typeof v==='object')for(const k of ['video','url','path','value'])if(v[k]!=null)collect(v[k]);};
+  collect(arr);
+  const raw=candidates.find(x=>/\.mp4($|[?#])|^https?:|^\//i.test(x))||candidates[0];
+  if(!raw)throw new Error('Wan2.2 '+options.mode+' no devolvió vídeo. data='+JSON.stringify(arr).slice(0,1800));
+  const outputUrl=String(raw).startsWith('http')?String(raw):space+String(raw).replace(/^\//,'/');
+  const response=await fetch(outputUrl,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(120000)});
+  if(!response.ok)throw new Error('Wan2.2 '+options.mode+' descarga HTTP '+response.status);
+  const outputPath=path.join(dir,'wan22-rest-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+  const validation=await validateGeneratedVideoClip(outputPath); if(!validation.ok)throw new Error('Wan2.2 '+options.mode+' produjo un clip inválido.');
+  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.2 '+options.mode,model:'Wan2.2 I2V',durationSeconds:validation.durationSeconds,status:'complete'};
+}
+async function generateFreeWan22ZeroGpuVideoClip(prompt,dir,options={}) {
+  return generateWan22RestVideoClip(prompt,dir,{...options,spaceUrl:process.env.WAN22_ZEROGPU_SPACE_URL||'https://alexcheng0072-wan27-free-video-generator.hf.space',mode:'simple'});
+}
+async function generateFreeOpenKingWan22VideoClip(prompt,dir,options={}) {
+  return generateWan22RestVideoClip(prompt,dir,{...options,spaceUrl:process.env.OPENKING_WAN22_SPACE_URL||'https://openking-wan2-video-generation.hf.space',mode:'openking'});
 }
 
 async function generateBestFreeVideoClip(prompt,dir,options={}) {
