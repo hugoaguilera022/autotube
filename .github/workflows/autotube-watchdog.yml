@@ -35,12 +35,15 @@ jobs:
             # workflow waiting on a concurrency slot; do not let that block the whole night.
             now="$(date -u +%s)"
             stale_cancelled=0
-            while IFS=$'\t' read -r id created updated; do
+            while IFS=
               [ -n "$id" ] || continue
               created_ts="$(date -d "$created" +%s 2>/dev/null || echo "$now")"
               updated_ts="$(date -d "$updated" +%s 2>/dev/null || echo "$created_ts")"
               age=$((now-created_ts))
               idle=$((now-updated_ts))
+              # Pending/queued jobs can block immediately; an in-progress canonical E2E is
+              # also considered stale once it has exceeded the hard execution budget.
+              # This prevents a hung generation from blocking the self-healing cycle forever.
               if [ "$age" -ge 600 ] || [ "$idle" -ge 600 ]; then
                 echo "Cancelling stale canonical run $id (age=${age}s idle=${idle}s)."
                 if gh run cancel "$id" --repo "$REPOSITORY" --force; then
@@ -50,7 +53,59 @@ jobs:
                   gh api --method POST "/repos/$REPOSITORY/actions/runs/$id/cancel" || true
                 fi
               fi
-            done < <(echo "$runs" | jq -r '.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="pending" or .status=="queued")) | [.databaseId,.createdAt,.updatedAt] | @tsv')
+            done < <(echo "$runs" | jq -r '.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="pending" or .status=="queued" or (.status=="in_progress" and ((now | tonumber) - ( (.createdAt | fromdateiso8601) ) >= 1800)))) | [.databaseId,.createdAt,.updatedAt] | @tsv')
+
+            if [ "$stale_cancelled" -eq 1 ]; then
+              # Give GitHub a moment to release the concurrency slot, then verify.
+              for wait in 1 2 3 4 5; do
+                sleep 3
+                runs="$(gh run list --repo "$REPOSITORY" --limit 50 --json databaseId,workflowName,status,conclusion,createdAt,updatedAt)"
+                remaining="$(echo "$runs" | jq '[.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="pending" or .status=="queued" or .status=="in_progress"))] | length')"
+                [ "$remaining" -eq 0 ] && break
+              done
+            fi
+
+            # Cancel unrelated generation/recovery workflows so there is one owner.
+            while read -r id; do
+              if [ -z "$id" ]; then
+                continue
+              fi
+              gh run cancel "$id" --repo "$REPOSITORY" || true
+            done < <(echo "$runs" | jq -r '.[] | select((.status=="in_progress" or .status=="queued" or .status=="pending") and (.workflowName!="AutoTube real YouTube to MP4 E2E" and .workflowName!="AutoTube bounded self-heal" and .workflowName!="AutoTube bounded autonomous repair" and .workflowName!="AutoTube autonomous watchdog" and .workflowName!="AutoTube 24h supervisor")) | .databaseId')
+
+            canonical="$(echo "$runs" | jq '[.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="queued" or .status=="in_progress" or .status=="pending"))] | length')"
+            heal="$(echo "$runs" | jq '[.[] | select((.workflowName=="AutoTube bounded self-heal" or .workflowName=="AutoTube bounded autonomous repair") and (.status=="queued" or .status=="in_progress" or .status=="pending"))] | length')"
+
+            if [ "$canonical" -eq 0 ] && [ "$heal" -eq 0 ]; then
+              echo "No canonical pipeline or recovery is active; dispatching canonical E2E."
+              gh api --method POST "/repos/$REPOSITORY/actions/workflows/367417060/dispatches" -f ref=main
+            else
+              echo "Canonical pipeline/recovery is active; no overlap."
+            fi
+
+            if [ "$tick" -lt 5 ]; then
+              sleep 60
+            fi
+          done
+\t' read -r id created updated; do
+              [ -n "$id" ] || continue
+              created_ts="$(date -d "$created" +%s 2>/dev/null || echo "$now")"
+              updated_ts="$(date -d "$updated" +%s 2>/dev/null || echo "$created_ts")"
+              age=$((now-created_ts))
+              idle=$((now-updated_ts))
+              # Pending/queued jobs can block immediately; an in-progress canonical E2E is
+              # also considered stale once it has exceeded the hard execution budget.
+              # This prevents a hung generation from blocking the self-healing cycle forever.
+              if [ "$age" -ge 600 ] || [ "$idle" -ge 600 ]; then
+                echo "Cancelling stale canonical run $id (age=${age}s idle=${idle}s)."
+                if gh run cancel "$id" --repo "$REPOSITORY" --force; then
+                  stale_cancelled=1
+                else
+                  echo "Normal cancellation failed; retrying cancellation for $id."
+                  gh api --method POST "/repos/$REPOSITORY/actions/runs/$id/cancel" || true
+                fi
+              fi
+            done < <(echo "$runs" | jq -r '.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="pending" or .status=="queued" or (.status=="in_progress" and ((now | tonumber) - ( (.createdAt | fromdateiso8601) ) >= 1800)))) | [.databaseId,.createdAt,.updatedAt] | @tsv')
 
             if [ "$stale_cancelled" -eq 1 ]; then
               # Give GitHub a moment to release the concurrency slot, then verify.
