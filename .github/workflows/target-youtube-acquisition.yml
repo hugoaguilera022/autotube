@@ -1,54 +1,11 @@
 name: AutoTube target YouTube acquisition
 on:
   workflow_dispatch:
-jobs:
-  target:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Wait for Render
-        run: |
-          set -e
-          for i in $(seq 1 180); do
-            h=$(curl -fsS https://autotube-hfeu.onrender.com/api/health || true)
-            commit=$(printf '%s' "$h" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
-            if [ -n "$commit" ]; then
-              status=$(curl -fsS "https://api.github.com/repos/hugoaguilera022/autotube/compare/$GITHUB_SHA...$commit" | python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
-              if [ "$status" = "identical" ] || [ "$status" = "ahead" ]; then
-                echo "$h"
-                sleep 45
-                h2=$(curl -fsS https://autotube-hfeu.onrender.com/api/health)
-                commit2=$(printf '%s' "$h2" | python -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
-                status2=$(curl -fsS "https://api.github.com/repos/hugoaguilera022/autotube/compare/$GITHUB_SHA...$commit2" | python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
-                if [ "$status2" = "identical" ] || [ "$status2" = "ahead" ]; then
-                  echo "$h2"
-                  exit 0
-                fi
-              fi
-            fi
-            sleep 5
-          done
-          echo "Render did not deploy the tested commit or a descendant"
-          exit 1
-      - name: Download target through AutoTube
-        run: |
-          set -e
-          u='https://www.youtube.com/watch?v=mh48xOkLhgU'
-          for attempt in $(seq 1 24); do
-            code=$(curl -sS -o /tmp/start.json -w '%{http_code}' --max-time 60 -X POST https://autotube-hfeu.onrender.com/api/url-to-mp4 -H 'Content-Type: application/json' --data "{\"reference\":\"$u\"}")
-            r=$(cat /tmp/start.json); echo "$r"
-            if [ "$code" = "202" ]; then break; fi
-            if [ "$code" != "409" ]; then echo "HTTP $code"; exit 1; fi
-            sleep 5
-          done
-          j=$(printf '%s' "$r" | python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])')
-          for i in $(seq 1 120); do
-            s=$(curl -sS https://autotube-hfeu.onrender.com/api/url-to-mp4/$j); echo "$s"
-            st=$(printf '%s' "$s" | python -c 'import json,sys; print(json.load(sys.stdin).get(\"status\",\"\"))' 2>/dev/null || true)
-            if [ "$st" = done ]; then exit 0; fi
-            if [ "$st" = error ]; then exit 1; fi
-            sleep 5
-          done
-          exit 1
 
-# rerun after stabilization
+# Retired: target acquisition is no longer run as a separate competing E2E.
+jobs:
+  retired:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Retired; use autotube-e2e.yml"

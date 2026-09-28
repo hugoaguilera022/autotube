@@ -1,10 +1,11 @@
 name: External real E2E
 on:
   workflow_dispatch:
+
+# Retired: canonical strict validation is handled by autotube-e2e.yml.
 jobs:
-  e2e:
+  retired:
+    if: ${{ false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
     steps:
-      - name: Disabled automatic duplicate
-        run: echo "Manual diagnostic only; finalization is handled by autotube-e2e.yml."
+      - run: echo "Retired; use autotube-e2e.yml"

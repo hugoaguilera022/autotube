@@ -1,28 +1,11 @@
 name: AutoTube strict E2E
-# current verifier rerun
-# manual AI E2E: startup loops are disabled; this workflow is the sole trigger
 on:
   workflow_dispatch:
+
+# Retired: canonical strict validation is handled by autotube-e2e.yml.
 jobs:
-  e2e:
+  retired:
+    if: ${{ false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
     steps:
-      - name: Start strict E2E
-        run: |
-          set -e
-          sleep 90
-          BASE="https://autotube-verify.onrender.com"
-          REF='https://www.youtube.com/watch?v=6SUAdxU9CDE'
-          R=$(curl -fsS --max-time 30 --get "$BASE/api/verify-ai-e2e" --data-urlencode "reference=$REF")
-          echo "$R"
-          ID=$(echo "$R" | python -c 'import json,sys; print(json.load(sys.stdin)["jobId"])')
-          for i in $(seq 1 180); do
-            sleep 10
-            S=$(curl -fsS --max-time 30 "$BASE/api/url-to-video/$ID" || true)
-            echo "$S"
-            echo "$S" | grep -q '"status":"done"' && exit 0
-            echo "$S" | grep -q '"status":"failed"' && exit 1
-          done
-          echo "E2E timeout" >&2
-          exit 1
+      - run: echo "Retired; use autotube-e2e.yml"
