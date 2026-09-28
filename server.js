@@ -1349,6 +1349,8 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
   const spaces=[
     String(process.env.LTX23_ZEROGPU_SPACE||'Lightricks/LTX-2-3').trim(),
     'Lightricks/LTX-2-3',
+    'linoyts/LTX-2-3',
+    'linoyts/ltx23-distilled-api',
     'ShaundeOoO/ltx-2.3-fast'
   ].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
@@ -1365,7 +1367,7 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
       const data=Array.isArray(result?.data)?result.data:[];
       const raw0=data[0];
       const raw=typeof raw0==='string'?(raw0):(raw0?.url||raw0?.path||raw0?.video?.url||raw0?.video?.path||'');
-      if(!raw)throw new Error('LTX-2.3 Space no devolvió un vídeo.');
+      if(!raw)throw new Error('LTX-2.3 Space no devolvió un vídeo. data='+JSON.stringify(data).slice(0,1200));
       const outputPath=await downloadGradioOutput(raw,'https://'+space.replace(/^https?:\/\//,'').replace(/\.hf\.space$/,'')+'.hf.space',token,dir,'ltx23-official-generated');
       const validation=await validateGeneratedVideoClip(outputPath);
       if(!validation.ok)throw new Error('LTX-2.3 Space produjo un clip inválido.');
