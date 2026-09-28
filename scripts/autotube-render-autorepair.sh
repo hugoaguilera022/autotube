@@ -45,11 +45,72 @@ case "$status" in
     ;;
 esac
 
-if git log --all --oneline --grep="render-deploy:$deploy_id" -n 1 | grep -q .; then echo "This Render incident was already repaired/processed."; exit 0; fi
+# Recovery Engine v1: distinguish retryable provider failures from resource-wide failures.
+# A "recoverable" incident MUST produce a different recovery action; it is not a synonym for retry.
+recovery_resource="UNKNOWN"
+recovery_class="UNKNOWN"
+recovery_strategy="PROVIDER_CASCADE"
+case "${RENDER_LOG:-}" in
+  *"ZeroGPU quota"*|*"exceeded your ZeroGPU quota"*|*"remaining quota"*)
+    recovery_resource="HF_ZERO_GPU"
+    recovery_class="QUOTA"
+    recovery_strategy="RESOURCE_SWITCH"
+    ;;
+  *" 402 "*|*"HTTP 402"*|*"Payment Required"*)
+    recovery_resource="EXTERNAL_API_ACCESS"
+    recovery_class="PAYMENT_OR_ACCESS"
+    recovery_strategy="PROVIDER_SWITCH"
+    ;;
+  *" 429 "*|*"HTTP 429"*|*"rate limit"*|*"Too Many Requests"*)
+    recovery_resource="PROVIDER_RATE_LIMIT"
+    recovery_class="QUOTA"
+    recovery_strategy="PROVIDER_COOLDOWN"
+    ;;
+  *"502"*|*"503"*|*"504"*|*"Service Unavailable"*|*"temporarily unavailable"*|*"queue"*)
+    recovery_resource="PROVIDER_CAPACITY"
+    recovery_class="CAPACITY"
+    recovery_strategy="PROVIDER_SWITCH"
+    ;;
+  *"out of memory"*|*"heap out of memory"*|*"exit 137"*)
+    recovery_resource="RENDER_MEMORY"
+    recovery_class="INFRASTRUCTURE"
+    recovery_strategy="RESOURCE_OPTIMIZATION"
+    ;;
+  *"ECONNRESET"*|*"ETIMEDOUT"*|*"network"*)
+    recovery_resource="NETWORK"
+    recovery_class="NETWORK"
+    recovery_strategy="NETWORK_RESILIENCE"
+    ;;
+  *"node --check"*|*"SyntaxError"*|*"ReferenceError"*|*"Cannot find module"*)
+    recovery_resource="APPLICATION_CODE"
+    recovery_class="CODE"
+    recovery_strategy="CODE_REPAIR"
+    ;;
+esac
+
+incident_key="${runtime_incident}:$runtime_fingerprint:$deploy_id"
+previous_repairs="$(git log --all --oneline --grep="runtime-fingerprint:$runtime_fingerprint" -n 10 || true)"
+repair_attempt="$(printf '%s\\n' "$previous_repairs" | sed '/^$/d' | wc -l | tr -d ' ')"
+repair_attempt=$((repair_attempt + 1))
+
+# Hard circuit breaker: after three distinct repair attempts for the same incident,
+# do not keep producing blind patches. Surface the incident as a real blocker.
+if [ "$repair_attempt" -gt 3 ]; then
+  gh issue create --repo "$REPOSITORY" --title "AutoTube recovery exhausted: $recovery_resource" --body "Incident $incident_key exhausted 3 autonomous repair attempts. Resource=$recovery_resource class=$recovery_class strategy=$recovery_strategy. Last deploy=$deploy_id fingerprint=$runtime_fingerprint." || true
+  echo "RECOVERY_TERMINAL: maximum autonomous repair attempts reached."
+  exit 0
+fi
+
+if git log --all --oneline --grep="render-deploy:$deploy_id" -n 1 | grep -q .; then
+  echo "This Render incident was already repaired/processed."
+  exit 0
+fi
 if [ "$runtime_incident" = "true" ] && git log --all --oneline --grep="runtime-fingerprint:$runtime_fingerprint" -n 1 | grep -q .; then
   echo "This runtime failure fingerprint was already repaired/processed."
   exit 0
 fi
+
+echo "RECOVERY ENGINE: class=$recovery_class resource=$recovery_resource strategy=$recovery_strategy attempt=$repair_attempt/3"
 
 started="${started:-$(echo "$latest" | jq -r '.startedAt // .createdAt // empty')}"
 finished="${finished:-$(echo "$latest" | jq -r '.finishedAt // .updatedAt // empty')}"
@@ -73,6 +134,20 @@ Workflow files MAY be changed whenever the required web/production fix needs a c
 Render configuration changes ARE allowed whenever they are required to implement the web/production solution, not only when Render caused the failure. This includes safe start/build command, health check, non-secret AUTOTUBE_* operational environment variables, service runtime configuration, and other non-billing operational settings supported by the Render API. The repair agent may choose GitHub, Render, or both according to where the solution must be implemented.
 Never create or modify secret/token/key/password values. If a secret is missing, return NO_SAFE_PATCH rather than inventing it.
 Maximum 2 existing application files. No new dependency unless clearly necessary. Keep valid Node.js.
+
+RECOVERY ENGINE CONTEXT:
+- incident resource: $recovery_resource
+- failure class: $recovery_class
+- selected recovery strategy: $recovery_strategy
+- repair attempt: $repair_attempt/3
+Rules:
+1. If the resource is HF_ZERO_GPU with quota exhausted, DO NOT add more ZeroGPU Spaces as if they were independent capacity. Treat ZeroGPU as one shared resource and move to a genuinely independent route.
+2. If a provider is 402/payment/access limited, do not retry it; switch provider/resource or return NO_SAFE_PATCH if no free route exists.
+3. If capacity/503 is provider-specific, use cooldown + another independent provider.
+4. If the failure is code/infrastructure, repair the root cause rather than adding retries.
+5. Preserve strict real-AI-video requirements. Image+FFmpeg motion is never an AI-video success.
+6. A repair must change the recovery strategy or root cause; a patch that only increases retries/cooldowns is not sufficient unless the diagnosis explicitly proves transient capacity.
+7. Compare at least TWO viable FREE alternatives in your reasoning before choosing the implementation.
 
 If a Render change is required, append:
 RENDER_ACTIONS
