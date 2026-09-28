@@ -1237,39 +1237,24 @@ async function probeVideoProvider(name){const st=providerState(name);if(st.statu
 async function getVideoProviderHealth(){const result={};for(const name of ['Wan2.2-ZeroGPU','Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
 
 async function generateFreeWan22ZeroGpuVideoClip(prompt,dir,options={}) {
+  const {Client,handle_file}=require('@gradio/client');
   const spaceUrl=String(process.env.WAN22_ZEROGPU_SPACE_URL||'https://alexcheng0072-wan27-free-video-generator.hf.space').trim().replace(/\/$/,'');
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   const duration=Math.max(2,Math.min(5,Number(options.durationSeconds)||3));
-  const widthHeight='832x480';
-  const headers={'Content-Type':'application/json',Accept:'application/json'};
-  if(token)headers.Authorization='Bearer '+token;
+  const ratio=String(options.aspectRatio||'16:9');
+  const aspectRatio=ratio==='9:16'?'480x832':ratio==='1:1'?'640x640':'832x480';
+  const firstFramePath=String(options.firstFramePath||'').trim();
   const promptText=String(prompt||'').trim();
   if(!promptText)throw new Error('Wan2.2 ZeroGPU requiere un prompt.');
-  const submit=await fetch(spaceUrl+'/gradio_api/call/generate_video',{
-    method:'POST',headers,body:JSON.stringify({data:[null,promptText,widthHeight,duration]}),signal:AbortSignal.timeout(30000)
-  });
-  const raw=await submit.text(); let parsed=null; try{parsed=raw?JSON.parse(raw):null}catch{}
-  if(!submit.ok)throw new Error('Wan2.2 ZeroGPU submit '+submit.status+': '+raw.slice(0,700));
-  const eventId=String(parsed?.event_id||'').trim();
-  if(!eventId)throw new Error('Wan2.2 ZeroGPU no devolvió event_id.');
-  const result=await fetch(spaceUrl+'/gradio_api/call/generate_video/'+encodeURIComponent(eventId),{
-    headers:{...(token?{Authorization:'Bearer '+token}:{}),Accept:'text/event-stream'},signal:AbortSignal.timeout(420000)
-  });
-  const stream=await result.text();
-  if(!result.ok)throw new Error('Wan2.2 ZeroGPU result '+result.status+': '+stream.slice(0,900));
-  let completeData=null;
-  for(const event of stream.split(/\r?\n\r?\n/)){
-    const type=(event.match(/^event:\s*(.+)$/m)||[])[1]?.trim();
-    const dataLine=(event.match(/^data:\s*(.+)$/m)||[])[1];
-    if(type==='error')throw new Error('Wan2.2 ZeroGPU error: '+String(dataLine||event).slice(0,900));
-    if(type==='complete'&&dataLine){try{completeData=JSON.parse(dataLine)}catch{}}
-  }
-  const data=Array.isArray(completeData)?completeData:(Array.isArray(completeData?.data)?completeData.data:[]);
+  const app=await Client.connect(spaceUrl,token?{token}:undefined);
+  const image=firstFramePath?await handle_file(firstFramePath):null;
+  const result=await app.predict('/generate_video',[image,promptText,aspectRatio,duration]);
+  const data=Array.isArray(result?.data)?result.data:[];
   const output=data[0];
   const outputPath=await downloadGradioOutput(output,spaceUrl,token,dir,'wan22-zerogpu-generated');
   const validation=await validateGeneratedVideoClip(outputPath);
   if(!validation.ok)throw new Error('Wan2.2 ZeroGPU produjo un clip inválido.');
-  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.2 TI2V/bridge',model:'Wan2.2 free ZeroGPU Space',durationSeconds:validation.durationSeconds,status:'complete'};
+  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.2 TI2V',model:'FastWan2.2-TI2V-5B-FullAttn-Diffusers',durationSeconds:validation.durationSeconds,status:'complete'};
 }
 
 async function generateBestFreeVideoClip(prompt,dir,options={}) {
