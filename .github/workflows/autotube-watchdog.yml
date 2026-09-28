@@ -51,7 +51,7 @@ jobs:
 
             if [ "$canonical" -eq 0 ] && [ "$heal" -eq 0 ]; then
               echo "No canonical pipeline or recovery is active; dispatching a fresh E2E."
-              gh workflow run "AutoTube real YouTube to MP4 E2E" --repo "$REPOSITORY" --ref main
+              gh api --method POST "/repos/$REPOSITORY/actions/workflows/367417060/dispatches" -f ref=main
             else
               echo "Canonical pipeline/recovery is active. No overlapping run will be started."
             fi
