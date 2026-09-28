@@ -2025,12 +2025,12 @@ async function executeFullPipelineTest(reference,testId=null){
         // It preserves 16:9 while materially reducing FFmpeg's peak frame memory.
         targetWidth:854,
         targetHeight:480,
-        // 15 fps keeps the animated result smooth while fitting Render Free's CPU/memory budget.
-        targetFps:15,
+        // 20 fps matches the validated scene clips and preserves the generated motion without re-encoding.
+        targetFps:20,
         targetDurationSeconds:durationSeconds
       });
       console.log('AutoTube render: FFmpeg assembly finished; starting final MP4 validation');
-      validation=await validateRenderedMp4(output,durationSeconds,{expectedFps:15,referenceStyle,referenceTitle,referenceThumbnail:video?.thumbnail||''});
+      validation=await validateRenderedMp4(output,durationSeconds,{expectedFps:20,referenceStyle,referenceTitle,referenceThumbnail:video?.thumbnail||''});
       console.log('AutoTube render: final MP4 validation passed; duration=',validation.durationSeconds,'fps=',validation.fps,'motion=',Boolean(validation.motion?.motionDetected),'reference=',validation.referenceConformance?.status||'not-run');
       const st=await fs.stat(output);
       const value={bytes:st.size,sceneCount:plan.scenes.length,...validation,downloadPath:output,referenceMatchStatus:validation.referenceConformance?.status||'not-run'};
