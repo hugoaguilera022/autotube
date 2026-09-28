@@ -2220,6 +2220,7 @@ async function executeFullPipelineTest(reference,testId=null){
             console.log('AutoTube scene clip committed:',i+1,'/',plan.scenes.length,'provider=',clip.providerKey||clip.provider,'duration=',clip.durationSeconds||Number(scene.duration)||4,'s');
           }catch(err){console.warn('AI video scene '+(i+1)+' unavailable:',err.message||String(err));}
         }
+      }
       // Never accept a static image as success. Every planned scene must have a
       // validated generated clip; the renderer will concatenate them in timeline order.
       if(aiClips.length!==plan.scenes.length){
