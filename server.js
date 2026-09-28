@@ -1407,7 +1407,7 @@ async function executeFullPipelineTest(reference,testId=null){
       'render-all-scenes':360000
     };
     const timeoutMs=Number(process.env['AUTOTUBE_STAGE_TIMEOUT_'+String(name).replace(/[^A-Za-z0-9]/g,'_').toUpperCase()]||limits[name]||300000);
-    console.log('AutoTube full pipeline stage start:',name,'timeoutMs=',timeoutMs);
+    console.log('AutoTube full pipeline stage start:',name,'timeoutMs=',timeoutMs,'budgetSec=',Math.round(timeoutMs/1000));
     let timer;
     try{
       const value=await Promise.race([
@@ -1529,6 +1529,7 @@ async function executeFullPipelineTest(reference,testId=null){
             let clip=null;
             const referenceThumb=String(video?.thumbnail||'').trim();
             const pollinationsAttempt=async()=>generatePollinationsVideoClip(prompt,dir,{durationSeconds:Math.min(5,Math.max(3,Number(scene.duration)||4)),aspectRatio:'16:9'});
+            const withAttemptTimeout=(fn,label,ms=90000)=>Promise.race([Promise.resolve().then(fn),new Promise((_,reject)=>setTimeout(()=>reject(new Error('AI_PROVIDER_ATTEMPT_TIMEOUT: '+label+' superó '+ms+' ms')),ms))]);
             const attempts=i===0
               ? [
                   async()=>generateHuggingFaceVideoModelCascade(prompt,dir,{durationSeconds:3}),
@@ -1556,7 +1557,7 @@ async function executeFullPipelineTest(reference,testId=null){
               : ['HF high-quality cascade (Wan2.2/LTX-2.3/Hunyuan/CogVideoX/Mochi)','HuggingFace','Pollinations','LTX-2.5','Wan2.1-T2V-1.3B','Wan2.1-VACE-1.3B'];
             for(let attempt=0;attempt<attempts.length;attempt++){
               try{
-                clip=await attempts[attempt]();
+                clip=await withAttemptTimeout(attempts[attempt],modelNames[attempt],Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||90000));
                 await validateGeneratedVideoClip(clip.outputPath);
                 console.log('AutoTube free AI clip generated:',i+1,modelNames[attempt],clip.model);
                 break;
@@ -2116,7 +2117,7 @@ httpServer.requestTimeout=0;
 // It keeps one reference-generation cycle alive across retries and resumes after a Render restart.
 const autonomousReference=String(process.env.AUTOTUBE_AUTONOMOUS_REFERENCE||'https://www.youtube.com/watch?v=qMUk5jrgENE').trim();
 const autonomousEnabled=String(process.env.AUTOTUBE_AUTONOMOUS_ENABLED||'1').trim()!=='0';
-const autonomousIntervalMs=Math.max(60000,Number(process.env.AUTOTUBE_AUTONOMOUS_INTERVAL_MS||300000));
+const autonomousIntervalMs=Math.max(60000,Number(process.env.AUTOTUBE_AUTONOMOUS_INTERVAL_MS||60000));
 let autonomousStopped=false;
 let autonomousLastStart=0;
 async function runAutonomousCycle(){
