@@ -1105,27 +1105,28 @@ async function executeFullPipelineTest(reference,testId=null){
           }catch(err){console.warn('AI video scene '+(i+1)+' unavailable; fallback visual:',err.message||String(err));}
         }
       }
-      // Stock APIs remain a visual fallback; if absent, generate original images.
-      for(let i=0;i<plan.scenes.length;i++){
-        const scene=plan.scenes[i];
-        const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
-        if(aiClips[i]?.path||row?.media?.some(m=>m?.downloadUrl))continue;
-        try{
-          const imageDir=await fs.mkdtemp(path.join(dir,'scene-image-'));
-          let generated;
-          const visualPrompt=String(scene.visualPrompt||scene.searchQuery||scene.title||referenceTitle)+'; preserve the reference visual profile: '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3500)+'. Create original material, no logos, no copied characters or frames, cinematic 16:9.';
-          try{generated=await generateGeminiOriginalImage(visualPrompt,imageDir,{model:'gemini-2.5-flash-image'});}
-          catch(geminiErr){console.warn('Gemini image unavailable; using free Pollinations fallback:',geminiErr.message||String(geminiErr));generated=await generatePollinationsOriginalImage(visualPrompt,imageDir,{width:1280,height:720});}
-          row.media=[{provider:generated.provider,id:'generated-'+scene.number,title:'Original AI visual',duration:0,downloadUrl:generated.outputPath,mediaType:'image'}];
-          row.generatedAsset=true;
-        }catch(err){console.warn('Original visual generation failed for scene '+scene.number+':',err.message||String(err))}
+      // STRICT AUTONOMOUS MODE: never accept a still-image fallback as a successful
+      // full-pipeline result. The autonomous cycle must stop only on a validated MP4,
+      // so every scene must contain a real AI-generated motion clip.
+      const missingVideo=plan.scenes.filter((scene,i)=>!aiClips[i]?.path);
+      if(missingVideo.length){
+        const detail=missingVideo.slice(0,12).map(scene=>scene.number).join(', ');
+        throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: faltan clips de vídeo IA reales para las escenas '+detail+'. No se acepta una imagen estática como sustituto.');
       }
-      const missing=plan.scenes.filter((scene,i)=>{
-        const row=mediaResults.find(x=>String(x.number)===String(scene.number))||mediaResults[i];
-        return !row?.media?.some(m=>m?.downloadUrl);
-      });
-      if(missing.length)throw new Error('Faltan visuales descargables para '+missing.length+' escenas: '+missing.slice(0,12).map(x=>x.number).join(', '));
-      return{scenes:plan.scenes.length,results:mediaResults.length,missing:0};
+      mediaResults=plan.scenes.map((scene,i)=>({
+        number:scene.number,
+        query:scene.searchQuery||scene.title||referenceTitle,
+        media:[{
+          provider:aiClips[i].provider,
+          id:'generated-video-'+scene.number,
+          title:'Original AI video clip',
+          duration:Number(scene.duration)||5,
+          downloadUrl:aiClips[i].path,
+          mediaType:'video'
+        }],
+        generatedAsset:true
+      }));
+      return{scenes:plan.scenes.length,results:mediaResults.length,missing:0,realAiVideoClips:aiClips.length};
     });
 
     if(Boolean(audioProfile.hasSpeech)){
