@@ -1337,13 +1337,32 @@ async function executeFullPipelineTest(reference,testId=null){
   const checks={};
   const run=async(name,fn)=>{
     const t=Date.now();
+    const limits={
+      'youtube-source-and-reference-analysis':180000,
+      'production-plan':180000,
+      'reference-blueprint':180000,
+      'visual-sources-all-scenes':720000,
+      'narration-all-scenes':180000,
+      'music':210000,
+      'render-all-scenes':360000
+    };
+    const timeoutMs=Number(process.env['AUTOTUBE_STAGE_TIMEOUT_'+String(name).replace(/[^A-Za-z0-9]/g,'_').toUpperCase()]||limits[name]||300000);
+    console.log('AutoTube full pipeline stage start:',name,'timeoutMs=',timeoutMs);
+    let timer;
     try{
-      const value=await fn();
+      const value=await Promise.race([
+        Promise.resolve().then(fn),
+        new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('AUTOTUBE_STAGE_TIMEOUT: '+name+' superó '+timeoutMs+' ms')),timeoutMs)})
+      ]);
       checks[name]={ok:true,ms:Date.now()-t,...(value&&typeof value==='object'?value:{})};
+      console.log('AutoTube full pipeline stage done:',name,'ms=',Date.now()-t);
       return value;
     }catch(err){
       checks[name]={ok:false,ms:Date.now()-t,error:err.message||String(err)};
+      console.error('AutoTube full pipeline stage failed:',name,'ms=',Date.now()-t,err.message||String(err));
       throw err;
+    }finally{
+      if(timer)clearTimeout(timer);
     }
   };
   try{
