@@ -260,6 +260,35 @@ async function uploadGeminiFile(filePath,mimeType){
   return{name,uri,mimeType};
 }
 
+async function validateGeneratedAgainstReference(file,referenceUrl,referenceAnalysis){
+  const uploaded=await uploadGeminiFile(file,'video/mp4');
+  const prompt=[
+    'Evalúa ESTE vídeo MP4 generado por AutoTube frente al perfil audiovisual del vídeo de referencia de YouTube.',
+    'La salida debe ser material IA original, pero debe recrear de forma reconocible las características audiovisuales del referente.',
+    'Evalúa composición, estilo visual, paleta e iluminación, lenguaje de cámara, movimiento/animación, ritmo/estructura, continuidad y características del audio.',
+    'No penalices que no copie personajes, caras, logos, texto, frames o audio: debe ser una recreación original.',
+    'Devuelve ÚNICAMENTE JSON con overallScore, visualScore, cameraMotionScore, animationMotionScore, structureScore, continuityScore, audioScore, sceneCoverageScore, issues, matchedFeatures y retryDirectives.',
+    'Puntuaciones 0..1. Si una característica no existe en la referencia, no la penalices.',
+    'Aceptación: overallScore >= 0.68, structureScore >= 0.55, visualScore >= 0.55, cameraMotionScore >= 0.50 y sceneCoverageScore >= 0.55.',
+    'Si no cumple, issues y retryDirectives deben indicar cambios concretos para regenerar.',
+    'Referencia: '+String(referenceUrl),
+    'PERFIL DE REFERENCIA: '+JSON.stringify(referenceAnalysis||{}).slice(0,30000)
+  ].join('\\n');
+  const raw=await callGemini({
+    system:'Eres un validador audiovisual objetivo. Compara el vídeo proporcionado con el perfil de referencia y no inventes similitudes.',
+    user:prompt,
+    files:[{uri:uploaded.uri,mimeType:'video/mp4'}],
+    maxOutputTokens:2200,
+    json:true
+  });
+  const result=parseJsonResponse(raw);
+  for(const key of ['overallScore','visualScore','cameraMotionScore','animationMotionScore','structureScore','continuityScore','audioScore','sceneCoverageScore']) result[key]=Math.max(0,Math.min(1,Number(result[key])||0));
+  const accepted=result.overallScore>=0.68 && result.structureScore>=0.55 && result.visualScore>=0.55 && result.cameraMotionScore>=0.50 && result.sceneCoverageScore>=0.55;
+  result.accepted=accepted; result.referenceValidation=true; result.referenceUrl=referenceUrl;
+  if(!accepted) throw Object.assign(new Error('REFERENCE_SIMILARITY_VALIDATION_FAILED: el MP4 no alcanza la fidelidad audiovisual mínima respecto al referente.'),{code:'REFERENCE_SIMILARITY_VALIDATION_FAILED',validation:result});
+  return result;
+}
+
 async function measureReferenceVisualContinuity(file){
   const result=await new Promise((resolve,reject)=>{
     const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-vf','fps=1,scale=320:-2,freezedetect=n=0.001:d=5','-an','-f','null','-'],{stdio:['ignore','pipe','pipe']});
@@ -1705,6 +1734,8 @@ async function executeUrlToVideo(reference,jobId,options={}){
     });
     const validation=await validateRenderedMp4(outputPath,durationSeconds);
     const animatedMotion=await validateAnimatedMotion(outputPath);
+    if(job)job.progress=98;
+    const referenceValidation=await validateGeneratedAgainstReference(outputPath,reference,visualReferenceAnalysis);
     if(!animatedMotion.motionDetected||Number(animatedMotion.uniqueFrames||0)<2)throw new Error('El MP4 final no demuestra movimiento de vídeo IA real. No se acepta como generación válida.');
     const stat=await fs.stat(outputPath);
     if(!stat.size)throw new Error('El MP4 alternativo está vacío.');
@@ -1713,6 +1744,7 @@ async function executeUrlToVideo(reference,jobId,options={}){
       job.status='done';job.progress=100;job.outputPath=outputPath;job.size=stat.size;
       job.sceneCount=scenes.length;job.durationSeconds=validation.durationSeconds||durationSeconds;
       job.validation={...validation,mode:'original-alternative',sourceReference:reference,referenceAudioVisualProfile:{videoProfile:visualReferenceAnalysis?.videoProfile||{},animationProfile:visualReferenceAnalysis?.animationProfile||{},audioProfile,structureProfile:visualReferenceAnalysis?.structureProfile||{}},
+        referenceSimilarityValidation:referenceValidation,
         audiovisualSimilarityProfile:{
           sceneCount:scenes.length,
           referencePreferredSceneCount:preferred,
