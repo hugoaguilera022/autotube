@@ -1713,7 +1713,7 @@ app.get('/api/reference-match-test',async(_req,res)=>{
 app.get('/api/reference-match-test/:jobId',async(req,res)=>{
   const j=referenceMatchJobs.get(String(req.params.jobId||''));
   if(!j)return res.status(410).json({ok:false,status:'restart',error:'La instancia se reinició durante la prueba.'});
-  if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt,currentStage:j.currentStage||'initializing',progress:Number(j.progress||0),lastProgressAt:j.lastProgressAt||j.startedAt,stageElapsedMs:j.lastProgressAt?Date.now()-j.lastProgressAt:Date.now()-j.startedAt,providerBudget:freeAiBudgetSnapshot(),providers:Object.fromEntries([...videoProviderState.entries()].map(([name,st])=>[name,{status:st.status,failures:st.failures,lastError:st.lastError,cooldownUntil:st.cooldownUntil,lastSuccessAt:st.lastSuccessAt}])) ,zeroGpuQuotaCooldownUntil});
+  if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt});
   return res.status(j.result?.ok?200:503).json({status:j.status,jobId:j.id,...(j.result||{ok:false})});
 });
 
@@ -2522,7 +2522,7 @@ app.get('/api/full-pipeline-test/:jobId/download',async(req,res)=>{
 app.get('/api/full-pipeline-test/:jobId',async(req,res)=>{
   const j=fullPipelineTestJobs.get(String(req.params.jobId||''));
   if(!j)return res.status(410).json({ok:false,status:'restart',error:'La prueba se perdió porque Render reinició la instancia.'});
-  if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt});
+  if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,elapsedMs:Date.now()-j.startedAt,currentStage:j.currentStage||'initializing',progress:Number(j.progress||0),lastProgressAt:j.lastProgressAt||j.startedAt,stageElapsedMs:j.lastProgressAt?Date.now()-j.lastProgressAt:Date.now()-j.startedAt,providerBudget:freeAiBudgetSnapshot(),providers:Object.fromEntries([...videoProviderState.entries()].map(([name,st])=>[name,{status:st.status,failures:st.failures,lastError:st.lastError,cooldownUntil:st.cooldownUntil,lastSuccessAt:st.lastSuccessAt}])) ,zeroGpuQuotaCooldownUntil});
   return res.status(j.result?.ok?200:503).json({status:j.status,jobId:j.id,...(j.result||{ok:false})});
 });
 
