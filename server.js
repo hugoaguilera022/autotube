@@ -1718,6 +1718,24 @@ async function executeFullPipelineTest(reference,testId=null){
             const referenceThumb=String(video?.thumbnail||'').trim();
             const pollinationsAttempt=async()=>generatePollinationsVideoClip(prompt,dir,{durationSeconds:Math.min(5,Math.max(3,Number(scene.duration)||4)),aspectRatio:'16:9'});
             const withAttemptTimeout=(fn,label,ms=90000)=>Promise.race([Promise.resolve().then(fn),new Promise((_,reject)=>setTimeout(()=>reject(new Error('AI_PROVIDER_ATTEMPT_TIMEOUT: '+label+' superó '+ms+' ms')),ms))]);
+            // Adaptive multi-provider manager first. It uses every configured route,
+            // remembers healthy/broken providers and skips known failures.
+            try{
+              clip=await withAttemptTimeout(
+                ()=>generateBestFreeVideoClip(prompt,dir,{
+                  durationSeconds:Math.min(5,Math.max(3,Number(scene.duration)||4)),
+                  aspectRatio:'16:9',
+                  sceneIndex:i,
+                  firstFramePath:referenceThumb?await downloadRemoteImageToFile(referenceThumb,dir,'adaptive-reference-frame-'+i+'.jpg').catch(()=> ''):''
+                }),
+                'adaptive-video-provider-cascade',
+                Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||90000)
+              );
+              console.log('AutoTube adaptive AI provider succeeded:',i+1,clip.providerKey||clip.provider,clip.model);
+            }catch(adaptiveErr){
+              console.warn('Adaptive provider manager exhausted/failed; using legacy deep cascade:',adaptiveErr.message||String(adaptiveErr));
+            }
+            if(!clip){
             const attempts=i===0
               ? [
                   async()=>generateHuggingFaceVideoModelCascade(prompt,dir,{durationSeconds:3}),
@@ -1752,6 +1770,7 @@ async function executeFullPipelineTest(reference,testId=null){
               }catch(modelErr){
                 console.warn('AI video model '+modelNames[attempt]+' unavailable for clip '+(i+1)+':',modelErr.message||String(modelErr));
               }
+            }
             }
             if(!clip){
               // Stable fallback: generate a genuinely new AI image, then animate it into
