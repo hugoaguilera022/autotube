@@ -1,0 +1,89 @@
+name: AutoTube post-change verifier
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: autotube-post-change-verifier
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Verify GitHub change, Render deploy, web health and real MP4 E2E
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: srv-dasrdmvpn0mc739n1at0
+          RENDER_URL: https://autotube-usm1.onrender.com
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          echo "=== 1. Wait for Render to deploy TARGET_SHA ==="
+          deadline=$((SECONDS+900))
+          deploy_ok=0
+          while [ $SECONDS -lt $deadline ]; do
+            deploys="$(curl --fail-with-body -sS               -H "Accept: application/json"               -H "Authorization: Bearer $RENDER_API_KEY"               "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=10")"
+            match="$(echo "$deploys" | jq -r --arg sha "$TARGET_SHA" '
+              .[] | .deploy // . |
+              select((.commit.id // "")==$sha) |
+              [.id,.status] | @tsv' | head -n1)"
+            if [ -n "$match" ]; then
+              deploy_id="$(echo "$match" | cut -f1)"
+              deploy_status="$(echo "$match" | cut -f2)"
+              echo "Render deploy $deploy_id status=$deploy_status"
+              case "$deploy_status" in
+                live|active|succeeded) deploy_ok=1; break ;;
+                build_failed|update_failed|pre_deploy_failed|deactivated)
+                  echo "Render deploy failed: $deploy_status"
+                  exit 20
+                  ;;
+              esac
+            fi
+            sleep 15
+          done
+          [ "$deploy_ok" -eq 1 ] || { echo "Render did not reach a healthy deployed state for $TARGET_SHA."; exit 21; }
+
+          echo "=== 2. Verify public web responds ==="
+          http="$(curl -L -sS -o /tmp/autotube-home.html -w '%{http_code}' --max-time 30 "$RENDER_URL/")"
+          case "$http" in 2*) echo "Web HTTP $http OK" ;; *) echo "Web HTTP $http FAILED"; exit 22 ;; esac
+
+          echo "=== 3. Locate canonical E2E for this change ==="
+          run_id=""
+          deadline=$((SECONDS+300))
+          while [ $SECONDS -lt $deadline ]; do
+            runs="$(gh run list --repo "$REPOSITORY" --limit 30 --json databaseId,workflowName,status,conclusion,headSha,createdAt,updatedAt)"
+            run_id="$(echo "$runs" | jq -r --arg sha "$TARGET_SHA" '
+              .[] |
+              select(.workflowName=="AutoTube real YouTube to MP4 E2E" and .headSha==$sha) |
+              .databaseId' | head -n1)"
+            [ -n "$run_id" ] && break
+            sleep 15
+          done
+          [ -n "$run_id" ] || { echo "Canonical E2E was not started for $TARGET_SHA."; exit 23; }
+
+          echo "Canonical E2E run=$run_id"
+
+          echo "=== 4. Wait for canonical E2E: this is the real MP4 gate ==="
+          gh run watch "$run_id" --repo "$REPOSITORY" --exit-status || {
+            echo "Canonical E2E failed. Do not continue from the next stage."
+            echo "The workflow_run self-heal/autorepair chain must diagnose this exact failed run and continue from the failing stage."
+            exit 24
+          }
+
+          echo "=== 5. Final gate ==="
+          echo "GitHub change=$TARGET_SHA"
+          echo "Render deploy healthy"
+          echo "Web responds"
+          echo "Canonical E2E passed, including real MP4 generation and validation."
