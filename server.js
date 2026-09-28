@@ -1860,7 +1860,57 @@ app.get('/api/preflight',async(_req,res)=>{
 const fullPipelineTestJobs=new Map();
 const autonomousPipelineCheckpoints=new Map();
 const AUTOTUBE_CHECKPOINT_TTL_MS=Math.max(10*60*1000,Number(process.env.AUTOTUBE_CHECKPOINT_TTL_MS||6*60*60*1000));
+const AUTOTUBE_CHECKPOINT_PERSIST_PREFIX='autotube-checkpoint-';
+const PIPELINE_CHECKPOINT_STAGE_ORDER=['youtube-source-and-reference-analysis','production-plan','reference-blueprint','visual-sources-all-scenes','narration-all-scenes','music','render-all-scenes'];
 function pipelineCheckpointKey(reference){return crypto.createHash('sha1').update(String(reference||'').trim()).digest('hex').slice(0,20);}
+function checkpointStageIndex(stage){const i=PIPELINE_CHECKPOINT_STAGE_ORDER.indexOf(String(stage||''));return i<0?-1:i;}
+async function persistPipelineCheckpoint(next){
+  if(!supabaseConfigured()||!next?.key)return;
+  try{
+    const persisted={
+      type:'autotube_pipeline_checkpoint',
+      key:next.key,
+      reference:next.reference,
+      completedStage:next.completedStage||'',
+      updatedAt:Number(next.updatedAt||Date.now()),
+      video:next.video||null,
+      style:next.style||null,
+      plan:next.plan||null,
+      blueprint:next.blueprint||null
+    };
+    await supabaseRequest('youtube_connections?on_conflict=id',{method:'POST',body:JSON.stringify({
+      id:AUTOTUBE_CHECKPOINT_PERSIST_PREFIX+next.key,
+      profile:persisted,
+      updated_at:new Date(persisted.updatedAt).toISOString()
+    })});
+  }catch(err){console.warn('[Checkpoint] durable persistence unavailable:',String(err?.message||err).slice(0,400));}
+}
+async function hydratePipelineCheckpoint(reference){
+  const key=pipelineCheckpointKey(reference);
+  const memory=autonomousPipelineCheckpoints.get(key);
+  if(memory&&Date.now()-Number(memory.updatedAt||0)<=AUTOTUBE_CHECKPOINT_TTL_MS)return memory;
+  if(memory)autonomousPipelineCheckpoints.delete(key);
+  if(!supabaseConfigured())return null;
+  try{
+    const rows=await supabaseRequest('youtube_connections?id=eq.'+encodeURIComponent(AUTOTUBE_CHECKPOINT_PERSIST_PREFIX+key)+'&select=*',{method:'GET'});
+    const persisted=rows?.[0]?.profile;
+    if(!persisted||persisted.type!=='autotube_pipeline_checkpoint')return null;
+    if(Date.now()-Number(persisted.updatedAt||0)>AUTOTUBE_CHECKPOINT_TTL_MS)return null;
+    const stage=String(persisted.completedStage||'');
+    const cp={
+      key,reference:String(reference||'').trim(),completedStage:stage,updatedAt:Number(persisted.updatedAt||Date.now()),
+      video:persisted.video||null,style:persisted.style||null,plan:persisted.plan||null,blueprint:persisted.blueprint||null
+    };
+    // Render's filesystem is ephemeral. Never reuse file paths/media from a previous
+    // instance; keep only the metadata stages that can be safely reconstructed.
+    if(checkpointStageIndex(stage)>=checkpointStageIndex('visual-sources-all-scenes')){
+      cp.completedStage=checkpointStageIndex(stage)>=checkpointStageIndex('reference-blueprint')?'reference-blueprint':stage;
+    }
+    autonomousPipelineCheckpoints.set(key,cp);
+    console.log('[Checkpoint] hydrated durable metadata:',cp.completedStage,key);
+    return cp;
+  }catch(err){console.warn('[Checkpoint] durable hydration unavailable:',String(err?.message||err).slice(0,400));return null;}
+}
 function getPipelineCheckpoint(reference){
   const key=pipelineCheckpointKey(reference);
   const cp=autonomousPipelineCheckpoints.get(key);
@@ -1870,30 +1920,31 @@ function getPipelineCheckpoint(reference){
 }
 function savePipelineCheckpoint(reference,patch){
   const key=pipelineCheckpointKey(reference);
-  const current=autonomousPipelineCheckpoints.get(key)||{key,reference,completedStages:[],updatedAt:Date.now()};
-  const next={...current,...patch,updatedAt:Date.now()};
-  if(Array.isArray(patch?.completedStage)){
-    next.completedStages=[...new Set([...(current.completedStages||[]),patch.completedStage])];
-    delete next.completedStage;
+  const current=autonomousPipelineCheckpoints.get(key)||{key,reference:String(reference||'').trim(),completedStages:[],updatedAt:Date.now()};
+  const next={...current,...patch,key,reference:String(reference||'').trim(),updatedAt:Date.now()};
+  if(next.completedStage){
+    next.completedStages=Array.from(new Set([...(current.completedStages||[]),next.completedStage]));
   }
   autonomousPipelineCheckpoints.set(key,next);
-  return next;
+  void persistPipelineCheckpoint(next);
 }
 function invalidatePipelineCheckpoint(reference,fromStage=''){
   const key=pipelineCheckpointKey(reference);
   const cp=autonomousPipelineCheckpoints.get(key);
   if(!cp)return;
-  if(!fromStage){autonomousPipelineCheckpoints.delete(key);return;}
-  const order=['youtube-source-and-reference-analysis','production-plan','reference-blueprint','visual-sources-all-scenes','narration-all-scenes','music','render-all-scenes'];
-  const idx=order.indexOf(fromStage);
-  if(idx<0){autonomousPipelineCheckpoints.delete(key);return;}
-  const fields=['video','style','plan','blueprint','mediaResults','aiClips','narrationAudio','musicFile','render'];
-  const next={...cp,updatedAt:Date.now(),completedStages:(cp.completedStages||[]).filter(s=>order.indexOf(s)<idx)};
-  for(let i=idx;i<fields.length;i++)delete next[fields[i]];
-  autonomousPipelineCheckpoints.set(key,next);
+  const from=checkpointStageIndex(fromStage);
+  if(from<0){autonomousPipelineCheckpoints.delete(key);return;}
+  const kept=PIPELINE_CHECKPOINT_STAGE_ORDER.slice(0,from);
+  cp.completedStages=(cp.completedStages||[]).filter(s=>kept.includes(s));
+  cp.completedStage=kept.length?kept[kept.length-1]:'';
+  cp.updatedAt=Date.now();
+  for(const field of ['mediaResults','aiClips','narrationAudio','musicFile','render','dir'])delete cp[field];
+  autonomousPipelineCheckpoints.set(key,cp);
+  void persistPipelineCheckpoint(cp);
 }
+
 async function executeFullPipelineTest(reference,testId=null){
-  const checkpoint=getPipelineCheckpoint(reference);
+  const checkpoint=await hydratePipelineCheckpoint(reference);
   const dir=checkpoint?.dir && await fs.stat(checkpoint.dir).then(()=>checkpoint.dir).catch(()=>null)
     || await fs.mkdtemp(path.join(os.tmpdir(),'autotube-full-test-'));
   const resumedStages=Array.isArray(checkpoint?.completedStages)?checkpoint.completedStages:[];
