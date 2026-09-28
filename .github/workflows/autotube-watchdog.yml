@@ -31,22 +31,36 @@ jobs:
             runs="$(gh run list --repo "$REPOSITORY" --limit 50 --json databaseId,workflowName,status,conclusion,createdAt,updatedAt)"
             echo "$runs" | jq -r '.[] | [.databaseId,.workflowName,.status,.conclusion,.createdAt,.updatedAt] | @tsv' | sed -n '1,20p'
 
-            # Recover a stale pending canonical run caused by a previous concurrency lock.
+            # Recover stale canonical runs deterministically. GitHub can leave a pending
+            # workflow waiting on a concurrency slot; do not let that block the whole night.
             now="$(date -u +%s)"
-            while IFS=$'\t' read -r id created; do
-              if [ -z "$id" ]; then
-                continue
-              fi
+            stale_cancelled=0
+            while IFS=$'\t' read -r id created updated; do
+              [ -n "$id" ] || continue
               created_ts="$(date -d "$created" +%s 2>/dev/null || echo "$now")"
+              updated_ts="$(date -d "$updated" +%s 2>/dev/null || echo "$created_ts")"
               age=$((now-created_ts))
-              if [ "$age" -ge 600 ]; then
-                echo "Cancelling stale pending canonical run $id after ${age}s."
-                gh run cancel "$id" --repo "$REPOSITORY" --force || true
+              idle=$((now-updated_ts))
+              if [ "$age" -ge 600 ] || [ "$idle" -ge 600 ]; then
+                echo "Cancelling stale canonical run $id (age=${age}s idle=${idle}s)."
+                if gh run cancel "$id" --repo "$REPOSITORY" --force; then
+                  stale_cancelled=1
+                else
+                  echo "Normal cancellation failed; retrying cancellation for $id."
+                  gh api --method POST "/repos/$REPOSITORY/actions/runs/$id/cancel" || true
+                fi
               fi
-            done < <(echo "$runs" | jq -r '.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and .status=="pending") | [.databaseId,.createdAt] | @tsv')
+            done < <(echo "$runs" | jq -r '.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="pending" or .status=="queued")) | [.databaseId,.createdAt,.updatedAt] | @tsv')
 
-            sleep 3
-            runs="$(gh run list --repo "$REPOSITORY" --limit 50 --json databaseId,workflowName,status,conclusion,createdAt,updatedAt)"
+            if [ "$stale_cancelled" -eq 1 ]; then
+              # Give GitHub a moment to release the concurrency slot, then verify.
+              for wait in 1 2 3 4 5; do
+                sleep 3
+                runs="$(gh run list --repo "$REPOSITORY" --limit 50 --json databaseId,workflowName,status,conclusion,createdAt,updatedAt)"
+                remaining="$(echo "$runs" | jq '[.[] | select(.workflowName=="AutoTube real YouTube to MP4 E2E" and (.status=="pending" or .status=="queued" or .status=="in_progress"))] | length')"
+                [ "$remaining" -eq 0 ] && break
+              done
+            fi
 
             # Cancel unrelated generation/recovery workflows so there is one owner.
             while read -r id; do
