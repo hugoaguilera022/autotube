@@ -1307,6 +1307,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     }
     if(!providerAvailable(provider))continue;
     const health=await probeVideoProvider(provider);
+    if(!health.ok)continue;
     if(provider==='Wan2.2-ZeroGPU'){try{const clip=await generateFreeWan22ZeroGpuVideoClip(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));continue;}} if(!health.ok)continue;
     try{
       let clip;
