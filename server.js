@@ -1470,10 +1470,17 @@ async function executeFullPipelineTest(reference,testId=null){
 
     const preferred=Math.max(1,Number(style.preferredSceneCount||style.estimatedSceneCount||plan.scenes.length||1));
     if(!style.constantImage && preferred>plan.scenes.length){
-      const blueprint=await run('reference-blueprint',async()=>{
-        const b=await buildReferenceBlueprint({referenceTitle,transcript:'',visualReferenceAnalysis,referenceStyle});
-        return b;
-      });
+      let blueprint=null;
+      try{
+        blueprint=await run('reference-blueprint',async()=>{
+          const b=await buildReferenceBlueprint({referenceTitle,transcript:'',visualReferenceAnalysis,referenceStyle});
+          return b;
+        });
+      }catch(blueprintErr){
+        console.warn('Reference blueprint primary provider failed; switching to deterministic local blueprint:',blueprintErr.message||String(blueprintErr));
+        blueprint=buildLocalReferenceBlueprint(plan.scenes,durationSeconds,visualReferenceAnalysis,referenceStyle);
+        checks['reference-blueprint-recovery']={ok:true,mode:'local-deterministic',reason:String(blueprintErr.message||blueprintErr),sections:blueprint.sections.length};
+      }
       if(blueprint?.sections?.length)plan.scenes=applyReferenceBlueprint(plan.scenes,blueprint,durationSeconds);
     }
     if(style.constantImage){
@@ -1715,6 +1722,20 @@ Divide la referencia en suficientes secciones para conservar su progresión. Las
   const data=parseJsonResponse(raw);
   if(!data||!Array.isArray(data.sections)||!data.sections.length)throw new Error('Gemini no devolvió una plantilla audiovisual válida.');
   return data;
+}
+
+function buildLocalReferenceBlueprint(scenes,targetDurationSeconds,visualReferenceAnalysis={},referenceStyle={}){
+  const src=Array.isArray(scenes)?scenes:[];
+  const total=Math.max(4,Number(targetDurationSeconds)||60);
+  const count=Math.max(1,src.length||Math.ceil(total/20));
+  const vp=visualReferenceAnalysis?.videoProfile||{};
+  const ap=visualReferenceAnalysis?.animationProfile||{};
+  const sp=visualReferenceAnalysis?.structureProfile||{};
+  const sections=Array.from({length:count},(_,i)=>{
+    const start=i/count,end=(i+1)/count,base=src[i%Math.max(1,src.length)]||{};
+    return {order:i+1,startRatio:start,endRatio:end,purpose:String(base.title||('Escena '+(i+1))),narrationRole:String(base.narration?'narration':'visual'),visualSubject:String(base.visualPrompt||base.title||referenceStyle?.visualStyle||'original cinematic scene'),shotType:'medium-wide',cameraMotion:String(base.cameraMovement||ap.cameraMotion||vp.cameraMovement||'smooth cinematic movement'),composition:String(vp.composition||'16:9 balanced composition'),motionIntensity:String(ap.motionIntensity||'medium'),transition:String(base.transition||ap.transitionStyle||'clean cut'),onScreenText:'',musicRole:'continuous original soundtrack',sfxRole:String(visualReferenceAnalysis?.audioProfile?.hasSoundEffects?'subtle original sound design':'none')};
+  });
+  return {targetDurationSeconds:total,sections,global:{pacing:String(sp.pacing||ap.visualRhythm||'moderate'),visualStyle:String(vp.visualStyle||referenceStyle?.visualStyle||'original cinematic'),editingStyle:String(sp.transitions||ap.transitionStyle||'clean cuts'),colorMood:String(vp.palette||'cinematic'),captionStyle:'none unless required by script',cameraLanguage:String(vp.cameraMovement||ap.cameraMotion||'smooth cinematic movement')}};
 }
 
 function applyReferenceBlueprint(scenes,blueprint,targetDurationSeconds){
@@ -2077,7 +2098,7 @@ app.post('/api/ai/production-plan',async(req,res)=>{
       mediaType:'video',
       constantImage:false
     }));
-    return res.json({ok:true,mode:'brief-fallback',title:fallbackTopic||'AutoTube original',topic:fallbackTopic,brief:fallbackTopic,language:fallbackLanguage,duration:String(fallbackDurationMinutes),targetDurationSeconds:totalSeconds,script:fallbackCustomScript,customScript:fallbackCustomScript,creativeOptions:[],creativeDirection:{id:'fallback',name:'Original cinematográfico',visualStyle:'cinematic',animationStyle:'AI video',cameraLanguage:'smooth cinematic motion',palette:'cinematic',lighting:'cinematic',motion:'visible',transitions:'clean cuts',voice:'none',music:'original',aspectRatio:'16:9'},recommendedOptionId:'fallback',aspectRatio:'16:9',musicMood:'cinematic atmospheric',voiceStyle:'none',scenes,sceneCount:scenes.length,visualReferenceAnalysis:fallbackBody.visualReferenceAnalysis||null,referenceStyle:fallbackBody.referenceStyle||null,creationMode:'brief-fallback'});
+    return res.json({ok:true,mode:'brief-fallback',title:fallbackTopic||'AutoTube original',topic:fallbackTopic,brief:fallbackTopic,language:fallbackLanguage,duration:String(fallbackDurationMinutes),targetDurationSeconds:totalSeconds,script:fallbackCustomScript,customScript:fallbackCustomScript,creativeOptions:[],creativeDirection:{id:'fallback',name:'Original cinematográfico',visualStyle:'cinematic',animationStyle:'AI video',cameraLanguage:'smooth cinematic motion',palette:'cinematic',lighting:'cinematic',motion:'visible',transitions:'clean cuts',voice:'none',music:'original',aspectRatio:'16:9'},recommendedOptionId:'fallback',aspectRatio:'16:9',musicMood:'cinematic atmospheric',voiceStyle:'none',scenes,sceneCount:scenes.length,visualReferenceAnalysis:fallbackBody.visualReferenceAnalysis||null,referenceStyle:fallbackBody.referenceStyle||null,creationMode:'brief-fallback',recovery:{strategy:'local-production-plan',reason:String(err?.message||err||'Gemini unavailable'),nextStage:'reference-blueprint'}});
   }
 });
 
