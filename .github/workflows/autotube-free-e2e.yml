@@ -26,6 +26,10 @@ jobs:
       AUTOTUBE_AUTONOMOUS_ENABLED: '0'
       PORT: '10000'
       AUTOTUBE_AUTONOMOUS_REFERENCE: ${{ inputs.reference || 'https://www.youtube.com/watch?v=qMUk5jrgENE' }}
+      # The long render is intentionally executed on the GitHub-hosted runner, not Render Free.
+      # Render Free remains the orchestrator; this runner is the heavy final-render fallback.
+      AUTOTUBE_STAGE_TIMEOUT_RENDER_ALL_SCENES: '900000'
+      AUTOTUBE_STAGE_TIMEOUT_VISUAL_SOURCES_ALL_SCENES: '900000'
     steps:
       - name: Checkout AutoTube
         uses: actions/checkout@v4
