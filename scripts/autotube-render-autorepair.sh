@@ -24,13 +24,22 @@ export DEPLOY_ID="$deploy_id" COMMIT="$commit"
 
 python3 - <<'PY'
 import json,os,urllib.request
-prompt="""Return ONLY a unified git diff or NO_SAFE_PATCH.
+prompt="""Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH.
 Diagnose the concrete failed Render deployment below and repair its root cause.
 Compare at least TWO viable FREE alternatives when the failure is provider/infrastructure related, then implement the most stable route.
 Preserve real AI video generation, reference analysis, strict motion/video/MP4 QA.
 Never replace AI video with static images, stock, pan/zoom or fake video.
-Never weaken validation. Do not edit workflows, secrets, authentication, billing or deployment permissions.
+Never weaken validation. Do not change secrets, authentication, billing, permissions, repository, branch, or paid-plan settings.
+Render operational configuration changes ARE allowed when they are required to repair the service: safe start/build command, health check, or non-secret AUTOTUBE_* operational environment variables.
+Never create or modify secret/token/key/password values. If a secret is missing, return NO_SAFE_PATCH rather than inventing it.
 Maximum 2 existing application files. No new dependency unless clearly necessary. Keep valid Node.js.
+
+If a Render change is required, append:
+RENDER_ACTIONS
+RENDER_ENV_SET KEY=VALUE
+RENDER_SERVICE_PATCH {"serviceDetails":{"buildCommand":"...","startCommand":"...","healthCheckPath":"..."}}
+END_RENDER_ACTIONS
+Only include the exact actions required; omit unchanged fields.
 
 FAILED DEPLOY: """+os.environ["DEPLOY_ID"]+"\nCOMMIT: "+os.environ["COMMIT"]+"\nRENDER LOG:\n"+os.environ["RENDER_LOG"]
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
@@ -42,8 +51,51 @@ open("render-repair.patch","w").write(out+"\n")
 PY
 
 if grep -qx "NO_SAFE_PATCH" render-repair.patch; then gh issue create --repo "$REPOSITORY" --title "AutoTube Render deploy needs manual repair: $deploy_id" --body "Render deploy $deploy_id failed and no safe patch was produced."; exit 0; fi
+
+python3 - <<'PY'
+from pathlib import Path
+p=Path("render-repair.patch")
+s=p.read_text()
+if "RENDER_ACTIONS" not in s:
+    Path("render-actions.txt").write_text("")
+    raise SystemExit
+head,tail=s.split("RENDER_ACTIONS",1)
+actions=tail.split("END_RENDER_ACTIONS",1)[0]
+p.write_text(head.rstrip()+"\n")
+Path("render-actions.txt").write_text(actions.strip()+"\n")
+PY
+
 git apply --check render-repair.patch && git apply render-repair.patch
 node --check server.js
+
+if [ -s render-actions.txt ]; then
+  while IFS= read -r line; do
+    case "$line" in
+      RENDER_ENV_SET\ *)
+        kv="${line#RENDER_ENV_SET }"
+        key="${kv%%=*}"
+        value="${kv#*=}"
+        if ! [[ "$key" =~ ^(AUTOTUBE_|POLLINATIONS_MUSIC_MODEL$) ]]; then
+          echo "Unsafe Render env key requested: $key"; git reset --hard HEAD; exit 0
+        fi
+        if [[ "$key" =~ (TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL) ]]; then
+          echo "Secret-like Render env key rejected: $key"; git reset --hard HEAD; exit 0
+        fi
+        curl --fail-with-body -sS -X PUT -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/env-vars/$key" --data "$(jq -nc --arg v "$value" '{value:$v}')" >/dev/null
+        ;;
+      RENDER_SERVICE_PATCH\ *)
+        json="${line#RENDER_SERVICE_PATCH }"
+        if ! echo "$json" | jq -e 'type=="object" and ((keys - ["serviceDetails"])|length==0) and (.serviceDetails|type=="object") and ((.serviceDetails|keys) - ["buildCommand","startCommand","healthCheckPath"]|length==0)' >/dev/null; then
+          echo "Unsafe Render service patch rejected."; git reset --hard HEAD; exit 0
+        fi
+        curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID" --data "$json" >/dev/null
+        ;;
+      ""|\#*) ;;
+      *) echo "Unknown Render action rejected."; git reset --hard HEAD; exit 0 ;;
+    esac
+  done < render-actions.txt
+  curl --fail-with-body -sS -X POST -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" --data '{"deployMode":"build_and_deploy"}' >/dev/null
+fi
 git diff --check
 changed="$(git diff --name-only)"
 count="$(printf "%s\n" "$changed" | sed "/^$/d" | wc -l)"
