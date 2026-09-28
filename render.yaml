@@ -27,3 +27,15 @@ services:
         sync: false
       - key: ELEVENLABS_API_KEY
         sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: AUTOTUBE_FREE_DAILY_LIMIT
+        value: "1"
+      - key: AUTOTUBE_MAX_FREE_SCENES
+        value: "4"
+      - key: AUTOTUBE_MAX_FREE_DURATION_SECONDS
+        value: "20"
+      - key: AUTOTUBE_DISABLE_LTX
+        value: "0"
+      - key: LTX_SPACE
+        value: "Lightricks/ltx-video-distilled"
