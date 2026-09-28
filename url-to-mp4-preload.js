@@ -4,7 +4,8 @@ const fs=require('fs/promises');
 const os=require('os');
 const crypto=require('crypto');
 const {spawn}=require('child_process');
-let youtubedl=null;\nfunction getYoutubeDl(){if(youtubedl)return youtubedl;try{youtubedl=require('youtube-dl-exec');return youtubedl}catch(err){throw new Error('youtube-dl-exec no está disponible en este despliegue: '+String(err?.message||err));}}
+let youtubedl=null;
+function getYoutubeDl(){if(youtubedl)return youtubedl;try{youtubedl=require('youtube-dl-exec');return youtubedl}catch(err){throw new Error('youtube-dl-exec no está disponible en este despliegue: '+String(err?.message||err));}}
 const ffmpegPath=require('ffmpeg-static');
 const jobs=new Map();
 function extractYoutubeVideoId(input){try{const u=new URL(String(input||'').trim()),h=u.hostname.toLowerCase();if(h==='youtu.be')return u.pathname.split('/').filter(Boolean)[0]||'';if(h==='youtube.com'||h==='www.youtube.com'||h.endsWith('.youtube.com')){const v=u.searchParams.get('v');if(v)return v;const p=u.pathname.split('/').filter(Boolean);if((p[0]==='shorts'||p[0]==='embed'||p[0]==='live')&&p[1])return p[1]} }catch{} return ''}
