@@ -1491,3 +1491,26 @@ httpServer.headersTimeout=125000;
 httpServer.requestTimeout=0;
 // E2E completo se ejecuta exclusivamente mediante /api/full-pipeline-test para evitar
 // lanzar trabajos duplicados cuando Render recicla la instancia.
+// Para una prueba controlada en Render, AUTOTUBE_E2E_TEST_REFERENCE dispara una sola
+// ejecución al arrancar esta instancia. No se activa si la variable no existe.
+const startupE2EReference=String(process.env.AUTOTUBE_E2E_TEST_REFERENCE||'').trim();
+if(startupE2EReference){
+  setTimeout(async()=>{
+    try{
+      const existing=[...fullPipelineTestJobs.values()].find(j=>j.status==='running'&&j.reference===startupE2EReference);
+      if(existing){console.log('AutoTube startup E2E ya está en curso:',existing.id);return;}
+      const id='startup_fulltest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+      fullPipelineTestJobs.set(id,{id,reference:startupE2EReference,status:'running',startedAt:Date.now(),result:null});
+      console.log('AutoTube startup E2E iniciado:',id,startupE2EReference);
+      executeFullPipelineTest(startupE2EReference,id).then(result=>{
+        const j=fullPipelineTestJobs.get(id);
+        if(j){j.status=result.ok?'done':'failed';j.result=result;j.finishedAt=Date.now();}
+        console.log('AutoTube startup E2E finalizado:',id,j?.status,result?.ok);
+      }).catch(err=>{
+        const j=fullPipelineTestJobs.get(id);
+        if(j){j.status='failed';j.result={ok:false,error:err.message||String(err)};j.finishedAt=Date.now();}
+        console.error('AutoTube startup E2E error:',id,err);
+      });
+    }catch(err){console.error('AutoTube startup E2E launch error:',err);}
+  },15000);
+}
