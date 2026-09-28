@@ -1391,10 +1391,48 @@ app.get('/api/preflight',async(_req,res)=>{
 
 
 const fullPipelineTestJobs=new Map();
+const autonomousPipelineCheckpoints=new Map();
+const AUTOTUBE_CHECKPOINT_TTL_MS=Math.max(10*60*1000,Number(process.env.AUTOTUBE_CHECKPOINT_TTL_MS||6*60*60*1000));
+function pipelineCheckpointKey(reference){return crypto.createHash('sha1').update(String(reference||'').trim()).digest('hex').slice(0,20);}
+function getPipelineCheckpoint(reference){
+  const key=pipelineCheckpointKey(reference);
+  const cp=autonomousPipelineCheckpoints.get(key);
+  if(!cp)return null;
+  if(Date.now()-Number(cp.updatedAt||0)>AUTOTUBE_CHECKPOINT_TTL_MS){autonomousPipelineCheckpoints.delete(key);return null;}
+  return cp;
+}
+function savePipelineCheckpoint(reference,patch){
+  const key=pipelineCheckpointKey(reference);
+  const current=autonomousPipelineCheckpoints.get(key)||{key,reference,completedStages:[],updatedAt:Date.now()};
+  const next={...current,...patch,updatedAt:Date.now()};
+  if(Array.isArray(patch?.completedStage)){
+    next.completedStages=[...new Set([...(current.completedStages||[]),patch.completedStage])];
+    delete next.completedStage;
+  }
+  autonomousPipelineCheckpoints.set(key,next);
+  return next;
+}
+function invalidatePipelineCheckpoint(reference,fromStage=''){
+  const key=pipelineCheckpointKey(reference);
+  const cp=autonomousPipelineCheckpoints.get(key);
+  if(!cp)return;
+  if(!fromStage){autonomousPipelineCheckpoints.delete(key);return;}
+  const order=['youtube-source-and-reference-analysis','production-plan','reference-blueprint','visual-sources-all-scenes','narration-all-scenes','music','render-all-scenes'];
+  const idx=order.indexOf(fromStage);
+  if(idx<0){autonomousPipelineCheckpoints.delete(key);return;}
+  const fields=['video','style','plan','blueprint','mediaResults','aiClips','narrationAudio','musicFile','render'];
+  const next={...cp,updatedAt:Date.now(),completedStages:(cp.completedStages||[]).filter(s=>order.indexOf(s)<idx)};
+  for(let i=idx;i<fields.length;i++)delete next[fields[i]];
+  autonomousPipelineCheckpoints.set(key,next);
+}
 async function executeFullPipelineTest(reference,testId=null){
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-full-test-'));
+  const checkpoint=getPipelineCheckpoint(reference);
+  const dir=checkpoint?.dir && await fs.stat(checkpoint.dir).then(()=>checkpoint.dir).catch(()=>null)
+    || await fs.mkdtemp(path.join(os.tmpdir(),'autotube-full-test-'));
+  const resumedStages=Array.isArray(checkpoint?.completedStages)?checkpoint.completedStages:[];
   const started=Date.now();
   const checks={};
+  if(resumedStages.length)console.log('AutoTube checkpoint resume:',reference,'stages=',resumedStages.join(','));
   const run=async(name,fn)=>{
     const t=Date.now();
     const limits={
@@ -1428,12 +1466,14 @@ async function executeFullPipelineTest(reference,testId=null){
     }
   };
   try{
-    let video=null,style=null,outline=null,plan=null,narrationAudio=[],music=null,render=null,validation=null,mediaResults=[],aiClips=[];
-    await run('youtube-source-and-reference-analysis',async()=>{
+    let video=checkpoint?.video||null,style=checkpoint?.style||null,outline=null,plan=checkpoint?.plan||null,narrationAudio=checkpoint?.narrationAudio||[],music=null,render=null,validation=null,mediaResults=checkpoint?.mediaResults||[],aiClips=checkpoint?.aiClips||[];
+    if(resumedStages.includes('youtube-source-and-reference-analysis')&&video&&style){
+      checks['youtube-source-and-reference-analysis']={ok:true,resumed:true,checkpointAgeMs:Date.now()-Number(checkpoint.updatedAt||Date.now()),title:video.title||'',hasFullVideoAnalysis:Boolean(style.hasFullVideoAnalysis),hasAudioProfile:Boolean(style.hasAudioAnalysis),estimatedSceneCount:Number(style.estimatedSceneCount||0),preferredSceneCount:Number(style.preferredSceneCount||0),referenceFileBytes:Number(style.referenceFileBytes||0),downloadStrategy:style.downloadStrategy||''};
+    }else await run('youtube-source-and-reference-analysis',async()=>{
       video=await getReferenceVideo(reference);
       style=await analyzeYoutubeReferenceMediaDirect(reference,video);
       if(!video?.title||!style?.visualAnalysis)throw new Error('No se obtuvo un perfil audiovisual completo de YouTube.');
-      return{
+      const value={
         title:video.title,
         hasFullVideoAnalysis:Boolean(style.hasFullVideoAnalysis),
         hasAudioProfile:Boolean(style.hasAudioAnalysis),
@@ -1442,6 +1482,8 @@ async function executeFullPipelineTest(reference,testId=null){
         referenceFileBytes:Number(style.referenceFileBytes||0),
         downloadStrategy:style.downloadStrategy||''
       };
+      savePipelineCheckpoint(reference,{dir,video,style,completedStage:'youtube-source-and-reference-analysis'});
+      return value;
     });
 
     const referenceTitle=String(video.title||'Contenido original').slice(0,300);
@@ -1452,7 +1494,7 @@ async function executeFullPipelineTest(reference,testId=null){
 
     outline={title:referenceTitle,outline:[],visualIdeas:[]};
 
-    await run('production-plan',async()=>{
+    if(!resumedStages.includes('production-plan')||!plan) await run('production-plan',async()=>{
       const r=await fetch('http://127.0.0.1:'+PORT+'/api/ai/production-plan',{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
@@ -1467,13 +1509,18 @@ async function executeFullPipelineTest(reference,testId=null){
       const d=await r.json();
       if(!r.ok||!Array.isArray(d?.scenes)||!d.scenes.length)throw new Error(d?.error||'Production plan inválido.');
       plan=d;
+      savePipelineCheckpoint(reference,{dir,video,style,plan,completedStage:'production-plan'});
       return{scenes:d.scenes.length,title:d.title||'',durationSeconds};
     });
 
     const preferred=Math.max(1,Number(style.preferredSceneCount||style.estimatedSceneCount||plan.scenes.length||1));
     if(!style.constantImage && preferred>plan.scenes.length){
       let blueprint=null;
-      try{
+      const cachedBlueprint=checkpoint?.blueprint;
+      if(resumedStages.includes('reference-blueprint')&&cachedBlueprint?.sections?.length){
+        blueprint=cachedBlueprint;
+        checks['reference-blueprint']={ok:true,resumed:true,sections:blueprint.sections.length};
+      }else try{
         blueprint=await run('reference-blueprint',async()=>{
           const b=await buildReferenceBlueprint({referenceTitle,transcript:'',visualReferenceAnalysis,referenceStyle});
           return b;
@@ -1483,7 +1530,10 @@ async function executeFullPipelineTest(reference,testId=null){
         blueprint=buildLocalReferenceBlueprint(plan.scenes,durationSeconds,visualReferenceAnalysis,referenceStyle);
         checks['reference-blueprint-recovery']={ok:true,mode:'local-deterministic',reason:String(blueprintErr.message||blueprintErr),sections:blueprint.sections.length};
       }
-      if(blueprint?.sections?.length)plan.scenes=applyReferenceBlueprint(plan.scenes,blueprint,durationSeconds);
+      if(blueprint?.sections?.length){
+        plan.scenes=applyReferenceBlueprint(plan.scenes,blueprint,durationSeconds);
+        savePipelineCheckpoint(reference,{dir,video,style,plan,blueprint,completedStage:'reference-blueprint'});
+      }
     }
     if(style.constantImage){
       plan.scenes=plan.scenes.slice(0,1).map(s=>({...s,duration:durationSeconds,constantImage:true,mediaType:'image'}));
@@ -1497,7 +1547,7 @@ async function executeFullPipelineTest(reference,testId=null){
       plan.scenes=plan.scenes.map(x=>({...x,duration:Math.max(0.5,Number(x.duration||0)*scale)}));
     }
 
-    await run('visual-sources-all-scenes',async()=>{
+    if(!resumedStages.includes('visual-sources-all-scenes')||!Array.isArray(mediaResults)||!mediaResults.length||!Array.isArray(aiClips)||!aiClips.length) await run('visual-sources-all-scenes',async()=>{
       // Prefer original AI video generation first. This avoids making the E2E depend
       // on third-party media-search providers that may return HTML/403/429.
       mediaResults=plan.scenes.map(scene=>({number:scene.number,query:scene.searchQuery||scene.title||referenceTitle,media:[]}));
@@ -1642,28 +1692,36 @@ async function executeFullPipelineTest(reference,testId=null){
           generatedAsset:true
         };
       });
-      return{scenes:plan.scenes.length,results:mediaResults.length,missing:0,realAiVideoClips:aiClips.length,freeMode:true};
+      const value={scenes:plan.scenes.length,results:mediaResults.length,missing:0,realAiVideoClips:aiClips.length,freeMode:true};
+      savePipelineCheckpoint(reference,{dir,video,style,plan,mediaResults,aiClips,completedStage:'visual-sources-all-scenes'});
+      return value;
     });
 
-    if(Boolean(audioProfile.hasSpeech)){
+    if(Boolean(audioProfile.hasSpeech)&&!resumedStages.includes('narration-all-scenes')){
       await run('narration-all-scenes',async()=>{
         narrationAudio=await Promise.all(plan.scenes.map(async(scene)=>{
           const text=String(scene.narration||scene.title||referenceTitle).trim();
           if(!text)return null;
           return generateNarrationTts(text,audioProfile.language||'es',audioProfile.voiceStyle||'Natural y cercana',audioProfile);
         }));
-        return{scenes:narrationAudio.filter(Boolean).length};
+        const value={scenes:narrationAudio.filter(Boolean).length};
+        savePipelineCheckpoint(reference,{dir,video,style,plan,mediaResults,aiClips,narrationAudio,completedStage:'narration-all-scenes'});
+        return value;
       });
     }
 
-    if(Boolean(audioProfile.hasMusic||audioProfile.hasAmbience)){
+    if(Boolean(audioProfile.hasMusic||audioProfile.hasAmbience)&&!resumedStages.includes('music')){
       await run('music',async()=>{
         music=await generateFallbackMusic('Original music matching the reference audio profile without copying the source. '+JSON.stringify(audioProfile),Math.max(3,Math.min(120,durationSeconds)),dir,audioProfile);
+        const musicFile=path.join(dir,'checkpoint-music.bin');
+        await fs.writeFile(musicFile,music.buffer);
+        savePipelineCheckpoint(reference,{dir,video,style,plan,mediaResults,aiClips,narrationAudio,musicFile,completedStage:'music'});
         return{provider:music.provider,bytes:music.buffer.length,durationSeconds};
       });
-    }
+    }else if(resumedStages.includes('music')&&checkpoint?.musicFile){
+      try{const musicBuffer=await fs.readFile(checkpoint.musicFile);music={buffer:musicBuffer,provider:'checkpoint'};}catch{invalidatePipelineCheckpoint(reference,'music');throw new Error('El checkpoint de música ya no es válido; se regenerará desde música.');}
 
-    await run('render-all-scenes',async()=>{
+    if(!resumedStages.includes('render-all-scenes')) await run('render-all-scenes',async()=>{
       const output=path.join(renderJobDir,String(testId||('fulltest_'+Date.now()))+'.mp4');
       render=await renderAutotubeVideo({
         scenes:plan.scenes,
@@ -1683,9 +1741,12 @@ async function executeFullPipelineTest(reference,testId=null){
       });
       validation=await validateRenderedMp4(output,durationSeconds);
       const st=await fs.stat(output);
-      return{bytes:st.size,sceneCount:plan.scenes.length,...validation,downloadPath:output};
+      const value={bytes:st.size,sceneCount:plan.scenes.length,...validation,downloadPath:output};
+      savePipelineCheckpoint(reference,{dir,video,style,plan,mediaResults,aiClips,narrationAudio,musicFile:music?.checkpointFile||checkpoint?.musicFile,render:value,completedStage:'render-all-scenes'});
+      return value;
     });
 
+    autonomousPipelineCheckpoints.delete(pipelineCheckpointKey(reference));
     return{
       ok:true,
       elapsedMs:Date.now()-started,
@@ -1693,8 +1754,13 @@ async function executeFullPipelineTest(reference,testId=null){
       checks,
       result:{sceneCount:plan.scenes.length,referenceDurationSeconds:durationSeconds,renderedBytes:validation?.size||render?.size||0,downloadPath:checks['render-all-scenes']?.downloadPath||null,downloadUrl:testId?'/api/full-pipeline-test/'+encodeURIComponent(testId)+'/download':null}
     };
+  }catch(err){
+    const failedStage=Object.keys(checks).reverse().find(name=>checks[name]?.ok===false)||'unknown';
+    if(failedStage!=='unknown')invalidatePipelineCheckpoint(reference,failedStage);
+    throw err;
   }finally{
-    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+    const keepCheckpoint=Boolean(getPipelineCheckpoint(reference));
+    if(!keepCheckpoint)await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
   }
 }
 const urlVideoJobs=new Map();
