@@ -1398,12 +1398,14 @@ async function executeFullPipelineTest(reference,testId=null){
   const run=async(name,fn)=>{
     const t=Date.now();
     const limits={
-      'youtube-source-and-reference-analysis':180000,
-      'production-plan':180000,
-      'reference-blueprint':180000,
-      'visual-sources-all-scenes':720000,
-      'narration-all-scenes':180000,
-      'music':210000,
+      // Hard budgets keep a failed strategy from consuming the whole autonomous cycle.
+      // Each stage can still be overridden with AUTOTUBE_STAGE_TIMEOUT_<STAGE>.
+      'youtube-source-and-reference-analysis':120000,
+      'production-plan':75000,
+      'reference-blueprint':45000,
+      'visual-sources-all-scenes':480000,
+      'narration-all-scenes':120000,
+      'music':150000,
       'render-all-scenes':360000
     };
     const timeoutMs=Number(process.env['AUTOTUBE_STAGE_TIMEOUT_'+String(name).replace(/[^A-Za-z0-9]/g,'_').toUpperCase()]||limits[name]||300000);
