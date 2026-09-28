@@ -44,11 +44,16 @@ jobs:
         env:
           BASE_URL: https://autotube-usm1.onrender.com
           REFERENCE: https://www.youtube.com/watch?v=P_iFWenf1VA
-          MAX_ATTEMPTS: "3"
+          MAX_ATTEMPTS: "1"
         run: |
           set -uo pipefail
           success=0
           last_error=""
+          # Intermediate retries stay suppressed once the pipeline reaches a validated
+          # checkpoint. Only the final E2E proof re-runs the complete pipeline.
+          # A failure still exits non-zero so the autonomous self-heal/repair cycle can
+          # diagnose the actual failing stage instead of masking it with blind retries.
+          echo "CHECKPOINT POLICY: no blind intermediate retries; final E2E is the full proof."
           echo "CHECKPOINT-AWARE MODE: cada nueva llamada al pipeline reutiliza los stages ya validados en Render cuando el checkpoint siga disponible."
 
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
@@ -160,7 +165,7 @@ jobs:
             fi
 
             if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-              echo "Attempt $attempt failed. The next attempt calls the same reference again; server-side checkpoint resume skips completed stages when still valid."
+              echo "A retry would be allowed only by an explicit repaired/final E2E run; no blind retry is performed here."
             fi
           done
 
