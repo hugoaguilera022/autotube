@@ -3,13 +3,11 @@ name: AutoTube real YouTube to MP4 E2E
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 concurrency:
   group: autotube-e2e
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
