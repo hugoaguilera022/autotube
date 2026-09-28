@@ -152,7 +152,7 @@ const PORT=process.env.PORT||3000;function youtubeClient(){return new google.aut
 async function getYoutubeProfile(){await loadYoutubeConnection();if(!youtubeTokens)return youtubeProfileCache;const auth=youtubeClient();auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.channels.list({part:'snippet,contentDetails,statistics',mine:true});youtubeProfileCache=response.data.items?.[0]||null;return youtubeProfileCache}
 app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true}));app.use(express.static(path.join(__dirname,'public')));
 app.get('/api/video-providers',async(_req,res)=>{try{res.json({ok:true,providers:await getVideoProviderHealth(),freeDailyBudget:freeAiBudgetSnapshot()});}catch(err){res.status(503).json({ok:false,error:err.message||String(err)});}});
-app.get('/api/free-production-budget',(_req,res)=>res.json({ok:true,freeOnlyDefault:String(process.env.AUTOTUBE_ALLOW_PAID_PROVIDERS||'0')!=='1',budget:freeAiBudgetSnapshot(),resourceBudget:{hfZeroGpu:hfZeroGpuResourceSnapshot()},zeroGpuQuotaCooldownUntil:zeroGpuQuotaUntil}));
+app.get('/api/free-production-budget',(_req,res)=>res.json({ok:true,freeOnlyDefault:String(process.env.AUTOTUBE_ALLOW_PAID_PROVIDERS||'0')!=='1',budget:freeAiBudgetSnapshot(),resourceBudget:{hfZeroGpu:hfZeroGpuResourceSnapshot()},zeroGpuQuotaCooldownUntil:sharedZeroGpuCooldownUntil()}));
 app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',commit:process.env.RENDER_GIT_COMMIT||'',autonomous:{enabled:autonomousEnabled,stopped:autonomousStopped,reference:autonomousReference},providers:{video:true,musicAi:Boolean(process.env.ACE_STEP_URL),kokoro:Boolean(process.env.KOKORO_TTS_URL)},configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
 function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
 async function getReferenceVideo(input){
@@ -1374,8 +1374,8 @@ const VIDEO_PROVIDER_PROBE_MS = Math.max(30000, Number(process.env.AUTOTUBE_PROV
 // makes trying another ZeroGPU Space immediately wasteful. Keep a shared breaker for the
 // whole account window and never spend more GPU time on blind provider fallbacks.
 const ZEROGPU_SHARED_QUOTA_MS = Math.max(60*60*1000, Number(process.env.AUTOTUBE_ZEROGPU_QUOTA_COOLDOWN_MS)||24*60*60*1000);
-let zeroGpuQuotaUntil=0;
-function zeroGpuQuotaActive(){return Date.now()<zeroGpuQuotaUntil;}
+let sharedZeroGpuCooldownUntil()=0;
+function zeroGpuQuotaActive(){return Date.now()<sharedZeroGpuCooldownUntil();}
 
 // Free-production guard: never spend the daily free GPU allowance on blind retries.
 // This is intentionally conservative because ZeroGPU quota is measured in GPU time,
@@ -1482,6 +1482,9 @@ function settleHfZeroGpuAttempt(provider,requestedSeconds,{success=false,quota=f
   if(success||quota){
     hfZeroGpuResource.committedSeconds=Math.min(HF_ZEROGPU_SOFT_LIMIT_SECONDS,hfZeroGpuResource.committedSeconds+request);
   }
+}
+function sharedZeroGpuCooldownUntil(){
+  return Math.max(0,...[...videoProviderState.values()].map(st=>Number(st?.cooldownUntil||0)));
 }
 function noteZeroGpuQuota(err,providerName='ZeroGPU'){
   // ZeroGPU quota is shared across Spaces for the same caller account.
