@@ -378,8 +378,11 @@ async function validateGeneratedMusic(bufferOrPath,expectedDuration){
     const t=String(stderr);const dm=t.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);const duration=dm?Number(dm[1])*3600+Number(dm[2])*60+Number(dm[3]):0;
     const rms=t.match(/RMS level dB:\s*(-?[\d.]+)/i);const peak=t.match(/Peak level dB:\s*(-?[\d.]+)/i);const rmsDb=rms?Number(rms[1]):NaN,peakDb=peak?Number(peak[1]):NaN;
     if(!duration||duration<1)throw new Error('Audio sin duración verificable.');if(Number.isFinite(rmsDb)&&rmsDb<-55)throw new Error('Audio prácticamente silencioso (RMS '+rmsDb+' dB).');if(Number.isFinite(peakDb)&&peakDb<-50)throw new Error('Audio demasiado débil (peak '+peakDb+' dB).');
+    const entropy=t.match(/Entropy:\s*([\d.]+)/i),crest=t.match(/Crest factor:\s*([\d.]+)/i),zcr=t.match(/Zero crossings rate:\s*([\d.]+)/i);
+    const entropyValue=entropy?Number(entropy[1]):NaN,crestValue=crest?Number(crest[1]):NaN,zcrValue=zcr?Number(zcr[1]):NaN;
+    if(Number.isFinite(crestValue)&&crestValue<1.02&&Number.isFinite(rmsDb)&&rmsDb>-45)throw new Error('Audio rechazado por QA: señal demasiado parecida a ruido plano/constante (crest '+crestValue+').');
     if(expectedDuration&&duration<Math.max(1,Number(expectedDuration)*0.75))throw new Error('Audio demasiado corto: '+duration.toFixed(2)+' s.');
-    return{ok:true,durationSeconds:duration,rmsDb,peakDb,bytes:stat.size};
+    return{ok:true,durationSeconds:duration,rmsDb,peakDb,entropy:Number.isFinite(entropyValue)?entropyValue:null,crestFactor:Number.isFinite(crestValue)?crestValue:null,zeroCrossingRate:Number.isFinite(zcrValue)?zcrValue:null,bytes:stat.size};
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
 }
 async function discoverPollinationsMusicModels(key){
@@ -401,8 +404,10 @@ async function generatePollinationsMusic(description,durationSeconds,dir,audioPr
   throw lastErr||new Error('Pollinations music exhausted.');
 }
 async function generateHuggingFaceMusic(description,durationSeconds,dir,audioProfile={}){
+  // Stable Audio Open is useful for short musical/ambient passages; MusicGen remains a secondary option.
+
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();if(!token)throw new Error('HF music token no configurado.');
-  const configured=String(process.env.AUTOTUBE_HF_MUSIC_MODEL||'').trim();const candidates=[configured,'facebook/musicgen-small','facebook/musicgen-medium'].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);let lastErr=null;
+  const configured=String(process.env.AUTOTUBE_HF_MUSIC_MODEL||'').trim();const candidates=[configured,'stabilityai/stable-audio-open-1.0','facebook/musicgen-small','facebook/musicgen-medium'].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);let lastErr=null;
   for(const model of candidates){if(musicCooldownActive('hf:'+model))continue;try{
     const r=await fetch('https://router.huggingface.co/hf-inference/models/'+encodeURIComponent(model),{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',Accept:'audio/wav'},body:JSON.stringify({inputs:String(description||'').slice(0,2500),parameters:{duration:Math.min(30,Math.max(5,Number(durationSeconds)||30))}}),signal:AbortSignal.timeout(180000)});
     const ct=String(r.headers.get('content-type')||'').toLowerCase();const bytes=Buffer.from(await r.arrayBuffer());if(!r.ok)throw new Error('Hugging Face music '+r.status+': '+bytes.toString('utf8').slice(0,600));if(!ct.startsWith('audio/'))throw new Error('Hugging Face music no devolvió audio ('+ct+').');
