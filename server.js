@@ -1386,71 +1386,70 @@ async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
 
 async function generateWan22RestVideoClip(prompt,dir,options={}) {
   const space=String(options.spaceUrl||'').trim().replace(/\/$/,'');
+  if(!space)throw new Error('Wan2.2 REST Space no configurado.');
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   const imagePath=String(options.firstFramePath||'').trim();
   if(!imagePath)throw new Error('Wan2.2 REST requiere un frame inicial.');
-  const imageBytes=await fs.readFile(imagePath); if(!imageBytes.length)throw new Error('Frame inicial vacío.');
-  const uploadHeaders={}; if(token)uploadHeaders.Authorization='Bearer '+token;
-  const form=new FormData();
-  form.append('files',new Blob([imageBytes],{type:/\.png$/i.test(imagePath)?'image/png':'image/jpeg'}),path.basename(imagePath));
-  const up=await fetch(space+'/gradio_api/upload',{method:'POST',headers:uploadHeaders,body:form,signal:AbortSignal.timeout(60000)});
-  const upText=await up.text();
-  if(!up.ok)throw new Error('Wan2.2 upload HTTP '+up.status+': '+upText.slice(0,1200));
-  let upData;try{upData=JSON.parse(upText)}catch{throw new Error('Wan2.2 upload devolvió JSON inválido: '+upText.slice(0,500));}
-  const uploaded=Array.isArray(upData)?upData[0]:upData;
-  if(!uploaded)throw new Error('Wan2.2 upload no devolvió ruta.');
-  const fileData={path:String(uploaded),meta:{_type:'gradio.FileData'},orig_name:path.basename(imagePath)};
-  const headers={'Content-Type':'application/json'}; if(token)headers.Authorization='Bearer '+token;
-  const uploadHeaders={}; if(token)uploadHeaders.Authorization='Bearer '+token;
+  const imageBytes=await fs.readFile(imagePath);
+  if(!imageBytes.length)throw new Error('Frame inicial vacío.');
+  const mime=/\.png$/i.test(imagePath)?'image/png':'image/jpeg';
+  const auth=token?{Authorization:'Bearer '+token}:{};
   const form=new FormData();
   form.append('files',new Blob([imageBytes],{type:mime}),path.basename(imagePath));
-  const upload=await fetch(space+'/gradio_api/upload',{method:'POST',headers:uploadHeaders,body:form,signal:AbortSignal.timeout(30000)});
+  const upload=await fetch(space+'/gradio_api/upload',{method:'POST',headers:auth,body:form,signal:AbortSignal.timeout(60000)});
   const uploadText=await upload.text();
-  if(!upload.ok)throw new Error('Wan2.2 REST upload HTTP '+upload.status+': '+uploadText.slice(0,900));
-  let uploadParsed=null;try{uploadParsed=JSON.parse(uploadText)}catch{}
-  const uploadedPath=Array.isArray(uploadParsed)?uploadParsed[0]:uploadParsed?.path||uploadParsed?.[0];
-  if(!uploadedPath)throw new Error('Wan2.2 REST upload no devolvió path: '+uploadText.slice(0,900));
-  const imageFile={path:String(uploadedPath),meta:{_type:'gradio.FileData'},orig_name:path.basename(imagePath)};
+  if(!upload.ok)throw new Error('Wan2.2 upload HTTP '+upload.status+': '+uploadText.slice(0,1000));
+  let uploaded=null;try{uploaded=JSON.parse(uploadText)}catch{throw new Error('Wan2.2 upload JSON inválido: '+uploadText.slice(0,600));}
+  const uploadedPath=Array.isArray(uploaded)?uploaded[0]:uploaded?.path||uploaded?.[0]?.path;
+  if(!uploadedPath)throw new Error('Wan2.2 upload no devolvió path: '+uploadText.slice(0,900));
+  const fileData={path:String(uploadedPath),meta:{_type:'gradio.FileData'},orig_name:path.basename(imagePath)};
   let data;
   if(options.mode==='openking'){
-    data=[String(prompt||'').trim(),fileData,4,'blurry, jittery, distorted anatomy, text, logos, watermark',3,1,1,Math.floor(Math.random()*2147483647),true];
+    data=[String(prompt||'').trim(),fileData,832,480,73,8,5,Math.floor(Math.random()*2147483647)];
   }else{
-    data=[fileData,String(prompt||'').trim(),4,'blurry, jittery, distorted anatomy, text, logos, watermark',3.5,1,1,Math.floor(Math.random()*2147483647),true];
+    const duration=Math.max(3,Math.min(5,Number(options.durationSeconds)||3));
+    data=[fileData,String(prompt||'').trim(),'832x480',duration];
   }
+  const headers={'Content-Type':'application/json',...auth};
   const endpoint='/generate_video';
   const submit=await fetch(space+'/gradio_api/call'+endpoint,{method:'POST',headers,body:JSON.stringify({data}),signal:AbortSignal.timeout(30000)});
-  const txt=await submit.text(); if(!submit.ok)throw new Error('Wan2.2 REST submit HTTP '+submit.status+': '+txt.slice(0,1200));
-  let parsed=null;try{parsed=JSON.parse(txt)}catch{}
-  const eventId=String(parsed?.event_id||'').trim(); if(!eventId)throw new Error('Wan2.2 REST no devolvió event_id: '+txt.slice(0,700));
-  const stream=await fetch(space+'/gradio_api/call'+endpoint+'/'+encodeURIComponent(eventId),{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(360000)});
+  const submitText=await submit.text();
+  if(!submit.ok)throw new Error('Wan2.2 REST submit HTTP '+submit.status+': '+submitText.slice(0,1000));
+  let submitted=null;try{submitted=JSON.parse(submitText)}catch{}
+  const eventId=String(submitted?.event_id||'').trim();
+  if(!eventId)throw new Error('Wan2.2 REST no devolvió event_id: '+submitText.slice(0,700));
+  const stream=await fetch(space+'/gradio_api/call'+endpoint+'/'+encodeURIComponent(eventId),{headers:auth,signal:AbortSignal.timeout(240000)});
   if(!stream.ok)throw new Error('Wan2.2 REST SSE HTTP '+stream.status);
-  const reader=stream.body?.getReader(); if(!reader)throw new Error('Wan2.2 REST no devolvió SSE.');
-  const decoder=new TextDecoder(); let buffer='',completed=null,errorMessage='';
+  const reader=stream.body?.getReader();
+  if(!reader)throw new Error('Wan2.2 REST no devolvió SSE.');
+  const decoder=new TextDecoder();let buffer='',completed=null,errorMessage='';
   while(true){
-    const part=await reader.read(); if(part.done)break; buffer+=decoder.decode(part.value,{stream:true});
-    const events=buffer.split(/\n\n/); buffer=events.pop()||'';
+    const part=await reader.read();if(part.done)break;
+    buffer+=decoder.decode(part.value,{stream:true});
+    const events=buffer.split(/\n\n/);buffer=events.pop()||'';
     for(const block of events){
       const ev=(block.match(/(?:^|\n)event:\s*([^\n]+)/)||[])[1]?.trim()||'';
       const dl=(block.match(/(?:^|\n)data:\s*([\s\S]+)/)||[])[1]?.trim()||'';
-      if(ev==='error'||ev==='exception')errorMessage=dl||('Wan2.2 '+options.mode+' error');
-      if(ev==='complete'){try{completed=JSON.parse(dl)}catch{completed=null;}}
+      if(ev==='error'||ev==='exception'){errorMessage=dl||('Wan2.2 '+options.mode+' generation error');break;}
+      if(ev==='complete'){try{completed=JSON.parse(dl)}catch{}break;}
     }
     if(completed!==null||errorMessage)break;
   }
   await reader.cancel().catch(()=>{});
-  if(errorMessage)throw new Error('Wan2.2 '+options.mode+' generation error: '+String(errorMessage).slice(0,1800));
+  if(errorMessage)throw new Error('Wan2.2 '+options.mode+' generation error: '+String(errorMessage).slice(0,1600));
   const arr=Array.isArray(completed)?completed:(completed?.data||[]),candidates=[];
   const collect=v=>{if(v==null)return;if(typeof v==='string')candidates.push(v);else if(Array.isArray(v))v.forEach(collect);else if(typeof v==='object')for(const k of ['video','url','path','value'])if(v[k]!=null)collect(v[k]);};
   collect(arr);
   const raw=candidates.find(x=>/\.mp4($|[?#])|^https?:|^\//i.test(x))||candidates[0];
   if(!raw)throw new Error('Wan2.2 '+options.mode+' no devolvió vídeo. data='+JSON.stringify(arr).slice(0,1800));
   const outputUrl=String(raw).startsWith('http')?String(raw):space+String(raw).replace(/^\//,'/');
-  const response=await fetch(outputUrl,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(120000)});
+  const response=await fetch(outputUrl,{headers:auth,signal:AbortSignal.timeout(120000)});
   if(!response.ok)throw new Error('Wan2.2 '+options.mode+' descarga HTTP '+response.status);
   const outputPath=path.join(dir,'wan22-rest-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
   await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
-  const validation=await validateGeneratedVideoClip(outputPath); if(!validation.ok)throw new Error('Wan2.2 '+options.mode+' produjo un clip inválido.');
-  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.2 '+options.mode,model:'Wan2.2 I2V A14B FP8',durationSeconds:validation.durationSeconds,status:'complete'};
+  const validation=await validateGeneratedVideoClip(outputPath);
+  if(!validation.ok)throw new Error('Wan2.2 '+options.mode+' produjo un clip inválido.');
+  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.2 '+options.mode,model:'Wan2.2 I2V',durationSeconds:validation.durationSeconds,status:'complete'};
 }
 
 async function generateFreeWan22ZeroGpuVideoClip(prompt,dir,options={}) {
