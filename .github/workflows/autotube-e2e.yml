@@ -1,12 +1,10 @@
 name: AutoTube real YouTube to MP4 E2E
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: autotube-e2e
+  group: autotube-e2e-canonical
   cancel-in-progress: false
 
 permissions:
