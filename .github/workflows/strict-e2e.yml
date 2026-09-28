@@ -2,8 +2,6 @@ name: AutoTube strict E2E
 # current verifier rerun
 # manual AI E2E: startup loops are disabled; this workflow is the sole trigger
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 jobs:
   e2e:
