@@ -783,33 +783,50 @@ async function downloadGradioOutput(output,spaceUrl,token,dir,prefix){
   return outputPath;
 }
 
-async function generateFreeWan21VideoClip(prompt,dir,options={}){
-  const space=String(process.env.WAN21_SPACE_URL||'Heartsync/Wan-2.1-T2V-1.3B-LoRA').trim();
+async function generateFreeWan21VideoClip(prompt,dir,options={}) {
+  const spaceUrl=String(process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space').replace(/\/$/,'');
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
-  const {Client}=require('@gradio/client');
-  const client=await Client.connect(space,token?{token}:undefined);
-  const duration=Math.max(3,Math.min(5,Number(options.durationSeconds)||5));
-  const fps=16;
+  const headers={'Content-Type':'application/json'};
+  if(token)headers.Authorization='Bearer '+token;
   const frames=81;
-  const result=await client.predict('/generate_video',[
-    'Wan2.1-T2V-1.3B',
-    String(prompt||'').trim(),
-    'worst quality, blurry, static, distorted anatomy, text, logos, watermark, copied frame',
-    '',
-    0,
-    'UniPCMultistepScheduler',
-    3,
-    480,
-    832,
-    frames,
-    5,
-    20,
-    fps
-  ]);
-  const data=Array.isArray(result?.data)?result.data:[];
+  const seed=Math.floor(Math.random()*2147483647);
+  const submit=await fetch(spaceUrl+'/gradio_api/call/generate_video',{
+    method:'POST',
+    headers,
+    body:JSON.stringify({data:[
+      String(prompt||'').trim(),
+      'worst quality, blurry, static, distorted anatomy, text, logos, watermark',
+      1.5,
+      0.1,
+      8,
+      frames,
+      seed
+    ]}),
+    signal:AbortSignal.timeout(60000)
+  });
+  const raw=await submit.text();
+  let parsed=null;try{parsed=raw?JSON.parse(raw):null}catch{}
+  if(!submit.ok)throw new Error('Wan2.1 ZeroGPU submit '+submit.status+': '+raw.slice(0,500));
+  const eventId=String(parsed?.event_id||'').trim();
+  if(!eventId)throw new Error('Wan2.1 ZeroGPU no devolvió event_id.');
+  const result=await fetch(spaceUrl+'/gradio_api/call/generate_video/'+encodeURIComponent(eventId),{
+    headers:token?{Authorization:'Bearer '+token}:{},
+    signal:AbortSignal.timeout(300000)
+  });
+  const stream=await result.text();
+  if(!result.ok)throw new Error('Wan2.1 ZeroGPU result '+result.status+': '+stream.slice(0,700));
+  const events=stream.split(/\r?\n\r?\n/);
+  let completeData=null;
+  for(const event of events){
+    const type=(event.match(/^event:\s*(.+)$/m)||[])[1]?.trim();
+    const dataLine=(event.match(/^data:\s*(.+)$/m)||[])[1];
+    if(type==='error')throw new Error('Wan2.1 ZeroGPU error: '+String(dataLine||event).slice(0,700));
+    if(type==='complete'&&dataLine){try{completeData=JSON.parse(dataLine)}catch{}}
+  }
+  const data=Array.isArray(completeData)?completeData:(Array.isArray(completeData?.data)?completeData.data:[]);
   const output=data[0];
-  const outputPath=await downloadGradioOutput(output,'https://'+space+'.hf.space',token,dir,'wan21-generated');
-  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan 2.1',model:'Wan2.1 T2V 1.3B',durationSeconds:duration,status:'complete'};
+  const outputPath=await downloadGradioOutput(output,spaceUrl,token,dir,'wan21-generated');
+  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.1',model:'Wan2.1 T2V 1.3B',durationSeconds:5,status:'complete'};
 }
 
 async function generateFreeWanVace13VideoClip(prompt,dir,options={}){
