@@ -148,6 +148,7 @@ async function saveYoutubeConnection(){if(!supabaseConfigured()||!youtubeTokens)
 const PORT=process.env.PORT||3000;function youtubeClient(){return new google.auth.OAuth2(process.env.YOUTUBE_CLIENT_ID,process.env.YOUTUBE_CLIENT_SECRET,process.env.YOUTUBE_REDIRECT_URI||`${process.env.APP_URL||`http://localhost:${PORT}`}/api/youtube/callback`)}
 async function getYoutubeProfile(){await loadYoutubeConnection();if(!youtubeTokens)return youtubeProfileCache;const auth=youtubeClient();auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.channels.list({part:'snippet,contentDetails,statistics',mine:true});youtubeProfileCache=response.data.items?.[0]||null;return youtubeProfileCache}
 app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true}));app.use(express.static(path.join(__dirname,'public')));
+app.get('/api/video-providers',async(_req,res)=>{try{res.json({ok:true,providers:await getVideoProviderHealth()});}catch(err){res.status(503).json({ok:false,error:err.message||String(err)});}});
 app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',commit:process.env.RENDER_GIT_COMMIT||'',configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
 function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
 async function getReferenceVideo(input){
@@ -909,6 +910,18 @@ async function generateFreeLtxVideoClip(prompt,dir,options={}) {
   }
 }
 
+/* Autonomous free-video provider manager. */
+const videoProviderState = new Map();
+const VIDEO_PROVIDER_COOLDOWN_MS = Math.max(30000, Number(process.env.AUTOTUBE_PROVIDER_COOLDOWN_MS)||180000);
+const VIDEO_PROVIDER_PROBE_MS = Math.max(30000, Number(process.env.AUTOTUBE_PROVIDER_PROBE_MS)||60000);
+function providerState(name){if(!videoProviderState.has(name))videoProviderState.set(name,{status:'unknown',failures:0,lastError:'',lastFailureAt:0,lastSuccessAt:0,cooldownUntil:0});return videoProviderState.get(name);}
+function classifyVideoProviderError(err){const m=String(err?.message||err||'').toLowerCase();if(/401|403|unauthori[sz]ed|forbidden|oauth|login|permission|credentials/.test(m))return'user_blocking';if(/429|zero.?gpu quota|quota|rate limit|too many requests/.test(m))return'quota';if(/502|503|504|temporarily unavailable|space.*error|service unavailable|gateway/.test(m))return'transient_provider';if(/timeout|timed out|econnreset|etimedout|eai_again|socket hang up/.test(m))return'transient_network';if(/endpoint|not found|404|could not resolve app config|no api|invalid.*parameter|unexpected.*argument/.test(m))return'integration';if(/ffmpeg|invalid.*video|stream of video|duration.*invalid|static|movement/.test(m))return'output';return'unknown';}
+function noteProviderFailure(name,err){const st=providerState(name);st.failures++;st.lastError=String(err?.message||err);st.lastFailureAt=Date.now();const kind=classifyVideoProviderError(err);const multiplier=kind==='quota'?4:kind==='integration'?6:1;st.cooldownUntil=Date.now()+VIDEO_PROVIDER_COOLDOWN_MS*multiplier*Math.min(4,st.failures);st.status=kind==='user_blocking'?'blocked':kind==='integration'?'broken':'down';console.warn('[VideoProviderManager]',name,'=>',st.status,'error=',st.lastError.slice(0,500));}
+function noteProviderSuccess(name){const st=providerState(name);st.status='healthy';st.failures=0;st.lastError='';st.lastSuccessAt=Date.now();st.cooldownUntil=0;}
+function providerAvailable(name){const st=providerState(name);return st.status!=='blocked'&&Date.now()>=Number(st.cooldownUntil||0);}
+async function probeVideoProvider(name){const st=providerState(name);if(st.status==='blocked')return{ok:false,status:st.status,error:st.lastError};if(st.status==='healthy'&&Date.now()-st.lastSuccessAt<VIDEO_PROVIDER_PROBE_MS)return{ok:true,status:'healthy',cached:true};const raw={ 'LTX-2.5':process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space','Wan2.1':process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space','Wan2.1-VACE':process.env.WAN_VACE_SPACE_URL||'https://jdpadmin-wan2-1-vace-diffusers-demo.hf.space','LTX-0.9.8':process.env.LTX_SPACE||'https://lightricks-ltx-video-distilled.hf.space'}[name];if(!raw)return{ok:false,status:'unconfigured'};const url=String(raw).startsWith('http')?String(raw).replace(/\/$/,'')+'/gradio_api/info':'https://'+String(raw).replace(/\/$/,'')+'.hf.space/gradio_api/info';try{const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(12000)});if(!response.ok)throw new Error('HTTP '+response.status);noteProviderSuccess(name);return{ok:true,status:'healthy'};}catch(err){noteProviderFailure(name,err);return{ok:false,status:providerState(name).status,error:String(err.message||err)};}}
+async function getVideoProviderHealth(){const result={};for(const name of ['LTX-2.5','Wan2.1','Wan2.1-VACE','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
+async function generateBestFreeVideoClip(prompt,dir,options={}){const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);const referenceFramePath=String(options.firstFramePath||'').trim();const order=sceneIndex===0?['Wan2.1-VACE','LTX-2.5','Wan2.1','LTX-0.9.8']:['LTX-2.5','Wan2.1','LTX-0.9.8','Wan2.1-VACE'];const errors=[];for(const provider of order){if(provider==='Wan2.1-VACE'&&!referenceFramePath)continue;if(!providerAvailable(provider))continue;const health=await probeVideoProvider(provider);if(!health.ok)continue;try{let clip;if(provider==='Wan2.1-VACE')clip=await generateFreeWanVace13VideoClip(prompt,dir,{...options,firstFramePath:referenceFramePath});else if(provider==='LTX-2.5')clip=await generateFreeLtx25VideoClip(prompt,dir,options);else if(provider==='Wan2.1')clip=await generateFreeWan21VideoClip(prompt,dir,options);else clip=await generateFreeLtxVideoClip(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);if(!validation.ok)throw new Error('Clip IA inválido después de generarlo.');noteProviderSuccess(provider);return{...clip,providerKey:provider,validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));if(kind==='user_blocking')throw new Error('USER_BLOCKING_VIDEO_PROVIDER '+String(err.message||err));}}const health=await getVideoProviderHealth().catch(()=>({}));throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: ningún proveedor gratuito de vídeo IA pudo generar un clip válido. '+errors.join(' | ')+' | health='+JSON.stringify(health));}
 async function validateGeneratedVideoClip(file){
   const result=await new Promise((resolve,reject)=>{
     const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-map','0:v:0','-f','null','-'],{stdio:['ignore','pipe','pipe']});
@@ -1643,35 +1656,28 @@ async function executeUrlToVideo(reference,jobId,options={}){
     const aiClips=[];
 
     // FREE MODE IS STRICT: every scene must be a real AI-generated video clip.
-    // There is deliberately NO image/Ken-Burns/stock fallback.
+    // Provider Manager owns routing, health, cooldowns and per-clip validation.
     try {
-    for(let i=0;i<scenes.length;i++){
-      const scene=scenes[i];
-      const dnaPrompt=[
-        String(scene.visualPrompt||scene.title||referenceTitle),
-        'REFERENCE DNA (style only, create original material): '+JSON.stringify({
-          videoProfile:visualReferenceAnalysis?.videoProfile||{},
-          animationProfile:visualReferenceAnalysis?.animationProfile||{},
-          structureProfile:visualReferenceAnalysis?.structureProfile||{},
-          segment:scene.referenceSegment||null
-        }).slice(0,7000),
-        String(scene.animationNotes||''),
-        String(scene.cameraMovement||''),
-        'ORIGINAL MATERIAL ONLY. Do not reproduce faces, characters, logos, text, frames, exact shots, recordings or copyrighted audio.'
-      ].filter(Boolean).join('; ');
-      if(style.constantImage)throw new Error('La referencia es de imagen constante; el modo gratuito exige vídeo IA real y no usa animación de imagen.');
-      const duration=Math.min(8.5,Math.max(3,Number(scene.duration)||5));
-      const clip=await generateFreeLtxVideoClip(dnaPrompt,dir,{durationSeconds:duration,width:704,height:396,improveTexture:false});
-      await validateGeneratedVideoClip(clip.outputPath);
-      aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model};
-      mediaResults[i]={number:scene.number,media:[{provider:clip.provider,id:'generated-video-'+scene.number,title:'Original AI video clip',duration,downloadUrl:clip.outputPath,mediaType:'video'}],generatedAsset:true};
-    }
-    if(aiClips.length!==scenes.length||aiClips.some(x=>!x?.path))throw new Error('La generación no produjo un clip de vídeo IA válido para cada escena.');
-    } catch(err) {
-      finishFreeVideoGeneration(false);
-      throw err;
-    }
-    if(job)job.progress=48;
+      let firstFramePath='';
+      if(video.thumbnail){try{firstFramePath=await downloadRemoteImageToFile(video.thumbnail,dir,'reference-frame.jpg');}catch(err){console.warn('Reference thumbnail unavailable for VACE:',err.message||String(err));}}
+      for(let i=0;i<scenes.length;i++){
+        const scene=scenes[i];
+        const dnaPrompt=[String(scene.visualPrompt||scene.title||referenceTitle),
+          'REFERENCE DNA (style only, create original material): '+JSON.stringify({videoProfile:visualReferenceAnalysis?.videoProfile||{},animationProfile:visualReferenceAnalysis?.animationProfile||{},structureProfile:visualReferenceAnalysis?.structureProfile||{},audioProfile,segment:scene.referenceSegment||scene.referenceStructure||null}).slice(0,9000),
+          'CONTINUITY: '+JSON.stringify({previousScene:i>0?scenes[i-1]?.referenceStructure||scenes[i-1]?.animationNotes||'':'opening scene',currentScene:scene.referenceStructure||null,globalPacing:visualReferenceAnalysis?.animationProfile?.visualRhythm||visualReferenceAnalysis?.structureProfile?.pacing||''}).slice(0,5000),
+          String(scene.animationNotes||''),String(scene.cameraMovement||''),
+          'NEW AI-GENERATED MATERIAL ONLY. Do not reproduce faces, characters, logos, text, frames, exact shots, recordings or copyrighted audio.'
+        ].filter(Boolean).join('; ');
+        if(style.constantImage)throw new Error('La referencia es de imagen constante; el modo gratuito exige vídeo IA real y no usa animación de imagen.');
+        const duration=Math.min(8.5,Math.max(3,Number(scene.duration)||5));
+        const clip=await generateBestFreeVideoClip(dnaPrompt,dir,{durationSeconds:duration,width:704,height:396,improveTexture:false,sceneIndex:i,firstFramePath});
+        aiClips[i]={path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model,providerKey:clip.providerKey,validation:clip.validation};
+        mediaResults[i]={number:scene.number,media:[{provider:clip.provider,id:'generated-video-'+scene.number,title:'Original AI video clip',duration,downloadUrl:clip.outputPath,mediaType:'video',model:clip.model}],generatedAsset:true};
+        if(job)job.providerHealth=Object.fromEntries([...videoProviderState.entries()].map(([k,v])=>[k,{...v}]));
+      }
+      if(aiClips.length!==scenes.length||aiClips.some(x=>!x?.path))throw new Error('La generación no produjo un clip de vídeo IA válido para cada escena.');
+    } catch(err) {finishFreeVideoGeneration(false);throw err;}
+        if(job)job.progress=48;
 
     let narrationAudio=[];
     if(Boolean(audioProfile.hasSpeech)){
