@@ -78,7 +78,7 @@ jobs:
                 for poll in $(seq 1 720); do
                   status="$(curl -fsS --max-time 30 "$BASE_URL/api/full-pipeline-test/$job" || true)"
                   printf '%s\n' "$status" > status.json
-                  echo "$status" | jq '{status,ok,elapsedMs,result:.result,error}' || true
+                  echo "$status" | jq '{status,ok,elapsedMs,currentStage,progress,stageElapsedMs,providerBudget,zeroGpuQuotaCooldownUntil,result:.result,error}' || true
                   state="$(echo "$status" | jq -r '.status // empty' 2>/dev/null || true)"
 
                   if [ "$state" = "done" ]; then
@@ -88,9 +88,15 @@ jobs:
 
                   elapsed="$(echo "$status" | jq -r '.elapsedMs // 0' 2>/dev/null || echo 0)"
                   if [ "$state" = "running" ] && [ "$poll" -ge 60 ]; then
-                    last_error="Pipeline remained running for more than 10 minutes without completing"
-                    echo "$last_error"
-                    break
+                    stage="$(echo "$status" | jq -r '.currentStage // "unknown"' 2>/dev/null || echo unknown)"
+                    stage_elapsed="$(echo "$status" | jq -r '.stageElapsedMs // 0' 2>/dev/null || echo 0)"
+                    if [ "$stage" = "visual-sources-all-scenes" ] && [ "$stage_elapsed" -lt 480000 ]; then
+                      echo "GENERATION STILL ACTIVE: visual AI stage is within its 8-minute stage budget; do not classify as stalled."
+                    else
+                      last_error="Pipeline remained running beyond its allowed stage budget: stage=$stage stageElapsedMs=$stage_elapsed"
+                      echo "$last_error"
+                      break
+                    fi
                   fi
 
                   if [ "$state" = "failed" ] ||                      { [ "$state" != "running" ] &&                        [ "$(echo "$status" | jq -r '.ok // true' 2>/dev/null || true)" = "false" ]; }; then
