@@ -2012,8 +2012,26 @@ let autonomousStopped=false;
 let autonomousLastStart=0;
 async function runAutonomousCycle(){
   if(!autonomousEnabled||autonomousStopped||!autonomousReference)return;
+  const now=Date.now();
   const running=[...fullPipelineTestJobs.values()].find(j=>j.status==='running');
-  if(running){console.log('AutoTube autonomous cycle: existing job still running:',running.id);return;}
+  if(running){
+    const age=now-Number(running.startedAt||now);
+    const staleAfterMs=Math.max(15*60*1000,Number(process.env.AUTOTUBE_AUTONOMOUS_STALE_MS||20*60*1000));
+    if(age<staleAfterMs){
+      console.log('AutoTube autonomous cycle: existing job still running:',running.id,'ageMs=',age);
+      return;
+    }
+    running.status='failed';
+    running.finishedAt=now;
+    running.result={
+      ok:false,
+      error:'AUTONOMOUS_STALE_JOB: el job superó el tiempo máximo permitido y fue recuperado automáticamente.',
+      retryable:true,
+      userActionRequired:false,
+      autonomousStopReason:'El job estaba atascado; se recupera y se inicia un nuevo intento.'
+    };
+    console.error('AutoTube autonomous cycle: stale job recovered automatically:',running.id,'ageMs=',age);
+  }
   const recentDone=[...fullPipelineTestJobs.values()].find(j=>j.reference===autonomousReference&&j.status==='done'&&j.result?.ok);
   if(recentDone){autonomousStopped=true;console.log('AutoTube autonomous cycle: validated MP4 already exists; supervisor stopped:',recentDone.id);return;}
   if(Date.now()-autonomousLastStart<autonomousIntervalMs)return;
