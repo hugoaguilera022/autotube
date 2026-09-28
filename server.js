@@ -2050,13 +2050,18 @@ app.post('/api/ai/production-plan',async(req,res)=>{
     const sum=scenes.reduce((n,s)=>n+Number(s.duration||0),0);
     if(sum>0){const scale=totalSeconds/sum;scenes=scenes.map(s=>({...s,duration:Math.max(0.5,Number(s.duration)*scale)}));}
     const actualScript=String(data.script||customScript||scenes.map(s=>s.narration).filter(Boolean).join('\n')).trim();
-    return res.json({ok:true,mode:'brief',title:String(data.title||topic).slice(0,200),topic,brief:topic,language,duration:String(durationMinutes),targetDurationSeconds:totalSeconds,script:actualScript,customScript,creativeOptions:options,creativeDirection:selected,recommendedOptionId:String(data.recommendedOptionId||options[0].id),aspectRatio:String(selected.aspectRatio||data.aspectRatio||'16:9'),musicMood:String(data.musicMood||selected.music||'Original'),voiceStyle:String(data.voiceStyle||selected.voice||'Natural y cercana'),scenes,sceneCount:scenes.length,visualReferenceAnalysis:visualReference,referenceStyle:body.referenceStyle||null,creationMode:'brief'});
+    return res.json({ok:true,mode:'brief',title:String(data.title||topic).slice(0,200),topic:fallbackTopic,brief:fallbackTopic,language:fallbackLanguage,duration:String(fallbackDurationMinutes),targetDurationSeconds:totalSeconds,script:actualScript,customScript:fallbackCustomScript,creativeOptions:options,creativeDirection:selected,recommendedOptionId:String(data.recommendedOptionId||options[0].id),aspectRatio:String(selected.aspectRatio||data.aspectRatio||'16:9'),musicMood:String(data.musicMood||selected.music||'Original'),voiceStyle:String(data.voiceStyle||selected.voice||'Natural y cercana'),scenes,sceneCount:scenes.length,visualReferenceAnalysis:visualReference,referenceStyle:body.referenceStyle||null,creationMode:'brief'});
   }catch(err){
     console.error('AI production-plan error:',err?.message||String(err));
     // Keep the autonomous free pipeline alive even if Gemini returns malformed JSON
-    // or times out. The resulting plan is intentionally simple but still produces
-    // real AI-video clips; it is not treated as a successful reference analysis.
-    const totalSeconds=Math.max(15,Math.round(durationMinutes*60));
+    // or times out. Recompute fallback inputs from the request body because the
+    // variables declared inside the try block are intentionally scoped there.
+    const fallbackBody=req.body||{};
+    const fallbackTopic=String(fallbackBody.topic||fallbackBody.brief||fallbackBody.referenceTopic||'').trim();
+    const fallbackCustomScript=String(fallbackBody.script||fallbackBody.customScript||'').trim() || (Array.isArray(fallbackBody.outline)?fallbackBody.outline.join('\n'):'');
+    const fallbackLanguage=String(fallbackBody.language||'es').trim();
+    const fallbackDurationMinutes=Math.max(0.25,Math.min(60,Number(fallbackBody.duration)||8));
+    const totalSeconds=Math.max(15,Math.round(fallbackDurationMinutes*60));
     const count=Math.max(1,Math.min(6,Math.ceil(totalSeconds/30)));
     const base=totalSeconds/count;
     const scenes=Array.from({length:count},(_,i)=>({
@@ -2064,11 +2069,11 @@ app.post('/api/ai/production-plan',async(req,res)=>{
       title:'Escena original '+(i+1),
       duration:base,
       narration:'',
-      visualPrompt:(topic||'contenido audiovisual')+'; escena cinematográfica original; composición 16:9; movimiento de cámara suave; iluminación cinematográfica; material nuevo sin logos ni personajes protegidos.',
+      visualPrompt:(fallbackTopic||'contenido audiovisual')+'; escena cinematográfica original; composición 16:9; movimiento de cámara suave; iluminación cinematográfica; material nuevo sin logos ni personajes protegidos.',
       animationNotes:'movimiento cinematográfico original, parallax y acción visible',
       cameraMovement:'travelling suave y push-in',
       transition:i?'corte cinematográfico':'apertura cinematográfica',
-      searchQuery:topic||'contenido audiovisual',
+      searchQuery:fallbackTopic||'contenido audiovisual',
       mediaType:'video',
       constantImage:false
     }));
