@@ -756,7 +756,18 @@ async function generatePollinationsVideoClip(prompt,dir,options={}) {
   const aspectRatio=String(options.aspectRatio||'16:9');
   const configured=String(process.env.POLLINATIONS_VIDEO_MODEL||'wan-fast').trim();
   const discovered=await discoverPollinationsVideoModels(key);
-  const candidates=[configured,...discovered,'wan-fast','wan'].filter(Boolean).filter((x,i,arr)=>arr.indexOf(x)===i);
+  // /v1/models also exposes text-only models. Never send those to /video:
+  // they return HTTP 400 and waste the autonomous cycle budget. Keep only
+  // models that are known/advertised as video-capable.
+  const looksVideoCapable=(id)=>{
+    const value=String(id||'').toLowerCase();
+    if(!value)return false;
+    if(/gpt|gem|gemma|qwen|deepseek|command|glm|nemotron|llama|mistral|claude|codes|coder|text|chat|reason|instruct/.test(value))return false;
+    return /wan|ltx|hunyuan.?video|cogvideo|mochi|video|kling|veo|seedance|sora/.test(value);
+  };
+  const candidates=[configured,...discovered.filter(looksVideoCapable),'wan-fast','wan']
+    .filter(looksVideoCapable)
+    .filter((x,i,arr)=>arr.indexOf(x)===i);
   let lastError=null;
   for(const model of candidates){
     const endpoint='https://gen.pollinations.ai/video/'+encodeURIComponent(String(prompt||'').trim())+'?'+new URLSearchParams({
