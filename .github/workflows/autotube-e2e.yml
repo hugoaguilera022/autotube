@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: autotube-finalization
-  cancel-in-progress: false
+  group: autotube-e2e
+  cancel-in-progress: true
 
 permissions:
   contents: read
