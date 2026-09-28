@@ -169,3 +169,28 @@ jobs:
             start.json
             motion.txt
           retention-days: 7
+
+      - name: Notify final validated MP4
+        if: success()
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          ALERT_EMAIL: hugoaguilera022@gmail.com
+        run: |
+          set -euo pipefail
+          if [ -z "${BREVO_API_KEY:-}" ]; then
+            echo "BREVO_API_KEY is not configured; artifact remains available in this run."
+            exit 0
+          fi
+          python - <<'PY'
+          import json, os, urllib.request
+          run_url = os.environ.get("GITHUB_SERVER_URL","https://github.com") + "/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ["GITHUB_RUN_ID"]
+          payload = {
+            "sender": {"name":"AutoTube","email":"hugoaguilera022@gmail.com"},
+            "to": [{"email": os.environ["ALERT_EMAIL"]}],
+            "subject": "✅ AutoTube MP4 final validado",
+            "textContent": "✅ El MP4 final de AutoTube ha sido generado y ha superado la validación estricta de vídeo IA real (incluido movimiento entre frames).\n\nRun: " + run_url
+          }
+          req=urllib.request.Request("https://api.brevo.com/v3/smtp/email", data=json.dumps(payload).encode(), headers={"accept":"application/json","api-key":os.environ["BREVO_API_KEY"],"content-type":"application/json"}, method="POST")
+          with urllib.request.urlopen(req, timeout=30) as r:
+              print(r.read().decode())
+          PY
