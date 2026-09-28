@@ -11,7 +11,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const { jsonrepair } = require('jsonrepair');
 const multer = require('multer');
-const youtubedl = require('youtube-dl-exec');
+const { downloadYouTube } = require('@hiudyy/ytdl');
 const upload = multer({ storage: multer.diskStorage({ destination: (_req,_file,cb)=>cb(null,os.tmpdir()), filename: (_req,file,cb)=>cb(null,'autotube-upload-'+Date.now()+'-'+crypto.randomBytes(6).toString('hex')+'-'+String(file.originalname||'upload').replace(/[^a-zA-Z0-9._-]/g,'_')) }), limits: { fileSize: 250 * 1024 * 1024 } });
 const renderJobs = new Map();
 let activeRenderJobId = null;
@@ -90,105 +90,19 @@ app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',commit:proces
 function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
 async function getReferenceVideo(input){const rawInput=String(input||'').trim();if(/\.(mp4|m4v|mov|webm|mkv)(?:$|\?)/i.test(rawInput)){let title='Referencia audiovisual descargada';try{const u=new URL(rawInput);title=decodeURIComponent(path.basename(u.pathname))||title}catch{}return{videoId:'',title,description:'',channelTitle:'',duration:'',definition:'',caption:false,thumbnail:'',thumbnails:[],defaultAudioLanguage:''};}const videoId=extractYoutubeVideoId(input);if(!videoId)throw new Error('La URL de referencia no es válida.');try{const auth=youtubeClient();await loadYoutubeConnection();if(youtubeTokens)auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.videos.list({part:'snippet,contentDetails,statistics',id:[videoId]}),video=response.data.items?.[0];if(video){const s=video.snippet||{},d=video.contentDetails||{};return{videoId,title:s.title||'',description:s.description||'',channelTitle:s.channelTitle||'',publishedAt:s.publishedAt||'',tags:s.tags||[],categoryId:s.categoryId||'',defaultLanguage:s.defaultLanguage||s.defaultAudioLanguage||'',duration:d.duration||'',definition:d.definition||'',caption:d.caption==='true',thumbnail:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||'',thumbnails:[s.thumbnails?.maxres?.url,s.thumbnails?.high?.url,s.thumbnails?.standard?.url,s.thumbnails?.medium?.url].filter(Boolean),defaultAudioLanguage:s.defaultAudioLanguage||''}}}catch(err){console.error('YouTube reference API error:',err.message)}try{const oembed=await fetch('https://www.youtube.com/oembed?url='+encodeURIComponent(input)+'&format=json',{headers:{Accept:'application/json'},signal:AbortSignal.timeout(10000)});if(oembed.ok){const raw=await oembed.text();try{const data=JSON.parse(raw);return{videoId,title:data.title||'',channelTitle:data.author_name||'',thumbnail:data.thumbnail_url||'',thumbnails:[data.thumbnail_url].filter(Boolean)}}catch{}}}catch(err){console.warn('YouTube oEmbed metadata unavailable:',err?.message||String(err))}return{videoId,title:'Contenido original de YouTube',channelTitle:'',thumbnail:'',thumbnails:[]}}
 async function downloadYoutubeReference(url,dir){
-  // Prefer the verified external GitHub Actions reference artifact.
+  const target=path.join(dir,'reference.mp4');
   try{
-    const artifactUrl=String(process.env.AUTOTUBE_REFERENCE_ARTIFACT_URL||'').trim();
-    const response=artifactUrl?await fetch(artifactUrl,{redirect:'follow',headers:{'User-Agent':'AutoTube-reference/1.0',Accept:'video/mp4,application/octet-stream'}}):null;
-    if(response.ok&&response.body){
-      const file=path.join(dir,'reference.mp4'),fh=await fs.open(file,'w');
-      try{const reader=response.body.getReader();while(true){const part=await reader.read();if(part.done)break;await fh.write(part.value)}}finally{await fh.close()}
-      const stat=await fs.stat(file);
-      const p=await probe(file);
-      if(stat.size>1000000&&Number(p.duration)>=60&&p.width&&p.height){
-        console.log('AUTOTUBE EXTERNAL REFERENCE ARTIFACT PASSED',{bytes:stat.size,duration:p.duration,width:p.width,height:p.height});
-        return{file,bytes:stat.size,ytDlpOutput:'External GitHub Actions reference artifact',strategy:'github-actions-reference-artifact'};
-      }
-      await fs.rm(file,{force:true}).catch(()=>{});
-    }
-  }catch(err){console.warn('External GitHub reference artifact unavailable:',err?.message||String(err))}
-
-  await fs.mkdir(dir,{recursive:true});
-  // Reuse the already validated exact URL->MP4 downloader exposed by the preload.
-  // This avoids duplicating YouTube extraction logic and gives the reference analyzer
-  // the same proven source file used by the exact-media validation path.
-  try{
-    const base=`http://127.0.0.1:${PORT}`;
-    const start=await fetch(base+'/api/url-to-mp4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference:url})});
-    const startData=await start.json().catch(()=>null);
-    if(start.ok&&startData?.jobId){
-      const jobId=String(startData.jobId);
-      const deadline=Date.now()+12*60*1000;
-      while(Date.now()<deadline){
-        await new Promise(r=>setTimeout(r,2000));
-        const status=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId));
-        const data=await status.json().catch(()=>null);
-        if(data?.status==='done'&&data?.downloadUrl){
-          const internal=await fetch(base+'/api/url-to-mp4/'+encodeURIComponent(jobId)+'/internal-path');
-          const internalData=await internal.json().catch(()=>null);
-          if(internal.ok&&internalData?.path){
-            const sourcePath=String(internalData.path);
-            const stat=await fs.stat(sourcePath);
-            if(stat.size){
-              const file=path.join(dir,'reference.mp4');
-              await fs.copyFile(sourcePath,file);
-              const copied=await fs.stat(file);
-              if(copied.size)return{file,bytes:copied.size,ytDlpOutput:'Internal exact URL->MP4 pipeline',strategy:'exact-url-to-mp4'};
-            }
-          }
-          break;
-        }
-        if(data?.status==='error')break;
-      }
-    }
+    const result=await downloadYouTube(String(url||'').trim(),'mp4');
+    if(!result?.success||!result.filePath) throw new Error(String(result?.error||'YouTube provider did not return a video file.'));
+    await fs.copyFile(result.filePath,target);
+    const stat=await fs.stat(target);
+    if(!stat.size) throw new Error('La copia temporal de análisis está vacía.');
+    return{file:target,bytes:stat.size,ytDlpOutput:String(result.source||''),strategy:'@hiudyy/ytdl-provider'};
   }catch(err){
-    console.warn('Internal exact URL->MP4 reference acquisition failed:',err?.message||String(err));
+    throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. El análisis directo por URL de Gemini debe utilizarse cuando sea posible. Último error: '+String(err?.message||err));
   }
-  const ytOutput=path.join(dir,'reference.%(ext)s');
-  const strategies=[
-    {name:'mp4-avc-aac',format:'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]/best[ext=mp4]'},
-    {name:'best-compatible',format:'bestvideo*+bestaudio/best'},
-    {name:'best-single',format:'best'}
-  ];
-  let lastError='';
-  for(const strategy of strategies){
-    try{
-      const result=await youtubedl(url,{
-        format:strategy.format,
-        output:ytOutput,
-        mergeOutputFormat:'mp4',
-        noPlaylist:true,
-        noWarnings:true,
-        noCheckCertificates:true,
-        restrictFilenames:true,
-        preferFreeFormats:false,
-        ffmpegLocation:path.dirname(ffmpegPath),
-        retries:3,
-        fragmentRetries:3,
-        concurrentFragments:2
-      },{timeout:600000,killSignal:'SIGKILL'});
-      let files=await fs.readdir(dir);
-      let videoFile=files.find(name=>/^reference\\.(mp4|mkv|webm|mov|m4v)$/i.test(name));
-      if(!videoFile){
-        const videoPart=files.find(name=>/^reference\\..*\\.(mp4|mkv|webm|mov|m4v)$/i.test(name));
-        const audioPart=files.find(name=>/^reference\\..*\\.(m4a|mp3|aac|opus|webm|wav)$/i.test(name)&&name!==videoPart);
-        if(videoPart&&audioPart){
-          const merged=path.join(dir,'reference.mp4');
-          await runFfmpeg(['-y','-hide_banner','-loglevel','error','-i',path.join(dir,videoPart),'-i',path.join(dir,audioPart),'-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','veryfast','-crf','23','-c:a','aac','-b:a','160k','-movflags','+faststart',merged]);
-          videoFile='reference.mp4';
-        }
-      }
-      if(!videoFile)throw new Error('yt-dlp no produjo un archivo de vídeo. Archivos temporales: '+files.filter(name=>/^reference\\./i.test(name)).join(', '));
-      const file=path.join(dir,videoFile);
-      const stat=await fs.stat(file);
-      if(!stat.size)throw new Error('La copia temporal de análisis está vacía.');
-      return{file,bytes:stat.size,ytDlpOutput:String(result||'').slice(-1500),strategy:strategy.name};
-    }catch(err){
-      lastError=String(err?.stderr||err?.message||err||'').slice(-2500);
-      for(const name of await fs.readdir(dir).catch(()=>[]))if(/^reference\\./i.test(name))await fs.rm(path.join(dir,name),{force:true}).catch(()=>{});
-    }
-  }
-  throw new Error('YouTube no permitió obtener una copia temporal para analizar la referencia. Se probaron múltiples estrategias de yt-dlp. Último error: '+lastError);
 }
+
 async function uploadGeminiFile(filePath,mimeType){
   const key=String(process.env['GEM'+'INI_'+'API_'+'KEY']||'').trim();
   if(!key)throw new Error('Falta GEMINI_API_KEY.');
@@ -269,55 +183,9 @@ async function measureReferenceVisualContinuity(file){
 }
 
 async function getYoutubeTranscript(input,preferredLanguage='es'){
-  const url=String(input||'').trim();
-  if(!url)return{available:false,transcript:'',language:null,source:null};
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-youtube-transcript-'));
-  try{
-    const output=path.join(dir,'captions.%(ext)s');
-    const languages=[String(preferredLanguage||'es'),preferredLanguage==='es'?'en':'es','en'].filter(Boolean);
-    const attempts=[
-      {writeAutoSub:true},
-      {writeSub:true}
-    ];
-    let files=[];
-    for(const attempt of attempts){
-      try{
-        await youtubedl(url,{
-          skipDownload:true,
-          noPlaylist:true,
-          noWarnings:true,
-          noCheckCertificates:true,
-          output,
-          subLang:languages.join(','),
-          subFormat:'vtt',
-          ...attempt
-        },{timeout:90000,killSignal:'SIGKILL'});
-        files=(await fs.readdir(dir)).filter(name=>/^captions\..+\.(vtt|srt)$/i.test(name));
-        if(files.length)break;
-      }catch(err){
-        console.warn('YouTube transcript attempt failed:',err?.message||String(err));
-      }
-    }
-    if(!files.length)return{available:false,transcript:'',language:null,source:null};
-    files.sort((a,b)=>{
-      const score=n=>{const l=n.toLowerCase();return l.includes('.'+preferredLanguage+'.')?0:(l.includes('.en.')?1:2)};
-      return score(a)-score(b);
-    });
-    const chosen=files[0];
-    const raw=await fs.readFile(path.join(dir,chosen),'utf8');
-    const transcript=parseSubtitleText(raw);
-    if(!transcript)return{available:false,transcript:'',language:null,source:null};
-    const match=chosen.match(/\.([a-zA-Z-]+)\.(?:vtt|srt)$/);
-    return{
-      available:true,
-      transcript:transcript.slice(0,100000),
-      language:match?.[1]||preferredLanguage,
-      source:chosen.includes('.auto.')?'YouTube auto-captions':'YouTube captions'
-    };
-  }finally{
-    await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
-  }
+  return{available:false,transcript:'',language:null,source:null};
 }
+
 function parseSubtitleText(raw){
   const text=String(raw||'').replace(/^\uFEFF/,'').replace(/\r/g,'');
   const blocks=text.split(/\n\n+/);
