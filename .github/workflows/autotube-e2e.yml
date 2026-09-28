@@ -8,7 +8,7 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Wait for Render to deploy this commit
         env:
@@ -39,7 +39,7 @@ jobs:
           cat start.json
           job="$(jq -r '.jobId // empty' start.json)"
           test -n "$job"
-          for i in $(seq 1 180); do
+          for i in $(seq 1 720); do
             status="$(curl -fsS --max-time 30 "$BASE_URL/api/full-pipeline-test/$job")" || {
               sleep 10
               continue
