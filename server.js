@@ -1346,81 +1346,37 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
 }
 
 async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
+  const {Client,handle_file}=require('@gradio/client');
   const spaces=[
     String(process.env.LTX23_ZEROGPU_SPACE||'Lightricks/LTX-2-3').trim(),
     'Lightricks/LTX-2-3',
-    'linoyts/LTX-2-3'
+    'linoyts/LTX-2-3',
+    'linoyts/ltx23-distilled-api',
+    'ShaundeOoO/ltx-2.3-fast'
   ].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   const imagePath=String(options.firstFramePath||'').trim();
-  const duration=Math.max(1,Math.min(3,Number(options.durationSeconds)||3));
+  const duration=Math.max(1,Math.min(5,Number(options.durationSeconds)||3));
+  const width=768,height=512;
   const errors=[];
   for(const space of spaces){
     try{
-      const base=space.startsWith('http')?space.replace(/\\/$/,''):'https://'+space.replace(/^https?:\\/\\//,'').replace(/\\.hf\\.space$/,'')+'.hf.space';
-      const headers=token?{Authorization:'Bearer '+token}:{};
-      const infoResponse=await fetch(base+'/gradio_api/info',{headers,signal:AbortSignal.timeout(10000)});
-      const infoText=await infoResponse.text();
-      if(!infoResponse.ok)throw new Error('LTX-2.3 schema HTTP '+infoResponse.status+': '+infoText.slice(0,500));
-      let info=null;try{info=JSON.parse(infoText)}catch{}
-      const deps=Array.isArray(info?.dependencies)?info.dependencies:[];
-      const dep=deps.find(d=>d?.api_name==='generate_video'||d?.api_name==='/generate_video'||d?.id===2||String(d?.fn||'').includes('generate_video'))||deps.find(d=>d?.api_name==='predict'||d?.api_name==='/predict');
-      const apiName=String(dep?.api_name||'').replace(/^\\/+/,'').trim();
-      if(!apiName)throw new Error('LTX-2.3 no expone un endpoint de generación identificable.');
-      let imageValue=null;
-      if(imagePath){
-        const bytes=await fs.readFile(imagePath);
-        const form=new FormData();
-        form.append('files',new Blob([bytes],{type:/\\.png$/i.test(imagePath)?'image/png':'image/jpeg'}),path.basename(imagePath));
-        const uploadHeaders=token?{Authorization:'Bearer '+token}:{};
-        const upload=await fetch(base+'/gradio_api/upload',{method:'POST',headers:uploadHeaders,body:form,signal:AbortSignal.timeout(30000)});
-        const uploadText=await upload.text();
-        if(!upload.ok)throw new Error('LTX-2.3 upload HTTP '+upload.status+': '+uploadText.slice(0,500));
-        let uploaded=null;try{uploaded=JSON.parse(uploadText)}catch{}
-        const uploadedPath=Array.isArray(uploaded)?uploaded[0]:uploaded?.path||uploaded?.[0]?.path;
-        if(!uploadedPath)throw new Error('LTX-2.3 upload no devolvió path.');
-        imageValue={path:String(uploadedPath),meta:{_type:'gradio.FileData'},orig_name:path.basename(imagePath)};
-      }
-      const data=[imageValue,String(prompt||'').trim(),duration,true,Math.floor(Math.random()*2147483647),true,512,768];
-      const submit=await fetch(base+'/gradio_api/call/'+encodeURIComponent(apiName),{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({data}),signal:AbortSignal.timeout(30000)});
-      const submitText=await submit.text();
-      if(!submit.ok)throw new Error('LTX-2.3 submit HTTP '+submit.status+': '+submitText.slice(0,700));
-      let submitted=null;try{submitted=JSON.parse(submitText)}catch{}
-      const eventId=String(submitted?.event_id||'').trim();
-      if(!eventId)throw new Error('LTX-2.3 no devolvió event_id.');
-      const stream=await fetch(base+'/gradio_api/call/'+encodeURIComponent(apiName)+'/'+encodeURIComponent(eventId),{headers,signal:AbortSignal.timeout(240000)});
-      if(!stream.ok)throw new Error('LTX-2.3 SSE HTTP '+stream.status);
-      const reader=stream.body?.getReader();if(!reader)throw new Error('LTX-2.3 no devolvió SSE.');
-      const decoder=new TextDecoder();let buffer='',completed=null,errorMessage='';
-      while(true){
-        const part=await reader.read();if(part.done)break;
-        buffer+=decoder.decode(part.value,{stream:true});
-        const events=buffer.split(/\\n\\n/);buffer=events.pop()||'';
-        for(const block of events){
-          const eventName=(block.match(/(?:^|\\n)event:\\s*([^\\n]+)/)||[])[1]?.trim()||'';
-          const dataLine=(block.match(/(?:^|\\n)data:\\s*([\\s\\S]+)/)||[])[1]?.trim()||'';
-          if(eventName==='error'){errorMessage=dataLine||'LTX-2.3 generation error';break;}
-          if(eventName==='complete'){try{completed=JSON.parse(dataLine)}catch{completed=null;}break;}
-        }
-        if(completed!==null||errorMessage)break;
-      }
-      await reader.cancel().catch(()=>{});
-      if(errorMessage)throw new Error('LTX-2.3 generation error: '+errorMessage.slice(0,1200));
-      const dataOut=Array.isArray(completed)?completed:(completed?.data||[]);
-      const raw0=dataOut[0];
-      const raw=raw0?.video?.url||raw0?.video?.path||raw0?.url||raw0?.path||(typeof raw0==='string'?raw0:'');
-      if(!raw)throw new Error('LTX-2.3 no devolvió vídeo. data='+JSON.stringify(dataOut).slice(0,1200));
-      const outputUrl=String(raw).startsWith('http')?String(raw):base+String(raw).replace(/^\\//,'/');
-      const response=await fetch(outputUrl,{headers,signal:AbortSignal.timeout(120000)});
-      if(!response.ok)throw new Error('LTX-2.3 output HTTP '+response.status);
-      const outputPath=path.join(dir,'ltx23-zerogpu-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-      await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
+      const app=await Client.connect(space,token?{token}:undefined);
+      const image=imagePath?await handle_file(imagePath):null;
+      const seed=Math.floor(Math.random()*2147483647);
+      const result=await app.predict(2,[image,String(prompt||'').trim(),duration,false,seed,true,height,width]);
+      const data=Array.isArray(result?.data)?result.data:[];
+      const raw0=data[0];
+      const raw=typeof raw0==='string'?(raw0):(raw0?.url||raw0?.path||raw0?.video?.url||raw0?.video?.path||'');
+      if(!raw)throw new Error('LTX-2.3 Space no devolvió un vídeo. data='+JSON.stringify(data).slice(0,1200));
+      const outputPath=await downloadGradioOutput(raw,'https://'+space.replace(/^https?:\/\//,'').replace(/\.hf\.space$/,'')+'.hf.space',token,dir,'ltx23-official-generated');
       const validation=await validateGeneratedVideoClip(outputPath);
       if(!validation.ok)throw new Error('LTX-2.3 Space produjo un clip inválido.');
-      const stat=await fs.stat(outputPath);if(!stat.size)throw new Error('LTX-2.3 Space produjo un archivo vacío.');
-      return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX-2.3 REST',model:'LTX-2.3 Distilled 22B',durationSeconds:validation.durationSeconds,status:'complete'};
+      const stat=await fs.stat(outputPath);
+      if(!stat.size)throw new Error('LTX-2.3 Space produjo un archivo vacío.');
+      return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX-2.3',model:'Lightricks LTX-2.3 Distilled 22B',durationSeconds:validation.durationSeconds,status:'complete'};
     }catch(err){
-      errors.push(space+': '+String(err?.message||err).slice(0,700));
+      errors.push(space+': '+String(err?.message||err).slice(0,600));
       console.warn('LTX-2.3 ZeroGPU Space failed:',space,err?.message||String(err));
     }
   }
