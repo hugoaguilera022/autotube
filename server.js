@@ -725,6 +725,31 @@ async function generatePollinationsVideoClip(prompt,dir,options={}) {
   throw new Error('Pollinations no pudo generar un vídeo IA válido con ningún modelo disponible. Último error: '+(lastError?.message||'desconocido'));
 }
 
+async function generateHuggingFaceProviderVideoClip(prompt,dir,options={}) {
+  const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+  if(!token)throw new Error('HF_TOKEN no configurado.');
+  const model=String(process.env.HF_VIDEO_MODEL||'Wan-AI/Wan2.1-T2V-1.3B').trim();
+  const provider=String(process.env.HF_VIDEO_PROVIDER||'fal-ai').trim();
+  const duration=Math.max(2,Math.min(4,Number(options.durationSeconds)||3));
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(new Error('HF video timeout')),240000);
+  try{
+    const {InferenceClient}=require('@huggingface/inference');
+    const client=new InferenceClient(token);
+    const blob=await client.textToVideo({
+      provider,
+      model,
+      inputs:String(prompt||'').trim()
+    });
+    const bytes=Buffer.from(await blob.arrayBuffer());
+    if(bytes.length<10000)throw new Error('Hugging Face devolvió un vídeo vacío.');
+    const outputPath=path.join(dir,'hf-provider-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+    await fs.writeFile(outputPath,bytes);
+    await validateGeneratedVideoClip(outputPath);
+    return{outputPath,bytes:bytes.length,provider:'Hugging Face Inference Providers · '+provider,model,durationSeconds:duration,status:'complete'};
+  }finally{clearTimeout(timer)}
+}
+
 async function generateFreeLtx25VideoClip(prompt,dir,options={}) {
   const spaceUrl=String(process.env.LTX25_SPACE_URL||'https://DeepRat-LTX-Video-ZeroGPU-Optimized.hf.space').replace(/\/$/,'');
   const duration=Math.max(3,Math.min(3,Number(options.durationSeconds)||3));
