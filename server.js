@@ -1421,7 +1421,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     // ZeroGPU public Spaces can expose a transient/incorrect /info health response.
     // Do not spend a generation window on a redundant probe; the real Gradio request
     // plus output validation is the authoritative health check for these free routes.
-    const health=provider==='OpenKing-Wan2.2'||provider==='Wan2.2-ZeroGPU'
+    const health=(provider==='OpenKing-Wan2.2'||provider==='Wan2.2-ZeroGPU'||provider==='LTX-2.3-ZeroGPU')
       ? {ok:true,status:'generation-direct'}
       : await probeVideoProvider(provider);
     if(!health.ok)continue;
