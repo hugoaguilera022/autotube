@@ -1328,7 +1328,22 @@ async function executeFullPipelineTest(reference,testId=null){
         for(let i=0;i<targetCount;i++){
           const scene=plan.scenes[i];
           try{
-            const prompt=String(scene.visualPrompt||scene.title||referenceTitle)+'; '+JSON.stringify(visualReferenceAnalysis?.videoProfile||{}).slice(0,3200)+'; '+String(scene.animationNotes||'').slice(0,1200)+'; '+String(scene.cameraMovement||'').slice(0,800)+'; ORIGINAL MATERIAL ONLY.';
+            const continuity=JSON.stringify({
+              visual:visualReferenceAnalysis?.videoProfile||{},
+              animation:visualReferenceAnalysis?.animationProfile||{},
+              structure:visualReferenceAnalysis?.structureProfile||{},
+              audio:visualReferenceAnalysis?.audioProfile||{},
+              scene:scene.referenceStructure||{}
+            }).slice(0,7000);
+            const prompt=[
+              String(scene.visualPrompt||scene.title||referenceTitle),
+              'Match the reference audiovisual language: composition, shot scale, camera movement, motion intensity, lighting, palette, pacing and continuity.',
+              'Preserve recurring visual anchors between scenes while generating new original material.',
+              'Continuity blueprint: '+continuity,
+              'Scene animation: '+String(scene.animationNotes||''),
+              'Camera: '+String(scene.cameraMovement||''),
+              'Original material only; no copied frames, logos, text or watermark.'
+            ].join('; ');
             let clip=null;
             const referenceThumb=String(video?.thumbnail||'').trim();
             const attempts=i===0
