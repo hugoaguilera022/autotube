@@ -1297,82 +1297,39 @@ async function probeVideoProvider(name){const st=providerState(name);if(st.statu
 async function getVideoProviderHealth(){const result={};for(const name of ['LTX-2.3-ZeroGPU','Wan2.2-ZeroGPU','OpenKing-Wan2.2','Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
 
 async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
-  const space=String(process.env.LTX23_ZEROGPU_SPACE||'https://shaundeoOo-ltx-2-3-fast.hf.space').trim().replace(/\/$/,'');
+  const {Client,handle_file}=require('@gradio/client');
+  const spaces=[
+    String(process.env.LTX23_ZEROGPU_SPACE||'Lightricks/LTX-2-3').trim(),
+    'Lightricks/LTX-2-3',
+    'ShaundeOoO/ltx-2.3-fast'
+  ].filter(Boolean).filter((x,i,a)=>a.indexOf(x)===i);
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   const imagePath=String(options.firstFramePath||'').trim();
-  if(!imagePath)throw new Error('LTX-2.3 ZeroGPU I2V requiere un frame inicial.');
-  const imageBytes=await fs.readFile(imagePath);
-  if(!imageBytes.length)throw new Error('El frame inicial para LTX-2.3 está vacío.');
-  const imageMime=/\.png$/i.test(imagePath)?'image/png':'image/jpeg';
-  const imageDataUri='data:'+imageMime+';base64,'+imageBytes.toString('base64');
-  const duration=5;
-  const resolution=String(options.resolution||'720p');
-  const seed=Math.floor(Math.random()*4294967295);
-  const payload={
-    data:[
-      imageDataUri,
-      String(prompt||'').trim(),
-      String(options.negativePrompt||'blurry, jittery, distorted anatomy, text, logos, watermark').trim(),
-      resolution,
-      duration,
-      seed,
-      'video/h264-mp4',
-      false
-    ]
-  };
-  const headers={'Content-Type':'application/json'};
-  if(token)headers.Authorization='Bearer '+token;
-  const submit=await fetch(space+'/gradio_api/call/generate',{method:'POST',headers,body:JSON.stringify(payload),signal:AbortSignal.timeout(30000)});
-  const submitText=await submit.text();
-  if(!submit.ok)throw new Error('LTX-2.3 REST submit HTTP '+submit.status+': '+submitText.slice(0,700));
-  let submitData=null;try{submitData=JSON.parse(submitText)}catch{}
-  const eventId=String(submitData?.event_id||'').trim();
-  if(!eventId)throw new Error('LTX-2.3 REST no devolvió event_id.');
-  const stream=await fetch(space+'/gradio_api/call/generate/'+encodeURIComponent(eventId),{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(240000)});
-  if(!stream.ok)throw new Error('LTX-2.3 REST SSE HTTP '+stream.status);
-  const reader=stream.body?.getReader();
-  if(!reader)throw new Error('LTX-2.3 REST no devolvió un stream SSE.');
-  const decoder=new TextDecoder();
-  let buffer='',completed=null,errorMessage='';
-  while(true){
-    const part=await reader.read();
-    if(part.done)break;
-    buffer+=decoder.decode(part.value,{stream:true});
-    const events=buffer.split(/\n\n/);
-    buffer=events.pop()||'';
-    for(const block of events){
-      const eventName=(block.match(/(?:^|\\n)event:\s*([^\\n]+)/)||[])[1]?.trim()||'';
-      const dataLine=(block.match(/(?:^|\\n)data:\s*([\\s\\S]+)/)||[])[1]?.trim()||'';
-      if(eventName==='error'){errorMessage=dataLine||'LTX-2.3 REST generation error.';continue;}
-      if(eventName==='complete'){
-        try{completed=JSON.parse(dataLine)}catch{completed=null;}
-      }
+  const duration=Math.max(1,Math.min(5,Number(options.durationSeconds)||3));
+  const width=768,height=512;
+  const errors=[];
+  for(const space of spaces){
+    try{
+      const app=await Client.connect(space,token?{token}:undefined);
+      const image=imagePath?await handle_file(imagePath):null;
+      const seed=Math.floor(Math.random()*2147483647);
+      const result=await app.predict(0,[image,String(prompt||'').trim(),duration,false,seed,true,height,width]);
+      const data=Array.isArray(result?.data)?result.data:[];
+      const raw0=data[0];
+      const raw=typeof raw0==='string'?(raw0):(raw0?.url||raw0?.path||raw0?.video?.url||raw0?.video?.path||'');
+      if(!raw)throw new Error('LTX-2.3 Space no devolvió un vídeo.');
+      const outputPath=await downloadGradioOutput(raw,'https://'+space.replace(/^https?:\/\//,'').replace(/\.hf\.space$/,'')+'.hf.space',token,dir,'ltx23-official-generated');
+      const validation=await validateGeneratedVideoClip(outputPath);
+      if(!validation.ok)throw new Error('LTX-2.3 Space produjo un clip inválido.');
+      const stat=await fs.stat(outputPath);
+      if(!stat.size)throw new Error('LTX-2.3 Space produjo un archivo vacío.');
+      return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX-2.3',model:'Lightricks LTX-2.3 Distilled 22B',durationSeconds:validation.durationSeconds,status:'complete'};
+    }catch(err){
+      errors.push(space+': '+String(err?.message||err).slice(0,600));
+      console.warn('LTX-2.3 ZeroGPU Space failed:',space,err?.message||String(err));
     }
-    if(completed!==null||errorMessage)break;
   }
-  await reader.cancel().catch(()=>{});
-  if(errorMessage)throw new Error('LTX-2.3 REST generation error: '+errorMessage.slice(0,1200));
-  const resultData=Array.isArray(completed)?completed:(completed?.data||[]);
-  const payloadOut=resultData?.[0];
-  const video=payloadOut?.video||payloadOut;
-  const raw=video?.url||video?.path||video;
-  if(!raw)throw new Error('LTX-2.3 REST no devolvió vídeo.');
-  let outputPath;
-  if(typeof raw==='string'&&raw.startsWith('data:')){
-    outputPath=path.join(dir,'ltx23-zerogpu-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-    await fs.writeFile(outputPath,Buffer.from(raw.slice(raw.indexOf(',')+1),'base64'));
-  }else{
-    const outputUrl=String(raw).startsWith('http')?String(raw):space+String(raw).replace(/^\//,'/');
-    const response=await fetch(outputUrl,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(120000)});
-    if(!response.ok)throw new Error('LTX-2.3 REST descarga HTTP '+response.status);
-    outputPath=path.join(dir,'ltx23-zerogpu-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-    await fs.writeFile(outputPath,Buffer.from(await response.arrayBuffer()));
-  }
-  const validation=await validateGeneratedVideoClip(outputPath);
-  if(!validation.ok)throw new Error('LTX-2.3 ZeroGPU produjo un clip inválido.');
-  const stat=await fs.stat(outputPath);
-  if(!stat.size)throw new Error('LTX-2.3 ZeroGPU produjo un archivo vacío.');
-  return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · LTX-2.3 Fast REST',model:'LTX-2.3 22B FP8 distilled',durationSeconds:validation.durationSeconds,status:'complete'};
+  throw new Error('LTX-2.3 ZeroGPU routes failed: '+errors.join(' | '));
 }
 
 async function generateFreeWan22ZeroGpuVideoClip(prompt,dir,options={}) {
