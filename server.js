@@ -726,7 +726,7 @@ async function generatePollinationsVideoClip(prompt,dir,options={}) {
 }
 
 async function generateFreeLtx25VideoClip(prompt,dir,options={}) {
-  const spaceUrl=String(process.env.LTX25_SPACE_URL||'https://Lightricks-ltx-video-distilled.hf.space').replace(/\/$/,'');
+  const spaceUrl=String(process.env.LTX25_SPACE_URL||'https://DeepRat-LTX-Video-ZeroGPU-Optimized.hf.space').replace(/\/$/,'');
   const duration=Math.max(3,Math.min(3,Number(options.durationSeconds)||3));
   const width=896;
   const height=512;
