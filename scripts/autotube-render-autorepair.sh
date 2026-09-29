@@ -130,17 +130,13 @@ export DEPLOY_ID="$deploy_id" COMMIT="$commit"
 DETERMINISTIC_PATCH_READY="false"
 if [ "$recovery_resource" = "HF_ZERO_GPU" ]; then
   echo "RECOVERY ENGINE: attempting deterministic HF_ZERO_GPU provider switch before Gemini."
-  if [ -n "${POLLINATIONS_API_KEY:-}" ]; then
-    if bash scripts/autotube-hf-zerogpu-recovery.sh render-repair.patch; then
-      if grep -q '^diff --git ' render-repair.patch; then
-        DETERMINISTIC_PATCH_READY="true"
-        echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU patch generated successfully."
-      fi
-    else
-      echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU route unavailable; falling back to bounded Gemini repair."
+  if bash scripts/autotube-hf-zerogpu-recovery.sh render-repair.patch; then
+    if grep -q '^diff --git ' render-repair.patch; then
+      DETERMINISTIC_PATCH_READY="true"
+      echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU patch generated successfully; runtime credentials will select the independent provider."
     fi
   else
-    echo "RECOVERY ENGINE: POLLINATIONS_API_KEY unavailable; deterministic HF_ZERO_GPU route cannot be activated."
+    echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU route could not produce a safe patch; falling back to bounded Gemini repair."
   fi
 fi
 [ -n "$RENDER_LOG" ] || export RENDER_LOG="Render incident $deploy_id status=$status and no diagnostic log was returned."
