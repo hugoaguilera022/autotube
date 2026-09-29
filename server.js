@@ -1559,10 +1559,13 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
   console.log('[Wan2.2-AoTI] starting Gradio client generation',JSON.stringify({space,duration,steps,hasFrame:true}));
   let result;
   try{
-    const clientOptions=token?{hf_token:token}:undefined;
+    const clientOptions=token?{token}:undefined;
     console.log('[Wan2.2-AoTI] HF authentication configured=',Boolean(token));
     const app=await Client.connect(space,clientOptions);
-    const frame=await handle_file(firstFramePath);
+    const frameBytes=await fs.readFile(firstFramePath);
+    const ext=String(path.extname(firstFramePath)||'').toLowerCase();
+    const mime=ext==='.png'?'image/png':ext==='.webp'?'image/webp':'image/jpeg';
+    const frame=new Blob([frameBytes],{type:mime});
     const negative=String(options.negativePrompt||'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects').trim();
     const guidance1=Number(options.guidanceScale||1);
     const guidance2=Number(options.guidanceScale2||1);
