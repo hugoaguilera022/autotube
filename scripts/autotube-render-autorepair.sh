@@ -332,7 +332,7 @@ rollback_to_last_known_good() {
 
 render_deploy_for_sha() {
   curl --fail-with-body -sS -H "Accept: application/json" -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=20" |
-    jq -c --arg sha "$REPAIRED_SHA" 'map(.deploy // .) | map(select(.commit.id == $sha)) | .[0] // empty'
+    jq -c --arg sha "$REPAIRED_SHA" "map(.deploy // .) | map(select(.commit.id == \$sha)) | .[0] // empty"
 }
 RENDER_DEPLOY_ID=""
 for attempt in $(seq 1 12); do
@@ -363,7 +363,7 @@ echo "RECOVERY_DEPLOY_VERIFIED: Render LIVE with exact repaired SHA=$REPAIRED_SH
 e2e_run=""
 for attempt in $(seq 1 18); do
   runs="$(gh api --paginate "/repos/$REPOSITORY/actions/workflows/autotube-e2e.yml/runs?branch=main&per_page=20" 2>/dev/null || true)"
-  e2e_run="$(printf '%s' "$runs" | jq -r --arg sha "$REPAIRED_SHA" '.workflow_runs[] | select(.head_sha==$sha) | .id' | head -n1)"
+  e2e_run="$(printf '%s' "$runs" | jq -r --arg sha "$REPAIRED_SHA" "map(.workflow_runs[]?) | map(select(.head_sha==\$sha)) | .[0].id // empty" | head -n1)"
   [ -n "$e2e_run" ] && break
   sleep 10
 done
