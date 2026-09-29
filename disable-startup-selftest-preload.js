@@ -1,3 +1,4 @@
+require('./autonomous-provider-repair-preload.js');
 // The production URL-to-video E2E workflow owns the real end-to-end test.
 // Disable the legacy automatic self-test so it cannot consume the single
 // Render worker at startup and race the real user job.
