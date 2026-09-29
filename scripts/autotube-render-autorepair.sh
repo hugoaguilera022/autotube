@@ -133,16 +133,27 @@ export DEPLOY_ID="$deploy_id" COMMIT="$commit"
 # If the same fingerprint has already produced a committed repair with the same
 # strategy, never blindly replay that strategy: move to the next route.
 strategy_history="$(git log --all --format='%s' --grep="runtime-fingerprint:$runtime_fingerprint" -n 20 || true)"
-if printf '%s\\n' "$strategy_history" | grep -q 'strategy:HF_ZERO_GPU_PROVIDER_SWITCH'; then
-  export AUTOTUBE_SKIP_DETERMINISTIC_HF="1"
-  echo "RECOVERY ENGINE: previous HF_ZERO_GPU_PROVIDER_SWITCH already reached production for this fingerprint; escalating instead of repeating it."
+export STRATEGY_HISTORY="$strategy_history"
+if bash scripts/autotube-recovery-strategy-engine.sh; then
+  selected_strategy="$(head -n1 recovery-strategy-plan.txt | cut -d'|' -f2-2 || true)"
+  if [ -n "$selected_strategy" ]; then
+    recovery_strategy="$selected_strategy"
+    export RECOVERY_STRATEGY="$recovery_strategy"
+    echo "RECOVERY ENGINE: adaptive planner selected strategy=$recovery_strategy"
+  fi
 else
+  echo "RECOVERY ENGINE: adaptive planner returned no unused strategy; retaining classifier strategy=$recovery_strategy"
+fi
+
+if [ "$recovery_strategy" = "HF_ZERO_GPU_PROVIDER_SWITCH" ]; then
   export AUTOTUBE_SKIP_DETERMINISTIC_HF="0"
+else
+  export AUTOTUBE_SKIP_DETERMINISTIC_HF="1"
 fi
 
 DETERMINISTIC_PATCH_READY="false"
 APPLIED_STRATEGY="$recovery_strategy"
-if [ "$recovery_resource" = "HF_ZERO_GPU" ] && [ "${AUTOTUBE_SKIP_DETERMINISTIC_HF:-0}" != "1" ]; then
+if [ "$recovery_strategy" = "HF_ZERO_GPU_PROVIDER_SWITCH" ] && [ "$recovery_resource" = "HF_ZERO_GPU" ] && [ "${AUTOTUBE_SKIP_DETERMINISTIC_HF:-0}" != "1" ]; then
   echo "RECOVERY ENGINE: attempting deterministic HF_ZERO_GPU provider switch before Gemini."
   if bash scripts/autotube-hf-zerogpu-recovery.sh render-repair.patch; then
     if grep -q '^diff --git ' render-repair.patch; then
@@ -159,7 +170,7 @@ fi
 if [ "$DETERMINISTIC_PATCH_READY" != "true" ]; then
 python3 - <<'PY'
 import json, os, urllib.error, urllib.request, subprocess
-prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Treat shared ZeroGPU Spaces as ONE resource, not independent providers. If the current resource is exhausted, switch resource class instead of adding more Spaces from the same resource. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. If the current resource is unavailable and no independent free route is technically available from the repository/runtime context, return NO_SAFE_PATCH instead of inventing an API or weakening validation. Repair provider adapters, fallback selection, checkpoint/retry state, FFmpeg/render logic, YouTube acquisition, networking, memory, or deployment configuration when logs identify those as the root cause. Never merely retry the same failing operation. Resource=%s Class=%s Strategy=%s Attempt=%s/%s Incident=%s Commit=%s Logs=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("MAX_RECOVERY_ATTEMPTS","12"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""))
+prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Treat shared ZeroGPU Spaces as ONE resource, not independent providers. If the current resource is exhausted, switch resource class instead of adding more Spaces from the same resource. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. If the current resource is unavailable and no independent free route is technically available from the repository/runtime context, return NO_SAFE_PATCH instead of inventing an API or weakening validation. Repair provider adapters, fallback selection, checkpoint/retry state, FFmpeg/render logic, YouTube acquisition, networking, memory, or deployment configuration when logs identify those as the root cause. Never merely retry the same failing operation. Resource=%s Class=%s Strategy=%s Attempt=%s/%s Incident=%s Commit=%s Logs=%s StrategyPlan=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("MAX_RECOVERY_ATTEMPTS","12"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""),open("recovery-strategy-plan.txt").read() if os.path.exists("recovery-strategy-plan.txt") else "unavailable")
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
 # Discover the models currently exposed to THIS Gemini API key before trying repairs.
 # This prevents stale/deprecated model IDs from consuming the recovery window.
