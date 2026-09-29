@@ -3044,7 +3044,7 @@ async function executeFullPipelineTest(reference,testId=null){
                 throw videoErr;
               }
               // User-action blocks must also reach the supervisor unchanged.
-              if(/INSUFFICIENT_BALANCE|401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|invalid.*credential|USER_ACTION_REQUIRED/i.test(videoMessage)){
+              if(/401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|invalid.*credential|USER_ACTION_REQUIRED/i.test(videoMessage)){
                 throw videoErr;
               }
             }
@@ -3063,7 +3063,7 @@ async function executeFullPipelineTest(reference,testId=null){
             // RETRYABLE_AI_VIDEO_INCOMPLETE and the autonomous supervisor never
             // reaches waiting_capacity.
             if(/CAPACITY_WAIT_REQUIRED|capacity_wait|WAITING_FOR_CAPACITY/i.test(message)) throw err;
-            if(/INSUFFICIENT_BALANCE|401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|invalid.*credential|USER_ACTION_REQUIRED/i.test(message)) throw err;
+            if(/401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|invalid.*credential|USER_ACTION_REQUIRED/i.test(message)) throw err;
           }
         }
       }
@@ -4133,7 +4133,7 @@ async function runAutonomousCycle(){
     if(result?.ok)autonomousStopped=true;
   }catch(err){
     const message=String(err?.message||err||'Error desconocido');
-    const userActionRequired=/INSUFFICIENT_BALANCE|Insufficient balance|401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|no.*API.?key|invalid.*credential|private.*video|sign in to confirm|USER_ACTION_REQUIRED/i.test(message);
+    const userActionRequired=/401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|no.*API.?key|invalid.*credential|private.*video|sign in to confirm|USER_ACTION_REQUIRED/i.test(message);
     const j=fullPipelineTestJobs.get(id);
     const capacityWait=!userActionRequired&&/CAPACITY_WAIT_REQUIRED|capacity_wait|WAITING_FOR_CAPACITY/i.test(message);
     if(j){
