@@ -3683,7 +3683,7 @@ function buildVideoCapacityAllocation(durationSeconds,routeMatrix){
     r.durationOk&&r.minOk&&r.resolutionOk&&r.referencePlanned&&
     !['not_configured','not_integrated','insufficient_quota','unsupported','resolution_not_supported'].includes(r.reason)
   );
-  const known=usable.map(r=>({...r,videoSeconds:routeCapacityToVideoSeconds(r)}).filter(x=>x.videoSeconds>0));
+  const known=usable.map(r=>({...r,videoSeconds:routeCapacityToVideoSeconds(r)})).filter(x=>x.videoSeconds>0);
   const weighted=usable.map(r=>{
     const env='AUTOTUBE_'+String(r.provider).toUpperCase().replace(/[^A-Z0-9]+/g,'_')+'_WEIGHT_PERCENT';
     const weight=Math.max(0,Number(process.env[env]||0)||0);
@@ -3752,26 +3752,6 @@ function getVideoCapacityAllocationSnapshot(){
     providers:activeVideoAllocation.rows.map(r=>({...r,remainingSeconds:Number(r.remainingSeconds.toFixed(3)),consumedSeconds:Number((r.allocatedSeconds-r.remainingSeconds).toFixed(3))}))
   };
 }
-function allocationProviderOrder(baseOrder,requestedSeconds){
-  if(!activeVideoAllocation?.rows?.length)return baseOrder;
-  const request=Math.max(0.5,Number(requestedSeconds)||1);
-  const rank=new Map(activeVideoAllocation.rows.map(r=>[r.provider,r]));
-  return [...baseOrder].sort((a,b)=>{
-    const ra=rank.get(a),rb=rank.get(b);
-    const score=x=>x?x.remainingSeconds>=request?(x.remainingSeconds/request)+1000+x.share*100:x.remainingSeconds+x.share*0.01:-1;
-    return score(rb)-score(ra);
-  });
-}
-function commitVideoAllocation(provider,actualSeconds){
-  if(!activeVideoAllocation?.rows?.length)return;
-  const row=activeVideoAllocation.rows.find(r=>r.provider===provider);
-  if(!row)return;
-  const used=Math.max(0,Number(actualSeconds)||0);
-  row.remainingSeconds=Math.max(0,row.remainingSeconds-used);
-  activeVideoAllocation.consumedSeconds+=used;
-  console.log('[VideoCapacity] consumed:',provider,used.toFixed(2)+'s','remaining allocation=',row.remainingSeconds.toFixed(2)+'s','snapshot=',JSON.stringify(getVideoCapacityAllocationSnapshot()));
-}
-
 function requiredVideoResourceSeconds(){
   const duration=resourceTargetDurationSeconds();
   const sceneCount=Math.max(1,Math.min(60,Number(process.env.AUTOTUBE_RESOURCE_PREFLIGHT_SCENES||Math.ceil(duration/5))||1));
