@@ -1,5 +1,6 @@
 require('./url-to-mp4-preload.js');
 require('dotenv').config();
+const { falConfigured, falImage, falVideo, falTts, falMusic, capabilityCatalog } = require('./universal-ai-providers.js');
 const express = require('express');
 const path = require('path');
 const { google } = require('googleapis');
@@ -152,6 +153,7 @@ const PORT=process.env.PORT||3000;function youtubeClient(){return new google.aut
 async function getYoutubeProfile(){await loadYoutubeConnection();if(!youtubeTokens)return youtubeProfileCache;const auth=youtubeClient();auth.setCredentials(youtubeTokens);const youtube=google.youtube({version:'v3',auth}),response=await youtube.channels.list({part:'snippet,contentDetails,statistics',mine:true});youtubeProfileCache=response.data.items?.[0]||null;return youtubeProfileCache}
 app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true}));app.use(express.static(path.join(__dirname,'public')));
 app.get('/api/video-providers',async(_req,res)=>{try{res.json({ok:true,providers:await getVideoProviderHealth(),freeDailyBudget:freeAiBudgetSnapshot()});}catch(err){res.status(503).json({ok:false,error:err.message||String(err)});}});
+app.get('/api/ai-capabilities',(_req,res)=>res.json({ok:true,capabilities:capabilityCatalog()}));
 app.get('/api/free-production-budget',(_req,res)=>res.json({ok:true,freeOnlyDefault:String(process.env.AUTOTUBE_ALLOW_PAID_PROVIDERS||'0')!=='1',budget:freeAiBudgetSnapshot(),resourceBudget:{hfZeroGpu:hfZeroGpuResourceSnapshot()},zeroGpuQuotaCooldownUntil:sharedZeroGpuCooldownUntilTs()}));
 app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',commit:process.env.RENDER_GIT_COMMIT||'',autonomous:{enabled:autonomousEnabled,stopped:autonomousStopped,reference:autonomousReference},providers:{video:true,musicAi:Boolean(process.env.ACE_STEP_URL),kokoro:Boolean(process.env.KOKORO_TTS_URL)},configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
 app.get('/api/recovery/preflight',async(req,res)=>{
@@ -453,9 +455,9 @@ async function generateAceStepMusic(description,durationSeconds,dir,audioProfile
   if(!r.ok)throw new Error('ACE-Step '+r.status+': '+bytes.toString('utf8').slice(0,600));if(!ct.startsWith('audio/'))throw new Error('ACE-Step no devolvió audio ('+ct+').');const qa=await validateGeneratedMusic(bytes,durationSeconds);return{buffer:bytes,provider:'ACE-Step',model:'configured endpoint',durationSeconds:qa.durationSeconds,generationType:'ai-music',validation:qa};
 }
 async function generateMusicWithCascade(description,durationSeconds,dir,audioProfile={}){
-  const errors=[];const providers=[...(process.env.ACE_STEP_URL?['ace-step']:[]),...(process.env.POLLINATIONS_API_KEY?['pollinations']:[]),...((process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['huggingface']:[])];
+  const errors=[];const providers=[...(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_MUSIC??'1').trim()!=='0'?['fal']:[]),...(process.env.ACE_STEP_URL?['ace-step']:[]),...(process.env.POLLINATIONS_API_KEY?['pollinations']:[]),...((process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['huggingface']:[])];
   for(const provider of providers){if(musicCooldownActive(provider)){errors.push(provider+': cooldown activo');continue;}try{
-    let music;if(provider==='ace-step')music=await generateAceStepMusic(description,durationSeconds,dir,audioProfile);else if(provider==='pollinations')music=await generatePollinationsMusic(description,durationSeconds,dir,audioProfile);else music=await generateHuggingFaceMusic(description,durationSeconds,dir,audioProfile);
+    let music;if(provider==='fal')music=await falMusic(description,dir,{durationSeconds});else if(provider==='ace-step')music=await generateAceStepMusic(description,durationSeconds,dir,audioProfile);else if(provider==='pollinations')music=await generatePollinationsMusic(description,durationSeconds,dir,audioProfile);else music=await generateHuggingFaceMusic(description,durationSeconds,dir,audioProfile);
     const qa=await validateGeneratedMusic(music.buffer,durationSeconds);noteMusicSuccess(provider);return{...music,validation:qa};
   }catch(err){const kind=classifyMusicError(err);const msg=String(err?.message||err);errors.push(provider+': '+kind+': '+msg.slice(0,700));noteMusicCooldown(provider,kind==='quota'?24*60*60*1000:kind==='auth'||kind==='model'?60*60*1000:kind==='capacity'||kind==='network'?90000:60000,msg);console.warn('[MusicCascade] provider failed; advancing:',provider,msg);}}
   if(String(process.env.AUTOTUBE_ALLOW_PROCEDURAL_AUDIO||'0')==='1'){const music=await generateProceduralMusic(description,durationSeconds,dir,audioProfile);return{...music,validation:await validateGeneratedMusic(music.buffer,durationSeconds)};}
@@ -805,6 +807,7 @@ async function generateNarrationTts(text,language='es',voiceStyle='Natural y cer
   const clean=String(text||'').replace(/\s+/g,' ').trim().slice(0,280);
   if(!clean)return null;
   const tl=String(language||'es').toLowerCase().split(/[-_]/)[0]||'es';
+  if(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_TTS??'1').trim()!=='0'){try{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-fal-tts-'));try{const result=await falTts(clean,dir);return await fs.readFile(result.outputPath);}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}}catch(err){console.warn('FAL TTS unavailable; advancing to local/free voice:',err.message||err);}}
   if(process.env.KOKORO_TTS_URL){try{return await generateLocalKokoroTts(clean,tl,voiceStyle,audioProfile);}catch(err){console.warn('Kokoro TTS unavailable; using Google TTS fallback:',err.message||err);}}
   const url='https://translate.google.com/translate_tts?'+new URLSearchParams({ie:'UTF-8',client:'tw-ob',tl,q:clean});
   const response=await fetch(url,{signal:AbortSignal.timeout(30000),headers:{Accept:'audio/mpeg','User-Agent':'Mozilla/5.0 AutoTube/1.0'}});
@@ -842,6 +845,7 @@ async function generateHuggingFaceOriginalImage(prompt,dir,options={}){
 async function generateOriginalImageWithCascade(prompt,dir,options={}){
   const errors=[];
   const providers=[
+    ...(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_IMAGE??'1').trim()!=='0'?['fal']:[]),
     ...(String(process.env.AUTOTUBE_ALLOW_HF_IMAGE||'1')!=='0'&&(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['huggingface']:[]),
     'gemini',
     'pollinations'
@@ -850,7 +854,8 @@ async function generateOriginalImageWithCascade(prompt,dir,options={}){
     if(originalImageCooldownActive(provider)){errors.push(provider+': cooldown activo');continue;}
     try{
       let image;
-      if(provider==='huggingface')image=await generateHuggingFaceOriginalImage(prompt,dir,{model:options.hfModel,width:Number(options.width)||854,height:Number(options.height)||480});
+      if(provider==='fal')image=await falImage(prompt,dir,{width:Number(options.width)||854,height:Number(options.height)||480});
+      else if(provider==='huggingface')image=await generateHuggingFaceOriginalImage(prompt,dir,{model:options.hfModel,width:Number(options.width)||854,height:Number(options.height)||480});
       else if(provider==='gemini')image=await generateGeminiOriginalImage(prompt,dir,{model:String(options.geminiModel||'gemini-2.5-flash-image')});
       else image=await generatePollinationsOriginalImage(prompt,dir,{width:Number(options.width)||854,height:Number(options.height)||480});
       await validateGeneratedOriginalImage(image.outputPath);
@@ -1871,6 +1876,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     ...(allowHfInferenceRecovery?['HF-Inference']:[]),
     ...(allowPollinationsRecovery?['Pollinations']:[]),
     ...(allowReplicateRecovery?['Replicate']:[]),
+    ...(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_VIDEO??'1').trim()!=='0'?['FAL']:[]),
     ...(process.env.FREE_AI_API_KEY?['Free.ai']:[]),
     ...(process.env.PIXAZO_API_KEY?['Pixazo-Free']:[]),
     ...(process.env.AGNES_API_KEY?['Agnes-Free']:[]),
@@ -1886,6 +1892,14 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   catch(err){ throw err; }
   const requestedResourceSeconds=Math.max(3,Number(options.durationSeconds)||3);
   for(const provider of [...new Set(order)]){
+    if(provider==='FAL'){
+      try{
+        const clip=await falVideo(prompt,dir,{...options,generateAudio:Boolean(options.generateAudio),durationSeconds:Math.max(4,Number(options.durationSeconds)||5)});
+        const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);
+        completeFreeAiClip(budgetReservation); budgetCommitted=true;
+        return{...clip,providerKey:provider,generationType:'ai-video',validation};
+      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,700));continue;}
+    }
     if(provider==='Free.ai'){
       try{
         const clip=await generateFreeAiVideoClip(prompt,dir,options);
