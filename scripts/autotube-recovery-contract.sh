@@ -141,6 +141,15 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     grep -q "strategy:HF_ZERO_GPU_PROVIDER_SWITCH" <(printf "strategy:HF_ZERO_GPU_PROVIDER_SWITCH\\n") || exit 1
     rm -f "$strategy_plan" /tmp/autotube-strategy-selftest.log
 
+    bash -n scripts/autotube-render-autorepair.sh
+    bash -n scripts/autotube-recovery-strategy-engine.sh
+    bash -n scripts/autotube-recovery-preflight.sh
+    bash -n scripts/autotube-hf-inference-recovery.sh
+    grep -q 'HF_INFERENCE_RESOURCE_SWITCH' scripts/autotube-render-autorepair.sh
+    grep -q 'autotube-recovery-preflight.sh' scripts/autotube-render-autorepair.sh
+    grep -q 'rollback_to_last_known_good' scripts/autotube-render-autorepair.sh
+    grep -q 'allScenesRealAiVideo' server.js
+    grep -q "generationType:'ai-video'" server.js
     echo "AUTOTUBE_RECOVERY_CONTRACT_TEST=PASS"
     exit 0
   fi
