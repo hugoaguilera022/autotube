@@ -1680,16 +1680,22 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   // HF_ZERO_GPU recovery uses already-implemented non-Hugging-Face providers
   // as independent resource classes. Runtime credentials decide which route is
   // actually usable; no secret is embedded or changed by this repair.
+  const allowHfInferenceRecovery =
+    Boolean(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN) &&
+    String(process.env.AUTOTUBE_ENABLE_HF_INFERENCE_VIDEO_RECOVERY??'1').trim()!=='0';
+  // Pollinations video and Replicate video are paid routes in the current runtime.
+  // They are never treated as free recovery unless explicitly opted in.
   const allowPollinationsRecovery =
     Boolean(process.env.POLLINATIONS_API_KEY) &&
-    String(process.env.AUTOTUBE_ENABLE_POLLINATIONS_VIDEO_RECOVERY??'1').trim()!=='0';
+    String(process.env.AUTOTUBE_ENABLE_POLLINATIONS_VIDEO_RECOVERY??'0').trim()==='1';
   const allowReplicateRecovery =
     Boolean(process.env.REPLICATE_API_TOKEN) &&
-    String(process.env.AUTOTUBE_ENABLE_REPLICATE_VIDEO_RECOVERY??'1').trim()!=='0';
+    String(process.env.AUTOTUBE_ENABLE_REPLICATE_VIDEO_RECOVERY??'0').trim()==='1';
   const order=[
     ...(allowPaid&&process.env.REPLICATE_API_TOKEN?['Replicate']:[]),
     ...(allowPaid&&(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['HF-Inference']:[]),
     ...(allowPaid&&process.env.POLLINATIONS_API_KEY&&String(process.env.AUTOTUBE_ALLOW_POLLINATIONS_PAID||'0')==='1'?['Pollinations']:[]),
+    ...(allowHfInferenceRecovery?['HF-Inference']:[]),
     ...(allowPollinationsRecovery?['Pollinations']:[]),
     ...(allowReplicateRecovery?['Replicate']:[]),
     ...(referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','Wan2.2-I2V','Wan2.1-VACE']:[]),
