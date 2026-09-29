@@ -4043,9 +4043,14 @@ async function runAutonomousCycle(){
       autonomousStopped=true;
       console.error('AutoTube autonomous cycle STOPPED: USER ACTION REQUIRED:',id,message);
     }else{
-      // Keep the supervisor alive, but never hammer the same failing strategy.
-      autonomousLastStart=Date.now()+Math.min(15*60*1000,Math.max(60*1000,autonomousIntervalMs*2));
-      console.error('AutoTube autonomous cycle error; classified as retryable and scheduled with backoff:',id,message);
+      // Capacity waits are expected control flow: re-check resources soon instead of
+      // treating temporary exhaustion as a failed production strategy.
+      const capacityWait=/CAPACITY_WAIT_REQUIRED|capacity_wait|WAITING_FOR_CAPACITY/i.test(message);
+      const backoffMs=capacityWait
+        ?Math.max(30*1000,Number(process.env.AUTOTUBE_CAPACITY_WAIT_RECHECK_MS||60*1000)||60*1000)
+        :Math.min(15*60*1000,Math.max(60*1000,autonomousIntervalMs*2));
+      autonomousLastStart=Date.now()+backoffMs;
+      console.error('AutoTube autonomous cycle error; classified as retryable:',id,'capacityWait=',capacityWait,'nextCheckMs=',backoffMs,message);
     }
   }finally{
     releaseAutonomousResources();
