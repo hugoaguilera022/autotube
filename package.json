@@ -21,6 +21,7 @@
     "@gradio/client": "^1.17.0",
     "jsonrepair": "^3.13.0",
     "@hiudyy/ytdl": "0.2.3",
-    "@huggingface/inference": "^4.13.30"
+    "@huggingface/inference": "^4.13.30",
+    "@fal-ai/client": "^1.6.2"
   }
 }
