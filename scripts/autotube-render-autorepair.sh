@@ -330,6 +330,53 @@ echo "RECOVERY_STAGE: git-push-ok"
 REPAIRED_SHA="$(git rev-parse HEAD)"
 echo "RECOVERY_HANDOFF: pushed repaired SHA=$REPAIRED_SHA; waiting for Render."
 
+# Keep a known-good production deploy as the rollback target. Render's rollback
+# API does not disable autodeploys, so the repair engine explicitly disables
+# autodeploys during rollback to prevent the failed main commit from immediately
+# returning. It is re-enabled only after the canonical E2E is green.
+LAST_KNOWN_GOOD_DEPLOY="$live_deploy_id"
+LAST_KNOWN_GOOD_SHA="$live_commit"
+AUTODEPLOY_DISABLED_FOR_ROLLBACK="false"
+
+rollback_to_last_known_good() {
+  if [ -z "$LAST_KNOWN_GOOD_DEPLOY" ] || [ -z "$LAST_KNOWN_GOOD_SHA" ]; then
+    echo "RECOVERY_ROLLBACK_BLOCKED: no known-good Render deploy/SHA was captured."
+    return 1
+  fi
+
+  echo "RECOVERY_ROLLBACK: disabling Render autodeploy before rollback."
+  if curl --fail-with-body -sS -X PATCH       -H "Authorization: Bearer $RENDER_API_KEY"       -H "Content-Type: application/json"       "https://api.render.com/v1/services/$RENDER_SERVICE_ID"       --data '{"autoDeploy":"no"}' >/tmp/autotube-autodeploy-off.json; then
+    AUTODEPLOY_DISABLED_FOR_ROLLBACK="true"
+  else
+    echo "RECOVERY_ROLLBACK: could not disable autodeploy safely."
+    return 1
+  fi
+
+  rollback_json="$(curl --fail-with-body -sS -X POST     -H "Authorization: Bearer $RENDER_API_KEY"     -H "Content-Type: application/json"     "https://api.render.com/v1/services/$RENDER_SERVICE_ID/rollback"     --data "$(jq -nc --arg id "$LAST_KNOWN_GOOD_DEPLOY" '{deployId:$id}')")" || return 1
+  rollback_id="$(echo "$rollback_json" | jq -r '.id // empty')"
+  echo "RECOVERY_ROLLBACK: target=$LAST_KNOWN_GOOD_DEPLOY sha=$LAST_KNOWN_GOOD_SHA rollbackDeploy=$rollback_id"
+
+  for rb_poll in $(seq 1 24); do
+    current="$(curl --fail-with-body -sS       -H "Accept: application/json"       -H "Authorization: Bearer $RENDER_API_KEY"       "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=10" || true)"
+    good="$(echo "$current" | jq -c --arg sha "$LAST_KNOWN_GOOD_SHA" '[.[] | (.deploy // .) | select(.commit.id==$sha and .status=="live")] | .[0] // empty')"
+    if [ -n "$good" ]; then
+      echo "RECOVERY_ROLLBACK_VERIFIED: known-good SHA=$LAST_KNOWN_GOOD_SHA is LIVE."
+      return 0
+    fi
+    sleep 20
+  done
+  echo "RECOVERY_ROLLBACK_FAILED: known-good SHA=$LAST_KNOWN_GOOD_SHA did not become LIVE."
+  return 1
+}
+
+deploy_exact_repaired_sha() {
+  local response deploy
+  response="$(curl --fail-with-body -sS -X POST     -H "Authorization: Bearer $RENDER_API_KEY"     -H "Content-Type: application/json"     "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys"     --data "$(jq -nc --arg sha "$REPAIRED_SHA" '{commitId:$sha,deployMode:"build_and_deploy"}')")"
+  deploy="$(echo "$response" | jq -r '.id // .deploy.id // empty')"
+  [ -n "$deploy" ] || return 1
+  printf '%s' "$deploy"
+}
+
 render_deploy_for_sha() {
   curl --fail-with-body -sS \
     -H "Accept: application/json" \
@@ -358,7 +405,7 @@ if [ -z "$RENDER_DEPLOY_ID" ]; then
     -H "Authorization: Bearer $RENDER_API_KEY" \
     -H "Content-Type: application/json" \
     "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
-    --data '{"deployMode":"build_and_deploy"}')"
+    --data "$(jq -nc --arg sha "$REPAIRED_SHA" '{commitId:$sha,deployMode:"build_and_deploy"}')")"
   RENDER_DEPLOY_ID="$(echo "$fallback_json" | jq -r '.id // .deploy.id // empty')"
   [ -n "$RENDER_DEPLOY_ID" ] || {
     echo "RECOVERY_DEPLOY_BLOCKED: Render returned no deploy id for repaired SHA=$REPAIRED_SHA."
@@ -390,6 +437,7 @@ for attempt in $(seq 1 24); do
       ;;
     build_failed|update_failed|pre_deploy_failed|deactivated)
       echo "RECOVERY_DEPLOY_FAILED: exact repaired SHA=$REPAIRED_SHA reached Render but status=$deploy_status."
+      rollback_to_last_known_good || true
       exit 1
       ;;
   esac
@@ -398,10 +446,14 @@ done
 
 [ "$live_verified" = "true" ] || {
   echo "RECOVERY_DEPLOY_TIMEOUT: exact repaired SHA=$REPAIRED_SHA did not become LIVE."
+  rollback_to_last_known_good || true
   exit 1
 }
 
 echo "RECOVERY_DEPLOY_VERIFIED: Render LIVE with exact repaired SHA=$REPAIRED_SHA deploy=$RENDER_DEPLOY_ID."
+if [ "$AUTODEPLOY_DISABLED_FOR_ROLLBACK" = "true" ]; then
+  echo "RECOVERY_HANDOFF: autodeploy remains disabled until this repaired SHA passes canonical E2E." 
+fi
 
 # Do not call a deploy LIVE a repair success. Wait for the canonical E2E run
 # created by this push and inspect its conclusion. A failed E2E becomes the
@@ -416,6 +468,7 @@ for attempt in $(seq 1 18); do
 done
 if [ -z "$e2e_run" ]; then
   echo "RECOVERY_E2E_VERIFY_BLOCKED: canonical E2E was not observed for repaired SHA=$REPAIRED_SHA."
+  rollback_to_last_known_good || true
   exit 1
 fi
 for attempt in $(seq 1 24); do
@@ -426,14 +479,23 @@ for attempt in $(seq 1 24); do
   if [ "$e2e_status" = "completed" ]; then
     if [ "$e2e_conclusion" = "success" ]; then
       echo "RECOVERY_E2E_VERIFIED: canonical E2E succeeded on repaired SHA=$REPAIRED_SHA run=$e2e_run."
+      if [ "$AUTODEPLOY_DISABLED_FOR_ROLLBACK" = "true" ]; then
+        curl --fail-with-body -sS -X PATCH           -H "Authorization: Bearer $RENDER_API_KEY"           -H "Content-Type: application/json"           "https://api.render.com/v1/services/$RENDER_SERVICE_ID"           --data '{"autoDeploy":"yes"}' >/tmp/autotube-autodeploy-on.json || {
+            echo "RECOVERY_AUTODEPLOY_RESTORE_FAILED: repaired E2E is green but autodeploy could not be restored."
+            exit 1
+          }
+        echo "RECOVERY_AUTODEPLOY_RESTORED"
+      fi
       exit 0
     fi
-    echo "RECOVERY_E2E_FAILED: repaired SHA=$REPAIRED_SHA produced E2E conclusion=$e2e_conclusion; next cycle must classify the new evidence and escalate strategy."
+    echo "RECOVERY_E2E_FAILED: repaired SHA=$REPAIRED_SHA produced E2E conclusion=$e2e_conclusion; rolling back before escalation."
+    rollback_to_last_known_good || true
     exit 1
   fi
   sleep 20
 done
 echo "RECOVERY_E2E_VERIFY_TIMEOUT: E2E run=$e2e_run did not complete within the bounded verification window."
+rollback_to_last_known_good || true
 exit 1\n'"strategy:$selected_strategy preflight-failed:$strategy_selection_attempt"
   export STRATEGY_HISTORY="$strategy_history"
   selected_strategy=""
