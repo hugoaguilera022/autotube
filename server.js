@@ -1559,16 +1559,28 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
   console.log('[Wan2.2-AoTI] starting Gradio client generation',JSON.stringify({space,duration,steps,hasFrame:true}));
   let result;
   try{
-    const app=await Client.connect(space,token?{token}:undefined);
+    const clientOptions=token?{hf_token:token}:undefined;
+    console.log('[Wan2.2-AoTI] HF authentication configured=',Boolean(token));
+    const app=await Client.connect(space,clientOptions);
     const frame=await handle_file(firstFramePath);
-    // R3GM and CB preview2 currently expose an extra optional last-image input.
-    // Passing the prompt in slot 2 shifts every argument and causes Gradio's
-    // ImageData validation error seen in production. Keep the official Space
-    // signature: input_image, last_image, prompt, ...
-    const isTwoImageSpace=/r3gm-wan2-2-fp8da-aoti|cbensimon-wan2-2-fp8da-aoti/i.test(space);
-    const inputs=isTwoImageSpace
-      ? [frame,null,String(prompt||'').trim(),steps,String(options.negativePrompt||'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects').trim(),duration,Number(options.guidanceScale||1),Number(options.guidanceScale2||1),seed,true]
-      : [frame,String(prompt||'').trim(),steps,String(options.negativePrompt||'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects').trim(),duration,Number(options.guidanceScale||1),Number(options.guidanceScale2||1),seed,true];
+    const negative=String(options.negativePrompt||'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects').trim();
+    const guidance1=Number(options.guidanceScale||1);
+    const guidance2=Number(options.guidanceScale2||1);
+    const seedValue=seed;
+    let inputs;
+    if(/r3gm-wan2-2-fp8da-aoti-preview\.hf\.space/i.test(space)){
+      // Current R3GM Space: input_image, prompt, negative_prompt, duration_seconds,
+      // guidance_scale, guidance_scale_2, steps, seed, randomize_seed.
+      inputs=[frame,String(prompt||'').trim(),negative,duration,guidance1,guidance2,steps,seedValue,true];
+    }else if(/cbensimon-wan2-2-fp8da-aoti-preview2\.hf\.space/i.test(space)){
+      // Current CB preview2: input_image, last_image, prompt, steps, negative_prompt,
+      // duration_seconds, guidance_scale, guidance_scale_2, seed, randomize_seed, quality.
+      inputs=[frame,null,String(prompt||'').trim(),steps,negative,duration,guidance1,guidance2,seedValue,true,5];
+    }else{
+      // Official AoTI Space: input_image, prompt, steps, negative_prompt, duration_seconds,
+      // guidance_scale, guidance_scale_2, seed, randomize_seed.
+      inputs=[frame,String(prompt||'').trim(),steps,negative,duration,guidance1,guidance2,seedValue,true];
+    }
     result=await app.predict('/generate_video',inputs);
   }catch(err){
     const detail=err?.message||String(err);
