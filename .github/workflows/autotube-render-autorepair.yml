@@ -20,6 +20,23 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Verify repair credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "$RENDER_API_KEY" ] || missing="$missing RENDER_API_KEY"
+          [ -n "$GEMINI_API_KEY" ] || missing="$missing GEMINI_API_KEY"
+          if [ -n "$missing" ]; then
+            echo "AUTOTUBE_RECOVERY_BLOCKED: missing required GitHub Actions secrets:$missing"
+            gh issue list --repo "$REPOSITORY" --state open --search "AutoTube recovery credentials blocked in:title" --limit 1 | grep -q . || \
+              gh issue create --repo "$REPOSITORY" --title "AutoTube recovery credentials blocked" --body "The autonomous Render recovery workflow is running, but these required GitHub Actions secrets are missing:$missing. The recovery engine cannot inspect Render or generate a safe code repair until they are configured. No application fallback is being weakened."
+            exit 0
+          fi
       - name: Inspect and repair latest failed Render deploy
         env:
           GH_TOKEN: ${{ github.token }}
