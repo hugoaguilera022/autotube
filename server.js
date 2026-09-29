@@ -3499,12 +3499,14 @@ const autonomousQuotaProbe={
 };
 function autonomousProbeDurationSeconds(){return 5;}
 function autonomousProbeEligibleProvider(routePlan){
-  return routePlan.routes.find(r=>
-    r.configured&&r.integrated&&r.realAi&&r.state==='available'&&
-    r.reason==='quota_unknown_probe_required'&&
-    !r.requiresReferenceFrame
-  )||null;
+  const preferred=['Pollinations','Agnes-Free'];
+  for(const name of preferred){
+    const r=routePlan.routes.find(x=>x.provider===name&&x.configured&&x.integrated&&x.realAi&&x.state==='available'&&x.reason==='quota_unknown_probe_required');
+    if(r)return r;
+  }
+  return routePlan.routes.find(r=>r.configured&&r.integrated&&r.realAi&&r.state==='available'&&r.reason==='quota_unknown_probe_required')||null;
 }
+
 function autonomousVideoProviderRegistry(){
   const configured=(...names)=>names.some(name=>Boolean(String(process.env[name]||'').trim()));
   const legacyEnabled=String(process.env.AUTOTUBE_LEGACY_VIDEO_FALLBACKS||'0').trim()==='1';
@@ -3674,7 +3676,7 @@ async function evaluateAutonomousResourceGate(){
     routeMatrix:routePlan.routes,
     viableRoutes:routePlan.eligible.map(x=>x.provider),
     selectedRoute:routePlan.selected,
-    probeCandidates:probeCandidates.map(x=>x.provider),
+    probeCandidates:[...probeCandidates].sort((a,b)=>{const p=x=>x.provider==='Pollinations'?0:x.provider==='Agnes-Free'?1:2;return p(a)-p(b)}).map(x=>x.provider),
     render:renderAvailable,
     gemini:geminiConfigured,
     music:musicCanRun
@@ -3706,6 +3708,30 @@ function releaseAutonomousResources(){
   autonomousResourceReservation=null;
   autonomousResourceGate.reservation=null;
 }
+app.post('/api/autonomous/resource-probe',async(req,res)=>{
+  if(autonomousProbe.status==='RUNNING')return res.status(409).json({ok:false,error:'Ya hay una prueba de cuota en curso.',probe:autonomousProbe});
+  const gate=await evaluateAutonomousResourceGate();
+  const candidate=autonomousProbeEligibleProvider(gate.routeMatrix?.length?{routes:gate.routeMatrix}:gate);
+  if(!candidate)return res.status(503).json({ok:false,error:'No hay proveedor configurado con cuota desconocida apto para prueba.',gate});
+  autonomousProbe.status='RUNNING'; autonomousProbe.provider=candidate.provider; autonomousProbe.startedAt=Date.now(); autonomousProbe.attempts++;
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-resource-probe-'));
+  const started=Date.now();
+  try{
+    const durationSeconds=5;
+    const options={durationSeconds,sceneIndex:0,generateAudio:false,resourceProbe:true};
+    const result=await generateBestFreeVideoClip(String(req.body?.prompt||'Original cinematic relaxing motion, subtle camera movement, natural lighting.'),dir,options);
+    const validation=await validateGeneratedVideoClip(result.outputPath);
+    const ok=Boolean(validation?.ok&&Number(validation.durationSeconds)>=4.5&&Number(validation.durationSeconds)<=6.5&&Number(validation.sizeBytes||validation.size||0)>1000);
+    autonomousProbe.lastResult={ok,provider:result.providerKey||candidate.provider,durationSeconds:Number(validation.durationSeconds)||0,sizeBytes:Number(validation.sizeBytes||validation.size||0),elapsedMs:Date.now()-started,validation};
+    autonomousProbe.status=ok?'CONFIRMED_FOR_RUN':'FAILED';
+    if(!ok)throw new Error('La prueba no produjo un MP4 AI válido de aproximadamente 5 s.');
+    return res.json({ok:true,probe:autonomousProbe,result:{provider:result.providerKey||candidate.provider,generationType:result.generationType,validation}});
+  }catch(err){
+    autonomousProbe.lastResult={ok:false,provider:candidate.provider,error:String(err?.message||err),elapsedMs:Date.now()-started};
+    autonomousProbe.status='FAILED';
+    return res.status(502).json({ok:false,probe:autonomousProbe,error:String(err?.message||err)});
+  }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+});
 app.get('/api/autonomous/resource-gate',async(_req,res)=>{
   const gate=await evaluateAutonomousResourceGate();
   return res.status(gate.ok?200:503).json(gate);
