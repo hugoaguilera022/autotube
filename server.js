@@ -3442,6 +3442,27 @@ const autonomousIntervalMs=Math.max(60000,Number(process.env.AUTOTUBE_AUTONOMOUS
 let autonomousStopped=false;
 let autonomousLastStart=0;
 
+/* LIVE_QUOTA_PROBE_MAGIC_HOUR_V1
+ * Magic Hour exposes GET /v1/account with the current credit balance.
+ */
+let magicHourQuotaCache={checkedAt:0,credits:null,status:'unknown',error:null};
+async function probeMagicHourAccount(){
+  const key=String(process.env.MAGIC_HOUR_API_KEY||'').trim();
+  if(!key)return {configured:false,status:'not_configured'};
+  const now=Date.now();
+  if(now-magicHourQuotaCache.checkedAt<60000&&magicHourQuotaCache.status!=='unknown')return {...magicHourQuotaCache,cached:true};
+  const c=new AbortController(); const t=setTimeout(()=>c.abort(),5000);
+  try{
+    const r=await fetch('https://api.magichour.ai/v1/account',{headers:{accept:'application/json',authorization:'Bearer '+key},signal:c.signal});
+    const raw=await r.text(); let d=null; try{d=JSON.parse(raw);}catch{}
+    if(r.status===401||r.status===403){magicHourQuotaCache={checkedAt:now,credits:null,status:'auth_required',error:'Magic Hour API key rejected'};return {...magicHourQuotaCache};}
+    if(!r.ok){magicHourQuotaCache={checkedAt:now,credits:null,status:'unavailable',error:'HTTP '+r.status};return {...magicHourQuotaCache};}
+    const credits=Number(d?.credits);
+    if(!Number.isFinite(credits)){magicHourQuotaCache={checkedAt:now,credits:null,status:'unknown',error:'No numeric credits in account response'};return {...magicHourQuotaCache};}
+    magicHourQuotaCache={checkedAt:now,credits,status:'available',error:null};return {...magicHourQuotaCache};
+  }catch(e){magicHourQuotaCache={checkedAt:now,credits:null,status:'unavailable',error:String(e?.message||e)};return {...magicHourQuotaCache};}
+  finally{clearTimeout(t);}
+}
 /* AUTOTUBE_RESOURCE_PREFLIGHT_V1
  * Hard invariant for autonomous production:
  * a new production cycle is forbidden unless a complete resource plan exists.
