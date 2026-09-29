@@ -44,6 +44,11 @@ case "$strategy" in
     fi
     echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=PAID_RECOVERY_NOT_OPTED_IN"; exit 31
     ;;
+  CODE_REPAIR|PROVIDER_ADAPTER_REPAIR|CASCADE_REPAIR)
+    [ -n "${GEMINI_API_KEY:-}" ] || { echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=GEMINI_API_KEY_MISSING"; exit 32; }
+    echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy provider=GEMINI_REPAIR"
+    exit 0
+    ;;
   *)
     echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy provider=LOCAL"; exit 0
     ;;
