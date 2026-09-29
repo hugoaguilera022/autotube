@@ -175,9 +175,8 @@ for model in models:
         with urllib.request.urlopen(req,timeout=90) as response: data=json.load(response)
         out=data["candidates"][0]["content"]["parts"][0]["text"].strip()
         if out.strip().startswith("NO_SAFE_PATCH"):
-            open("render-repair.patch","w").write("NO_SAFE_PATCH\\n")
-            print("Recovery model reports NO_SAFE_PATCH:",model)
-            break
+            print("Recovery model reports NO_SAFE_PATCH; continuing to next configured model:",model)
+            continue
         if out.startswith("```"):
             lines=out.splitlines()
             if lines and lines[0].strip().startswith("```"): lines=lines[1:]
