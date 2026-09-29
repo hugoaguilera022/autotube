@@ -156,8 +156,42 @@ while [ "$strategy_selection_attempt" -lt "$MAX_STRATEGY_SELECTION_ATTEMPTS" ]; 
     break
   fi
   echo "RECOVERY ENGINE: preflight FAIL strategy=$selected_strategy; excluding it for this incident and selecting the next ranked strategy."
-  strategy_history="$strategy_history"
-  echo "RECOVERY ENGINE: attempting deterministic HF_ZERO_GPU provider switch before Gemini."
+  strategy_history="$strategy_history"$'\n'"strategy:$selected_strategy"
+  export STRATEGY_HISTORY="$strategy_history"
+  selected_strategy=""
+done
+
+if [ -z "$selected_strategy" ]; then
+  echo "RECOVERY_TERMINAL: no strategy passed executable preflight."
+  gh issue create --repo "$REPOSITORY" --title "AutoTube recovery blocked: no executable strategy" --body "Incident $incident_key has no strategy that passed runtime credential/provider preflight. Resource=$recovery_resource class=$recovery_class." || true
+  exit 0
+fi
+
+if [ "$recovery_strategy" = "HF_ZERO_GPU_PROVIDER_SWITCH" ]; then
+  export AUTOTUBE_SKIP_DETERMINISTIC_HF="0"
+else
+  export AUTOTUBE_SKIP_DETERMINISTIC_HF="1"
+fi
+
+DETERMINISTIC_PATCH_READY="false"
+APPLIED_STRATEGY="$recovery_strategy"
+
+if [ "$recovery_strategy" = "HF_INFERENCE_RESOURCE_SWITCH" ] || [ "$recovery_strategy" = "INDEPENDENT_FREE_PROVIDER" ]; then
+  echo "RECOVERY ENGINE: executing selected HF Inference strategy."
+  if bash scripts/autotube-hf-inference-recovery.sh render-repair.patch; then
+    if grep -q '^diff --git ' render-repair.patch; then
+      DETERMINISTIC_PATCH_READY="true"
+      APPLIED_STRATEGY="HF_INFERENCE_RESOURCE_SWITCH"
+      echo "RECOVERY ENGINE: deterministic HF Inference patch generated successfully."
+    fi
+  else
+    echo "RECOVERY ENGINE: HF Inference patch generation failed; falling back to bounded repair generation."
+    rm -f render-repair.patch
+  fi
+fi
+
+if [ "$recovery_strategy" = "HF_ZERO_GPU_PROVIDER_SWITCH" ] && [ "$recovery_resource" = "HF_ZERO_GPU" ] && [ "${AUTOTUBE_SKIP_DETERMINISTIC_HF:-0}" != "1" ]; then
+  echo "RECOVERY ENGINE: attempting deterministic HF_ZERO_GPU provider switch before bounded repair generation."
   if bash scripts/autotube-hf-zerogpu-recovery.sh render-repair.patch; then
     if grep -q '^diff --git ' render-repair.patch; then
       DETERMINISTIC_PATCH_READY="true"
@@ -165,9 +199,10 @@ while [ "$strategy_selection_attempt" -lt "$MAX_STRATEGY_SELECTION_ATTEMPTS" ]; 
       echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU patch generated successfully; runtime credentials will select the independent provider."
     fi
   else
-    echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU route could not produce a safe patch; falling back to bounded Gemini repair."
+    echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU route could not produce a safe patch; falling back to bounded repair generation."
   fi
 fi
+
 [ -n "$RENDER_LOG" ] || export RENDER_LOG="Render incident $deploy_id status=$status and no diagnostic log was returned."
 
 if [ "$DETERMINISTIC_PATCH_READY" != "true" ]; then
