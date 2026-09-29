@@ -997,8 +997,7 @@ async function generatePollinationsVideoClip(prompt,dir,options={}) {
 async function generateHuggingFaceProviderVideoClip(prompt,dir,options={}) {
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   if(!token)throw new Error('HF_TOKEN no configurado.');
-  const configuredModel=String(process.env.HF_VIDEO_MODEL||'').trim();
-  const configuredProvider=String(process.env.HF_VIDEO_PROVIDER||'').trim();
+  const configuredModel=String(process.env.HF_VIDEO_MODEL||'').trim();  const configuredProvider=String(process.env.HF_VIDEO_PROVIDER||'').trim();
   const duration=Math.max(2,Math.min(5,Number(options.durationSeconds)||3));
   const imagePath=String(options.firstFramePath||'').trim();
   const candidates=[
@@ -1997,8 +1996,7 @@ function auditVideoCapacity(event,data={}){
   console.log('[VideoCapacityAudit]',JSON.stringify(row));
 }
 function reserveVideoAllocation(provider,requestedSeconds){
-  const row=activeVideoAllocation?.rows?.find(r=>r.provider===provider);
-  if(!row)return true;
+  const row=activeVideoAllocation?.rows?.find(r=>r.provider===provider);  if(!row)return true;
   const requested=Math.max(0.5,Number(requestedSeconds)||1);
   const reserved=Number(row.reservedSeconds||0);
   const remaining=Number(row.remainingSeconds||0);
@@ -2997,8 +2995,7 @@ async function executeFullPipelineTest(reference,testId=null){
       plan.scenes=plan.scenes.map(x=>({...x,duration:Math.max(0.5,Number(x.duration||0)*scale)}));
     }
 
-    if(!resumedStages.includes('visual-sources-all-scenes')||!Array.isArray(mediaResults)||!mediaResults.length||!Array.isArray(aiClips)||!aiClips.length) await run('visual-sources-all-scenes',async()=>{
-      // Prefer original AI video generation first. This avoids making the E2E depend
+    if(!resumedStages.includes('visual-sources-all-scenes')||!Array.isArray(mediaResults)||!mediaResults.length||!Array.isArray(aiClips)||!aiClips.length) await run('visual-sources-all-scenes',async()=>{      // Prefer original AI video generation first. This avoids making the E2E depend
       // on third-party media-search providers that may return HTML/403/429.
       mediaResults=plan.scenes.map(scene=>({number:scene.number,query:scene.searchQuery||scene.title||referenceTitle,media:[]}));
       // Generate original motion clips sequentially when LTX is available. Never run
@@ -3037,7 +3034,16 @@ async function executeFullPipelineTest(reference,testId=null){
             if(String(clip.generationType||'')!=='ai-video')throw new Error('REAL_AI_VIDEO_REQUIRED: la escena '+(i+1)+' no procede de un generador de vídeo IA real.');
             aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model,providerKey:clip.providerKey,generationType:'ai-video',durationSeconds:clip.durationSeconds||Number(scene.duration)||4});
             console.log('AutoTube scene clip committed:',i+1,'/',plan.scenes.length,'provider=',clip.providerKey||clip.provider,'duration=',clip.durationSeconds||Number(scene.duration)||4,'s');
-          }catch(err){console.warn('AI video scene '+(i+1)+' unavailable:',err.message||String(err));}
+          }catch(err){
+            const message=String(err?.message||err||'');
+            console.warn('AI video scene '+(i+1)+' unavailable:',message);
+            // Preserve capacity/user-action control flow at the stage boundary.
+            // Otherwise the scene loop converts CAPACITY_WAIT_REQUIRED into
+            // RETRYABLE_AI_VIDEO_INCOMPLETE and the autonomous supervisor never
+            // reaches waiting_capacity.
+            if(/CAPACITY_WAIT_REQUIRED|capacity_wait|WAITING_FOR_CAPACITY/i.test(message)) throw err;
+            if(/INSUFFICIENT_BALANCE|401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|invalid.*credential|USER_ACTION_REQUIRED/i.test(message)) throw err;
+          }
         }
       }
       // Never accept a static image as success. Every planned scene must have a
@@ -3997,8 +4003,7 @@ async function evaluateAutonomousResourceGate(){
   return {ok:complete,probeRequired:false,...autonomousResourceGate};
 }
 
-function reserveAutonomousResources(gate){
-  if(!gate?.ok||autonomousResourceReservation)return false;
+function reserveAutonomousResources(gate){  if(!gate?.ok||autonomousResourceReservation)return false;
   autonomousResourceReservation={
     id:'res_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex'),
     createdAt:Date.now(),
