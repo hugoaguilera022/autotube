@@ -739,7 +739,7 @@ render_deploy_for_sha() {
     -H "Accept: application/json" \
     -H "Authorization: Bearer $RENDER_API_KEY" \
     "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=20" |
-    jq -c --arg sha "$REPAIRED_SHA" '[.[] | (.deploy // .) | select(.commit.id == $sha)] | .[0] // empty'
+    jq -c --arg sha "$REPAIRED_SHA" "map(.deploy // .) | map(select(.commit.id == \$sha)) | .[0] // empty"
 }
 
 RENDER_DEPLOY_ID=""
