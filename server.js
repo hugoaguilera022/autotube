@@ -2094,6 +2094,9 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   const requestedResolution=String(process.env.AUTOTUBE_RESOURCE_PREFLIGHT_RESOLUTION||'480p').trim().toLowerCase();
   const unknownRoutes=[...new Set(order)].filter(provider=>{
     if(allocationRows.has(provider))return false;
+    // Shared ZeroGPU quota is account-wide: do not enter these Spaces while
+    // the circuit breaker is active; wait for the shared pool instead.
+    if(HF_ZEROGPU_PROVIDERS.has(String(provider||''))&&zeroGpuQuotaActive())return false;
     const route=providerRegistry.find(r=>r.provider===provider);
     if(!route||!route.configured||!route.integrated||!route.realAi)return false;
     const runtime=providerRuntimeState(provider);
@@ -2246,7 +2249,11 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   // If every attempted route is exhausted/quota-blocked, this is not a permanent
   // generation failure. The autonomous supervisor must enter WAITING_FOR_CAPACITY
   // and re-probe later. Transient provider/network outages are also retryable.
-  if(capacityExhausted || temporaryCapacityWait){
+  // Capacity exhaustion is control flow, not a generation failure.
+  // Also cover the case where all measured routes are below the request minimum
+  // and every elastic route is blocked by the shared ZeroGPU breaker.
+  const noExecutableCapacity = !executableOrder.length || (zeroGpuQuotaActive() && errors.length===0);
+  if(capacityExhausted || temporaryCapacityWait || noExecutableCapacity){
     if(!budgetCommitted)releaseFreeAiBudget(budgetReservation);
     throw new Error('CAPACITY_WAIT_REQUIRED: todas las rutas compatibles agotaron capacidad o están temporalmente no disponibles; reconsultar proveedores y continuar desde el último checkpoint. '+errors.join(' | '));
   }
@@ -2794,7 +2801,16 @@ async function generateResilientSceneVideoClip(prompt,dir,options={}){
     if(lastErr)throw lastErr;
     break;
   }
-  if(remaining>0.45)throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: faltan '+remaining.toFixed(2)+' s de vídeo para completar la escena.');
+  if(remaining>0.45){
+    // Preserve capacity waits all the way to the autonomous supervisor.
+    if(lastErr && /CAPACITY_WAIT_REQUIRED|capacity_wait|WAITING_FOR_CAPACITY/i.test(String(lastErr?.message||lastErr))){
+      throw lastErr;
+    }
+    if(!chunks.length && zeroGpuQuotaActive()){
+      throw new Error('CAPACITY_WAIT_REQUIRED: no hay capacidad de vídeo IA ejecutable en este momento; esperar y reconsultar proveedores.');
+    }
+    throw new Error('RETRYABLE_AI_VIDEO_INCOMPLETE: faltan '+remaining.toFixed(2)+' s de vídeo para completar la escena.');
+  }
   const joined=await concatVideoChunks(chunks,dir,'autotube-scene');
   const v=await validateGeneratedVideoClip(joined);if(!v.ok)throw new Error('La escena concatenada no pasó QA.');
   return{outputPath:joined,durationSeconds:v.durationSeconds,provider:providersUsed.map(x=>x.provider).filter((x,i,a)=>a.indexOf(x)===i).join(' + '),providerKey:providersUsed.length===1?providersUsed[0].provider:'adaptive-multi-provider',model:'adaptive-duration-chunks',generationType:'ai-video',status:'complete',chunks:chunks.length,providersUsed};
