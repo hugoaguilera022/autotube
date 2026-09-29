@@ -154,6 +154,28 @@ app.use(express.json({limit:'2mb'}));app.use(express.urlencoded({extended:true})
 app.get('/api/video-providers',async(_req,res)=>{try{res.json({ok:true,providers:await getVideoProviderHealth(),freeDailyBudget:freeAiBudgetSnapshot()});}catch(err){res.status(503).json({ok:false,error:err.message||String(err)});}});
 app.get('/api/free-production-budget',(_req,res)=>res.json({ok:true,freeOnlyDefault:String(process.env.AUTOTUBE_ALLOW_PAID_PROVIDERS||'0')!=='1',budget:freeAiBudgetSnapshot(),resourceBudget:{hfZeroGpu:hfZeroGpuResourceSnapshot()},zeroGpuQuotaCooldownUntil:sharedZeroGpuCooldownUntilTs()}));
 app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',commit:process.env.RENDER_GIT_COMMIT||'',autonomous:{enabled:autonomousEnabled,stopped:autonomousStopped,reference:autonomousReference},providers:{video:true,musicAi:Boolean(process.env.ACE_STEP_URL),kokoro:Boolean(process.env.KOKORO_TTS_URL)},configured:{gemini:Boolean(process.env['GEM'+'INI_'+'API_'+'KEY']),ltxZeroGpu:true,youtube:Boolean(process.env.YOUTUBE_CLIENT_ID&&process.env.YOUTUBE_CLIENT_SECRET),pexels:Boolean(process.env.PEXELS_API_KEY),pixabay:Boolean(process.env.PIXABAY_API_KEY),elevenlabs:Boolean(process.env.ELEVENLABS_API_KEY),supabase:supabaseConfigured()}}));
+app.get('/api/recovery/preflight',async(req,res)=>{
+  const strategy=String(req.query?.strategy||'').trim();
+  if(!strategy)return res.status(400).json({ok:false,error:'strategy requerida'});
+  if(strategy==='HF_INFERENCE_RESOURCE_SWITCH'||strategy==='INDEPENDENT_FREE_PROVIDER'){
+    const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
+    if(!token)return res.status(503).json({ok:false,strategy,reason:'HF_TOKEN_MISSING'});
+    const model=String(process.env.AUTOTUBE_HF_PREFLIGHT_MODEL||'Wan-AI/Wan2.1-T2V-1.3B').trim();
+    try{
+      const who=await fetch('https://huggingface.co/api/whoami-v2',{headers:{Authorization:'Bearer '+token,Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+      if(!who.ok)return res.status(503).json({ok:false,strategy,reason:'HF_TOKEN_INVALID_OR_INACCESSIBLE'});
+      const info=await fetch('https://huggingface.co/api/models/'+encodeURIComponent(model)+'?expand=inferenceProviderMapping',{headers:{Authorization:'Bearer '+token,Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+      if(!info.ok)return res.status(503).json({ok:false,strategy,reason:'HF_MODEL_MAPPING_UNAVAILABLE'});
+      const data=await info.json();
+      const providers=Object.entries(data?.inferenceProviderMapping||{}).filter(([,v])=>String(v?.status||'')==='live').map(([name])=>name);
+      if(!providers.length)return res.status(503).json({ok:false,strategy,reason:'HF_NO_LIVE_VIDEO_PROVIDER',model});
+      return res.json({ok:true,strategy,provider:'HF_INFERENCE',model,liveProviders:providers});
+    }catch(err){
+      return res.status(503).json({ok:false,strategy,reason:'HF_PREFLIGHT_ERROR',detail:String(err?.message||err).slice(0,180)});
+    }
+  }
+  return res.json({ok:true,strategy,provider:'LOCAL'});
+});
 function extractYoutubeVideoId(input){const value=String(input||'').trim();if(!value)return'';try{const url=new URL(value);if(url.hostname==='youtu.be')return url.pathname.slice(1).split('/')[0];if(url.hostname.endsWith('youtube.com')){if(url.pathname==='/watch')return url.searchParams.get('v')||'';if(url.pathname.startsWith('/shorts/'))return url.pathname.split('/')[2]||'';if(url.pathname.startsWith('/embed/'))return url.pathname.split('/')[2]||''}}catch{}return''}
 async function getReferenceVideo(input){
   const rawInput=String(input||'').trim();
