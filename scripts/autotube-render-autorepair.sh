@@ -50,43 +50,14 @@ esac
 recovery_resource="UNKNOWN"
 recovery_class="UNKNOWN"
 recovery_strategy="PROVIDER_CASCADE"
-case "${RENDER_LOG:-}" in
-  *"ZeroGPU quota"*|*"exceeded your ZeroGPU quota"*|*"remaining quota"*)
-    recovery_resource="HF_ZERO_GPU"
-    recovery_class="QUOTA"
-    recovery_strategy="RESOURCE_SWITCH"
-    ;;
-  *" 402 "*|*"HTTP 402"*|*"Payment Required"*)
-    recovery_resource="EXTERNAL_API_ACCESS"
-    recovery_class="PAYMENT_OR_ACCESS"
-    recovery_strategy="PROVIDER_SWITCH"
-    ;;
-  *" 429 "*|*"HTTP 429"*|*"rate limit"*|*"Too Many Requests"*)
-    recovery_resource="PROVIDER_RATE_LIMIT"
-    recovery_class="QUOTA"
-    recovery_strategy="PROVIDER_COOLDOWN"
-    ;;
-  *"502"*|*"503"*|*"504"*|*"Service Unavailable"*|*"temporarily unavailable"*|*"queue"*)
-    recovery_resource="PROVIDER_CAPACITY"
-    recovery_class="CAPACITY"
-    recovery_strategy="PROVIDER_SWITCH"
-    ;;
-  *"out of memory"*|*"heap out of memory"*|*"exit 137"*)
-    recovery_resource="RENDER_MEMORY"
-    recovery_class="INFRASTRUCTURE"
-    recovery_strategy="RESOURCE_OPTIMIZATION"
-    ;;
-  *"ECONNRESET"*|*"ETIMEDOUT"*|*"network"*)
-    recovery_resource="NETWORK"
-    recovery_class="NETWORK"
-    recovery_strategy="NETWORK_RESILIENCE"
-    ;;
-  *"node --check"*|*"SyntaxError"*|*"ReferenceError"*|*"Cannot find module"*)
-    recovery_resource="APPLICATION_CODE"
-    recovery_class="CODE"
-    recovery_strategy="CODE_REPAIR"
-    ;;
-esac
+if printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "ZeroGPU quota|exceeded your ZeroGPU quota|remaining quota"; then recovery_resource="HF_ZERO_GPU"; recovery_class="QUOTA"; recovery_strategy="RESOURCE_SWITCH"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "402|Payment Required"; then recovery_resource="EXTERNAL_API_ACCESS"; recovery_class="PAYMENT_OR_ACCESS"; recovery_strategy="PROVIDER_SWITCH"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "429|rate limit|Too Many Requests"; then recovery_resource="PROVIDER_RATE_LIMIT"; recovery_class="QUOTA"; recovery_strategy="PROVIDER_COOLDOWN"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "502|503|504|Service Unavailable|temporarily unavailable|queue"; then recovery_resource="PROVIDER_CAPACITY"; recovery_class="CAPACITY"; recovery_strategy="PROVIDER_SWITCH"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "out of memory|heap out of memory|exit 137"; then recovery_resource="RENDER_MEMORY"; recovery_class="INFRASTRUCTURE"; recovery_strategy="RESOURCE_OPTIMIZATION"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "ECONNRESET|ETIMEDOUT|network"; then recovery_resource="NETWORK"; recovery_class="NETWORK"; recovery_strategy="NETWORK_RESILIENCE"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "node --check|SyntaxError|ReferenceError|Cannot find module"; then recovery_resource="APPLICATION_CODE"; recovery_class="CODE"; recovery_strategy="CODE_REPAIR"
+fi
 
 incident_key="${runtime_incident}:$runtime_fingerprint:$deploy_id"
 previous_repairs="$(git log --all --oneline --grep="runtime-fingerprint:$runtime_fingerprint" -n 10 || true)"
