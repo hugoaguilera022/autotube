@@ -3749,7 +3749,8 @@ function commitVideoAllocation(provider,actualSeconds){
   activeVideoAllocation.consumedSeconds+=used;
   console.log('[VideoCapacity] consumed:',provider,used.toFixed(2)+'s','remaining allocation=',row.remainingSeconds.toFixed(2)+'s','snapshot=',JSON.stringify(getVideoCapacityAllocationSnapshot()));
 }
-\nfunction requiredVideoResourceSeconds(){
+
+function requiredVideoResourceSeconds(){
   const duration=resourceTargetDurationSeconds();
   const sceneCount=Math.max(1,Math.min(60,Number(process.env.AUTOTUBE_RESOURCE_PREFLIGHT_SCENES||Math.ceil(duration/5))||1));
   const margin=resourceMargin();
