@@ -313,32 +313,8 @@ node --check server.js
 echo "RECOVERY_STAGE: node-check-ok"
 
 if [ -s render-actions.txt ]; then
-  while IFS= read -r line; do
-    case "$line" in
-      RENDER_ENV_SET\ *)
-        kv="${line#RENDER_ENV_SET }"
-        key="${kv%%=*}"
-        value="${kv#*=}"
-        if ! [[ "$key" =~ ^(AUTOTUBE_|POLLINATIONS_MUSIC_MODEL$) ]]; then
-          echo "Unsafe Render env key requested: $key"; git reset --hard HEAD; exit 0
-        fi
-        if [[ "$key" =~ (TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL) ]]; then
-          echo "Secret-like Render env key rejected: $key"; git reset --hard HEAD; exit 0
-        fi
-        curl --fail-with-body -sS -X PUT -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/env-vars/$key" --data "$(jq -nc --arg v "$value" '{value:$v}')" >/dev/null
-        ;;
-      RENDER_SERVICE_PATCH\ *)
-        json="${line#RENDER_SERVICE_PATCH }"
-        if ! echo "$json" | jq -e 'type == "object" and (.serviceDetails? | type == "object")' >/dev/null; then
-          echo "Unsafe Render service patch rejected."; git reset --hard HEAD; exit 0
-        fi
-        curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID" --data "$json" >/dev/null
-        ;;
-      ""|\#*) ;;
-      *) echo "Unknown Render action rejected."; git reset --hard HEAD; exit 0 ;;
-    esac
-  done < render-actions.txt
-  curl --fail-with-body -sS -X POST -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" --data '{"deployMode":"build_and_deploy"}' >/dev/null
+  echo "RECOVERY_RENDER_ACTIONS_REJECTED: dynamic Render service/env mutation is disabled in autonomous repair; code-only repairs continue."
+  rm -f render-actions.txt
 fi
 git diff --check
 echo "RECOVERY_STAGE: diff-check-ok"
