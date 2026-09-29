@@ -71,8 +71,7 @@ case "$status" in
       if [ -n "$runtime_matches" ]; then
         runtime_incident="true"
         incident_kind="runtime"
-        runtime_fingerprint="$(printf '%s
-' "$runtime_matches" | sed -E 's/[0-9a-f]{8}-[0-9a-f-]{27,}/<ID>/g; s/20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z/<TIME>/g; s/[0-9]{10,}/<N>/g' | sha256sum | cut -d' ' -f1)"
+        runtime_fingerprint="$(printf '%s\n' "$runtime_matches" | sed -E 's/[0-9a-f]{8}-[0-9a-f-]{27,}/<ID>/g; s/20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z/<TIME>/g; s/[0-9]{10,}/<N>/g' | sha256sum | cut -d' ' -f1)"
         deploy_id="runtime-$runtime_fingerprint"
         commit="$live_commit"
         started="$since"
