@@ -15,6 +15,18 @@ case "$strategy" in
       echo "RECOVERY_PREFLIGHT_RUNTIME_REJECTED strategy=$strategy detail=$(printf '%s' "$runtime" | jq -r '.reason // .error // "unknown"' 2>/dev/null || true)"
       exit 20
     fi
+    if [ "$strategy" = "INDEPENDENT_FREE_PROVIDER" ]; then
+      if [ -n "${FREE_AI_API_KEY:-}" ]; then
+        echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy provider=FREE_AI"
+        exit 0
+      fi
+      if [ -n "${AGNES_API_KEY:-}" ]; then
+        echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy provider=AGNES_FREE"
+        exit 0
+      fi
+      echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=NO_INDEPENDENT_FREE_PROVIDER_CREDENTIAL"
+      exit 20
+    fi
     token="${HF_TOKEN:-${HUGGINGFACE_TOKEN:-}}"
     [ -n "$token" ] || { echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=HF_TOKEN_MISSING"; exit 20; }
     curl --fail-with-body -sS --max-time 20 -H "Authorization: Bearer $token" -H "Accept: application/json" https://huggingface.co/api/whoami-v2 >/tmp/autotube-hf-whoami.json || {
