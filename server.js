@@ -1,6 +1,6 @@
 require('./url-to-mp4-preload.js');
 require('dotenv').config();
-const { falConfigured, falImage, falVideo, falTts, falMusic, capabilityCatalog } = require('./universal-ai-providers.js');
+const { falConfigured, falImage, falVideo, falTts, falMusic, replicateConfigured, replicateVideo, elevenTts, stabilityMusic, capabilityCatalog } = require('./universal-ai-providers.js');
 const express = require('express');
 const path = require('path');
 const { google } = require('googleapis');
@@ -455,9 +455,9 @@ async function generateAceStepMusic(description,durationSeconds,dir,audioProfile
   if(!r.ok)throw new Error('ACE-Step '+r.status+': '+bytes.toString('utf8').slice(0,600));if(!ct.startsWith('audio/'))throw new Error('ACE-Step no devolvió audio ('+ct+').');const qa=await validateGeneratedMusic(bytes,durationSeconds);return{buffer:bytes,provider:'ACE-Step',model:'configured endpoint',durationSeconds:qa.durationSeconds,generationType:'ai-music',validation:qa};
 }
 async function generateMusicWithCascade(description,durationSeconds,dir,audioProfile={}){
-  const errors=[];const providers=[...(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_MUSIC??'1').trim()!=='0'?['fal']:[]),...(process.env.ACE_STEP_URL?['ace-step']:[]),...(process.env.POLLINATIONS_API_KEY?['pollinations']:[]),...((process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['huggingface']:[])];
+  const errors=[];const providers=[...(process.env.STABILITY_API_KEY&&String(process.env.AUTOTUBE_ENABLE_STABILITY_MUSIC??'1').trim()!=='0'?['stability']:[]),...(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_MUSIC??'1').trim()!=='0'?['fal']:[]),...(process.env.ACE_STEP_URL?['ace-step']:[]),...(process.env.POLLINATIONS_API_KEY?['pollinations']:[]),...((process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['huggingface']:[])];
   for(const provider of providers){if(musicCooldownActive(provider)){errors.push(provider+': cooldown activo');continue;}try{
-    let music;if(provider==='fal')music=await falMusic(description,dir,{durationSeconds});else if(provider==='ace-step')music=await generateAceStepMusic(description,durationSeconds,dir,audioProfile);else if(provider==='pollinations')music=await generatePollinationsMusic(description,durationSeconds,dir,audioProfile);else music=await generateHuggingFaceMusic(description,durationSeconds,dir,audioProfile);
+    let music;if(provider==='stability')music=await stabilityMusic(description,dir,{durationSeconds});else if(provider==='fal')music=await falMusic(description,dir,{durationSeconds});else if(provider==='ace-step')music=await generateAceStepMusic(description,durationSeconds,dir,audioProfile);else if(provider==='pollinations')music=await generatePollinationsMusic(description,durationSeconds,dir,audioProfile);else music=await generateHuggingFaceMusic(description,durationSeconds,dir,audioProfile);
     const qa=await validateGeneratedMusic(music.buffer,durationSeconds);noteMusicSuccess(provider);return{...music,validation:qa};
   }catch(err){const kind=classifyMusicError(err);const msg=String(err?.message||err);errors.push(provider+': '+kind+': '+msg.slice(0,700));noteMusicCooldown(provider,kind==='quota'?24*60*60*1000:kind==='auth'||kind==='model'?60*60*1000:kind==='capacity'||kind==='network'?90000:60000,msg);console.warn('[MusicCascade] provider failed; advancing:',provider,msg);}}
   if(String(process.env.AUTOTUBE_ALLOW_PROCEDURAL_AUDIO||'0')==='1'){const music=await generateProceduralMusic(description,durationSeconds,dir,audioProfile);return{...music,validation:await validateGeneratedMusic(music.buffer,durationSeconds)};}
@@ -808,6 +808,7 @@ async function generateNarrationTts(text,language='es',voiceStyle='Natural y cer
   if(!clean)return null;
   const tl=String(language||'es').toLowerCase().split(/[-_]/)[0]||'es';
   if(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_TTS??'1').trim()!=='0'){try{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-fal-tts-'));try{const result=await falTts(clean,dir);return await fs.readFile(result.outputPath);}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}}catch(err){console.warn('FAL TTS unavailable; advancing to local/free voice:',err.message||err);}}
+  if(process.env.ELEVENLABS_API_KEY&&process.env.ELEVENLABS_VOICE_ID){try{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-eleven-'));try{const result=await elevenTts(clean,dir,{voiceId:process.env.ELEVENLABS_VOICE_ID});return await fs.readFile(result.outputPath);}finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}}catch(err){console.warn('ElevenLabs TTS unavailable; advancing to local/free voice:',err.message||err);}}
   if(process.env.KOKORO_TTS_URL){try{return await generateLocalKokoroTts(clean,tl,voiceStyle,audioProfile);}catch(err){console.warn('Kokoro TTS unavailable; using Google TTS fallback:',err.message||err);}}
   const url='https://translate.google.com/translate_tts?'+new URLSearchParams({ie:'UTF-8',client:'tw-ob',tl,q:clean});
   const response=await fetch(url,{signal:AbortSignal.timeout(30000),headers:{Accept:'audio/mpeg','User-Agent':'Mozilla/5.0 AutoTube/1.0'}});
@@ -846,6 +847,7 @@ async function generateOriginalImageWithCascade(prompt,dir,options={}){
   const errors=[];
   const providers=[
     ...(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_IMAGE??'1').trim()!=='0'?['fal']:[]),
+    ...(replicateConfigured()&&String(process.env.AUTOTUBE_ENABLE_REPLICATE_IMAGE??'1').trim()!=='0'?['replicate']:[]),
     ...(String(process.env.AUTOTUBE_ALLOW_HF_IMAGE||'1')!=='0'&&(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['huggingface']:[]),
     'gemini',
     'pollinations'
@@ -855,6 +857,7 @@ async function generateOriginalImageWithCascade(prompt,dir,options={}){
     try{
       let image;
       if(provider==='fal')image=await falImage(prompt,dir,{width:Number(options.width)||854,height:Number(options.height)||480});
+      else if(provider==='replicate'){const Replicate=require('replicate');const client=new Replicate({auth:process.env.REPLICATE_API_TOKEN});const out=await client.run('black-forest-labs/flux-schnell',{input:{prompt:String(prompt||'').trim(),go_fast:true,aspect_ratio:'16:9',output_format:'png',output_quality:90}});const u=typeof out?.[0]?.url==='function'?out[0].url():out?.[0];if(!u)throw new Error('Replicate image no devolvió URL');const outputPath=path.join(dir,'replicate-image-'+Date.now()+'.png');const dl=await downloadFileFromUrl(u,outputPath);image={...dl,provider:'replicate',model:'black-forest-labs/flux-schnell',status:'complete'};}
       else if(provider==='huggingface')image=await generateHuggingFaceOriginalImage(prompt,dir,{model:options.hfModel,width:Number(options.width)||854,height:Number(options.height)||480});
       else if(provider==='gemini')image=await generateGeminiOriginalImage(prompt,dir,{model:String(options.geminiModel||'gemini-2.5-flash-image')});
       else image=await generatePollinationsOriginalImage(prompt,dir,{width:Number(options.width)||854,height:Number(options.height)||480});
@@ -1877,6 +1880,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     ...(allowPollinationsRecovery?['Pollinations']:[]),
     ...(allowReplicateRecovery?['Replicate']:[]),
     ...(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_VIDEO??'1').trim()!=='0'?['FAL']:[]),
+    ...(replicateConfigured()&&String(process.env.AUTOTUBE_ENABLE_REPLICATE_VIDEO??'1').trim()!=='0'?['Replicate-Wan']:[]),
     ...(process.env.FREE_AI_API_KEY?['Free.ai']:[]),
     ...(process.env.PIXAZO_API_KEY?['Pixazo-Free']:[]),
     ...(process.env.AGNES_API_KEY?['Agnes-Free']:[]),
@@ -1892,6 +1896,9 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   catch(err){ throw err; }
   const requestedResourceSeconds=Math.max(3,Number(options.durationSeconds)||3);
   for(const provider of [...new Set(order)]){
+    if(provider==='Replicate-Wan'){
+      try{const clip=await replicateVideo(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);completeFreeAiClip(budgetReservation);budgetCommitted=true;return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,700));continue;}
+    }
     if(provider==='FAL'){
       try{
         const clip=await falVideo(prompt,dir,{...options,generateAudio:Boolean(options.generateAudio),durationSeconds:Math.max(4,Number(options.durationSeconds)||5)});
