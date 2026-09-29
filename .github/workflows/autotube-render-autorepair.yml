@@ -18,7 +18,7 @@ on:
       - 'scripts/autotube-render-autorepair.sh'
 
 concurrency:
-  group: autotube-render-autorepair
+  group: autotube-repair-authority
   cancel-in-progress: false
 
 permissions:
