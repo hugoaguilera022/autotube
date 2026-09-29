@@ -206,14 +206,76 @@ async function stabilityMusic(prompt,dir,options={}){
   const outputPath=path.join(dir,'stability-music-'+Date.now()+'.mp3');await fs.writeFile(outputPath,Buffer.from(await r.arrayBuffer()));
   return {outputPath,bytes:(await fs.stat(outputPath)).size,provider:'stability',model:String(process.env.STABILITY_AUDIO_MODEL||'stable-audio-2.5'),durationSeconds:duration,status:'complete'};
 }
+
+// Market-selected provider metadata. This is deliberately separate from model availability:
+// a provider only becomes eligible when its capability, credentials, quota and output validate.
+const MARKET_PROVIDER_PLAN = {
+  image: [
+    {id:'fal-flux-schnell',provider:'fal.ai',model:'fal-ai/flux/schnell',task:'text_to_image',priority:10,commercial:'verify-host-terms'},
+    {id:'replicate-flux-schnell',provider:'replicate',model:'black-forest-labs/flux-schnell',task:'text_to_image',priority:20,commercial:'model-permissive-host-terms'},
+    {id:'gemini-image',provider:'google',model:'Gemini Image',task:'text_to_image',priority:30,commercial:'verify-api-terms'},
+    {id:'openai-gpt-image-2',provider:'openai',model:'gpt-image-2',task:'text_to_image',priority:40,commercial:'verify-api-terms'},
+    {id:'stability-image',provider:'stability',model:'Stable Image',task:'text_to_image',priority:50,commercial:'verify-api-terms'}
+  ],
+  video: [
+    {id:'fal-seedance-2.5-i2v',provider:'fal.ai',model:'bytedance/seedance-2.5/image-to-video',task:'image_to_video',priority:10,maxSeconds:30,audio:true},
+    {id:'fal-seedance-2.5-t2v',provider:'fal.ai',model:'bytedance/seedance-2.5/text-to-video',task:'text_to_video',priority:11,maxSeconds:30,audio:true},
+    {id:'fal-seedance-2.5-r2v',provider:'fal.ai',model:'bytedance/seedance-2.5/reference-to-video',task:'reference_to_video',priority:12,maxSeconds:30,audio:true},
+    {id:'replicate-wan-2.7-i2v',provider:'replicate',model:'wan-video/wan-2.7-i2v',task:'image_to_video',priority:20,maxSeconds:15,audio:true},
+    {id:'replicate-wan-2.7-t2v',provider:'replicate',model:'wan-video/wan-2.7-t2v',task:'text_to_video',priority:21,maxSeconds:15,audio:true},
+    {id:'replicate-seedance-2.5',provider:'replicate',model:'bytedance/seedance-2.5',task:'image_to_video',priority:30,maxSeconds:30,audio:true},
+    {id:'google-veo-3.1',provider:'google',model:'Veo 3.1',task:'text_to_video',priority:40,credentials:'GEMINI_API_KEY'},
+    {id:'openai-sora-2',provider:'openai',model:'Sora 2',task:'text_to_video',priority:50,credentials:'OPENAI_API_KEY'},
+    {id:'runway',provider:'runway',model:'Runway',task:'image_to_video',priority:60},
+    {id:'kling',provider:'kling',model:'Kling',task:'image_to_video',priority:70}
+  ],
+  voice: [
+    {id:'gemini-tts',provider:'google',model:'Gemini TTS',task:'text_to_speech',priority:10,credentials:'GEMINI_API_KEY'},
+    {id:'elevenlabs',provider:'elevenlabs',model:'eleven_multilingual_v2',task:'text_to_speech',priority:20,credentials:'ELEVENLABS_API_KEY'},
+    {id:'fal-minimax-speech',provider:'fal.ai',model:'MiniMax Speech 2.5',task:'text_to_speech',priority:30},
+    {id:'kokoro-local',provider:'local',model:'Kokoro',task:'text_to_speech',priority:40}
+  ],
+  music: [
+    {id:'stability-stable-audio',provider:'stability',model:'stable-audio-2.5',task:'text_to_audio',priority:10,credentials:'STABILITY_API_KEY'},
+    {id:'elevenlabs-music',provider:'elevenlabs',model:'Music',task:'text_to_music',priority:20,credentials:'ELEVENLABS_API_KEY'},
+    {id:'fal-minimax-music',provider:'fal.ai',model:'MiniMax Music 2.0',task:'text_to_music',priority:30},
+    {id:'royalty-free-library',provider:'library',model:'rights-checked-library',task:'audio_library',priority:40}
+  ],
+  stock: [
+    {id:'pexels',provider:'pexels',model:'Pexels Photos/Videos API',task:'stock_media',priority:10,credentials:'PEXELS_API_KEY'},
+    {id:'pixabay',provider:'pixabay',model:'Pixabay Images/Videos API',task:'stock_media',priority:20,credentials:'PIXABAY_API_KEY'}
+  ],
+  editing: [
+    {id:'ffmpeg',provider:'local',model:'FFmpeg',task:'composition',priority:10},
+    {id:'remotion',provider:'local',model:'Remotion',task:'programmable_composition',priority:20}
+  ]
+};
+
+function marketProviderPlan(category, {freeOnly=false, configuredOnly=false}={}) {
+  const list = Array.isArray(MARKET_PROVIDER_PLAN[category]) ? MARKET_PROVIDER_PLAN[category].slice() : [];
+  return list
+    .filter(p => !configuredOnly || !p.credentials || Boolean(String(process.env[p.credentials]||'').trim()))
+    .filter(p => !freeOnly || ['fal.ai','replicate','google','openai','elevenlabs','stability','pexels','pixabay','local','library'].includes(p.provider))
+    .sort((a,b)=>Number(a.priority||999)-Number(b.priority||999));
+}
+
+function providerMarketSnapshot() {
+  return Object.fromEntries(Object.entries(MARKET_PROVIDER_PLAN).map(([category]) => [
+    category,
+    marketProviderPlan(category,{configuredOnly:true}).map(p=>({...p,configured:!p.credentials||Boolean(String(process.env[p.credentials]||'').trim())}))
+  ]));
+}
+
 function capabilityCatalog(){
   return {
     image:{primary:'fal.ai/FLUX.1 schnell',fallbacks:['Replicate/FLUX.1 schnell','Google Gemini Image','OpenAI GPT Image 2','Stability Image']},
-    video:{primary:'fal.ai/Seedance 2.5 I2V/T2V',fallbacks:['Replicate/Wan 2.7 I2V/T2V','Replicate/Seedance 2.5','Google Veo 3.1','OpenAI Sora 2','Runway','Kling']},
+    video:{primary:'fal.ai/Seedance 2.5 I2V/T2V/Reference-to-Video',fallbacks:['Replicate/Wan 2.7 I2V/T2V','Replicate/Seedance 2.5','Google Veo 3.1','OpenAI Sora 2','Runway','Kling']},
     voice:{primary:'Google Gemini TTS',fallbacks:['ElevenLabs Multilingual v2/v3','fal.ai MiniMax Speech 2.5','local Kokoro']},
-    music:{primary:'Stability Stable Audio 2.5/3.0',fallbacks:['ElevenLabs Music','fal.ai MiniMax Music 2.0','royalty-free library']},
+    music:{primary:'Stability Stable Audio 2.5',fallbacks:['ElevenLabs Music','fal.ai MiniMax Music 2.0','rights-checked royalty-free library']},
+    stock:{primary:'Pexels',fallbacks:['Pixabay']},
     editing:{primary:'FFmpeg local',fallbacks:['Remotion for programmable composition']},
-    configured:{fal:falConfigured(),replicate:replicateConfigured(),elevenlabs:Boolean(String(process.env.ELEVENLABS_API_KEY||'').trim()),stability:Boolean(String(process.env.STABILITY_API_KEY||'').trim()),gemini:Boolean(String(process.env.GEMINI_API_KEY||'').trim()),openai:Boolean(String(process.env.OPENAI_API_KEY||'').trim())}
+    configured:{fal:falConfigured(),replicate:replicateConfigured(),elevenlabs:Boolean(String(process.env.ELEVENLABS_API_KEY||'').trim()),stability:Boolean(String(process.env.STABILITY_API_KEY||'').trim()),gemini:Boolean(String(process.env.GEMINI_API_KEY||'').trim()),openai:Boolean(String(process.env.OPENAI_API_KEY||'').trim()),pexels:Boolean(String(process.env.PEXELS_API_KEY||'').trim()),pixabay:Boolean(String(process.env.PIXABAY_API_KEY||'').trim())},
+    market:providerMarketSnapshot()
   };
 }
-module.exports={falConfigured,falImage,falVideo,falTts,falMusic,replicateConfigured,replicateVideo,elevenTts,stabilityMusic,capabilityCatalog};
+module.exports={falConfigured,falImage,falVideo,falTts,falMusic,replicateConfigured,replicateVideo,elevenTts,stabilityMusic,capabilityCatalog,marketProviderPlan,providerMarketSnapshot};
