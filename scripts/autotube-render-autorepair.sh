@@ -243,7 +243,7 @@ if [ -s render-repair.patch ]; then
     gh issue create --repo "$REPOSITORY" --title "AutoTube recovery patch rejected: $recovery_resource" --body "The generated patch failed the Recovery Engine contract before application. Incident=$incident_key resource=$recovery_resource class=$recovery_class strategy=$recovery_strategy." || true
     exit 0
   fi
-  git apply --check render-repair.patch && git apply render-repair.patch
+  if ! git apply --check render-repair.patch; then echo "RECOVERY_PATCH_APPLY_CHECK_FAILED"; git apply --check render-repair.patch 2>&1 || true; exit 1; fi && git apply render-repair.patch
 fi
 node --check server.js
 
