@@ -2090,7 +2090,20 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     const row=allocationRows.get(provider);
     return Boolean(row)&&Number(row.remainingSeconds)>=requestedResourceSeconds;
   });
-  const unknownRoutes=[...new Set(order)].filter(provider=>!allocationRows.has(provider));
+  const providerRegistry=autonomousVideoProviderRegistry();
+  const requestedResolution=String(process.env.AUTOTUBE_RESOURCE_PREFLIGHT_RESOLUTION||'480p').trim().toLowerCase();
+  const unknownRoutes=[...new Set(order)].filter(provider=>{
+    if(allocationRows.has(provider))return false;
+    const route=providerRegistry.find(r=>r.provider===provider);
+    if(!route||!route.configured||!route.integrated||!route.realAi)return false;
+    const runtime=providerRuntimeState(provider);
+    if(runtime.status!=='available')return false;
+    const min=route.minSeconds==null?0:Number(route.minSeconds);
+    const max=route.maxSeconds==null?Infinity:Number(route.maxSeconds);
+    if(requestedResourceSeconds<min||requestedResourceSeconds>max)return false;
+    if(Array.isArray(route.resolutions)&&route.resolutions.length&&requestedResolution!=='auto'&&!route.resolutions.map(String).map(x=>x.toLowerCase()).includes(requestedResolution))return false;
+    return true;
+  });
   const executableOrder=measuredEnough.length
     ? measuredEnough
     : unknownRoutes;
