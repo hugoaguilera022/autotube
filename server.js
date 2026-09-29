@@ -2533,6 +2533,7 @@ async function executeFullPipelineTest(reference,testId=null){
         aiVideoProviders:[...new Set(aiClips.map(x=>String(x?.providerKey||x?.provider||'unknown')))],
         realAiVideoRequired:true,
         finalMotionDetected:Boolean(validation?.motion?.motionDetected),
+        referenceConformance:validation?.referenceConformance||null,
         downloadPath:checks['render-all-scenes']?.downloadPath||null,
         downloadUrl:testId?'/api/full-pipeline-test/'+encodeURIComponent(testId)+'/download':null
       }
