@@ -1560,17 +1560,16 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
   let result;
   try{
     const app=await Client.connect(space,token?{token}:undefined);
-    result=await app.predict('/generate_video',[
-      await handle_file(firstFramePath),
-      String(prompt||'').trim(),
-      steps,
-      String(options.negativePrompt||'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects').trim(),
-      duration,
-      Number(options.guidanceScale||1),
-      Number(options.guidanceScale2||1),
-      seed,
-      true
-    ]);
+    const frame=await handle_file(firstFramePath);
+    // R3GM and CB preview2 currently expose an extra optional last-image input.
+    // Passing the prompt in slot 2 shifts every argument and causes Gradio's
+    // ImageData validation error seen in production. Keep the official Space
+    // signature: input_image, last_image, prompt, ...
+    const isTwoImageSpace=/r3gm-wan2-2-fp8da-aoti|cbensimon-wan2-2-fp8da-aoti/i.test(space);
+    const inputs=isTwoImageSpace
+      ? [frame,null,String(prompt||'').trim(),steps,String(options.negativePrompt||'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects').trim(),duration,Number(options.guidanceScale||1),Number(options.guidanceScale2||1),seed,true]
+      : [frame,String(prompt||'').trim(),steps,String(options.negativePrompt||'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects').trim(),duration,Number(options.guidanceScale||1),Number(options.guidanceScale2||1),seed,true];
+    result=await app.predict('/generate_video',inputs);
   }catch(err){
     const detail=err?.message||String(err);
     const extra=err?.cause?.message||err?.cause?.detail||err?.response?.data||'';
