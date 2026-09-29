@@ -246,6 +246,7 @@ if [ -s render-repair.patch ]; then
   if ! git apply --check render-repair.patch; then echo "RECOVERY_PATCH_APPLY_CHECK_FAILED"; git apply --check render-repair.patch 2>&1 || true; exit 1; fi && git apply render-repair.patch
 fi
 node --check server.js
+echo "RECOVERY_STAGE: node-check-ok"
 
 if [ -s render-actions.txt ]; then
   while IFS= read -r line; do
@@ -276,6 +277,7 @@ if [ -s render-actions.txt ]; then
   curl --fail-with-body -sS -X POST -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" --data '{"deployMode":"build_and_deploy"}' >/dev/null
 fi
 git diff --check
+echo "RECOVERY_STAGE: diff-check-ok"
 changed="$(git diff --name-only)"
 count="$(printf "%s\n" "$changed" | sed "/^$/d" | wc -l)"
 [ "$count" -le 2 ] || { git reset --hard HEAD; exit 0; }
@@ -287,7 +289,12 @@ if [ "$runtime_incident" = "true" ]; then
 else
   repair_commit_message="[autotube-auto-repair] fix Render deploy $deploy_id render-deploy:$deploy_id"
 fi
-git add -A && git commit -m "$repair_commit_message" && git push origin HEAD:main
+git add -A
+echo "RECOVERY_STAGE: git-add-ok"
+git commit -m "$repair_commit_message"
+echo "RECOVERY_STAGE: git-commit-ok"
+git push origin HEAD:main
+echo "RECOVERY_STAGE: git-push-ok"
 
 # Deployment handoff is part of recovery, not a best-effort side effect.
 REPAIRED_SHA="$(git rev-parse HEAD)"
