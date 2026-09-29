@@ -168,16 +168,6 @@ for model in preferred_models+discovered_models:
 if not models:
     models=list(preferred_models)
 print("Recovery Gemini candidates:", " ".join(models))
-for model in "${preferred_models[@]}" "${discovered_models[@]}"; do
-  [ -n "$model" ] || continue
-  case " ${models[*]} " in *" $model "*) continue;; esac
-  models+=("$model")
-done
-if [ "${#models[@]}" -eq 0 ]; then
-  echo "Gemini model discovery returned no generateContent models; using known current IDs."
-  models=("${preferred_models[@]}")
-fi
-echo "Recovery Gemini candidates: ${models[*]}"
 for model in "${models[@]}"; do
     url="https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent"
     req=urllib.request.Request(url,data=json.dumps(body).encode(),headers={"content-type":"application/json","x-goog-api-key":os.environ["GEMINI_API_KEY"]},method="POST")
