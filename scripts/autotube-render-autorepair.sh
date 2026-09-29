@@ -87,25 +87,9 @@ case "$status" in
     ;;
 esac
 
-# Recovery Engine v1: distinguish retryable provider failures from resource-wide failures.
-# A "recoverable" incident MUST produce a different recovery action; it is not a synonym for retry.
-recovery_resource="UNKNOWN"
-recovery_class="UNKNOWN"
-recovery_strategy="PROVIDER_CASCADE"
-if printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "ZeroGPU quota|exceeded your ZeroGPU quota|remaining quota"; then recovery_resource="HF_ZERO_GPU"; recovery_class="QUOTA"; recovery_strategy="RESOURCE_SWITCH"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "402|Payment Required"; then recovery_resource="EXTERNAL_API_ACCESS"; recovery_class="PAYMENT_OR_ACCESS"; recovery_strategy="PROVIDER_SWITCH"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "429|rate limit|Too Many Requests"; then recovery_resource="PROVIDER_RATE_LIMIT"; recovery_class="QUOTA"; recovery_strategy="PROVIDER_COOLDOWN"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "502|503|504|Service Unavailable|temporarily unavailable|queue"; then recovery_resource="PROVIDER_CAPACITY"; recovery_class="CAPACITY"; recovery_strategy="PROVIDER_SWITCH"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "out of memory|heap out of memory|exit 137"; then recovery_resource="RENDER_MEMORY"; recovery_class="INFRASTRUCTURE"; recovery_strategy="RESOURCE_OPTIMIZATION"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "ECONNRESET|ETIMEDOUT|network"; then recovery_resource="NETWORK"; recovery_class="NETWORK"; recovery_strategy="NETWORK_RESILIENCE"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "node --check|SyntaxError|ReferenceError|Cannot find module"; then recovery_resource="APPLICATION_CODE"; recovery_class="CODE"; recovery_strategy="CODE_REPAIR"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "ffmpeg|invalid data found|moov atom not found|Output file is empty|corrupt|codec|mux"; then recovery_resource="FFMPEG_OUTPUT"; recovery_class="OUTPUT_INVALID"; recovery_strategy="RENDER_PIPELINE_REPAIR"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "yt-dlp|Sign in to confirm|video.*unavailable|player response"; then recovery_resource="YOUTUBE_SOURCE"; recovery_class="SOURCE_ACCESS"; recovery_strategy="YOUTUBE_ACQUISITION_SWITCH"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "ENOTFOUND|EAI_AGAIN|CERT|TLS|socket hang up|ECONNREFUSED"; then recovery_resource="NETWORK"; recovery_class="NETWORK"; recovery_strategy="NETWORK_RESILIENCE"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "permission denied|EACCES|ENOENT|no such file or directory"; then recovery_resource="FILESYSTEM"; recovery_class="FILESYSTEM"; recovery_strategy="FILESYSTEM_REPAIR"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "invalid json|JSON.parse|Unexpected token|response.*schema"; then recovery_resource="INTEGRATION_CONTRACT"; recovery_class="INVALID_RESPONSE"; recovery_strategy="ADAPTER_REPAIR"
-elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "health.?check|did not bind|listen.*failed"; then recovery_resource="RENDER_RUNTIME"; recovery_class="DEPLOY"; recovery_strategy="SERVICE_START_REPAIR"
-fi
+# Recovery Engine contract: one canonical classifier shared by tests and runtime.
+classification="$(recovery_classify "${RENDER_LOG:-}")"
+IFS='|' read -r recovery_class recovery_resource recovery_strategy <<< "$classification"
 
 incident_key="${runtime_incident}:$runtime_fingerprint:$deploy_id"
 previous_repairs="$(git log --all --oneline --grep="runtime-fingerprint:$runtime_fingerprint" -n 10 || true)"
