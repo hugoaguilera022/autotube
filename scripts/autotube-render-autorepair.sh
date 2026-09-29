@@ -705,8 +705,14 @@ if [ -s render-actions.txt ]; then
         ;;
       RENDER_SERVICE_PATCH\ *)
         json="${line#RENDER_SERVICE_PATCH }"
-        if ! echo "$json" | jq -e 'type=="object" and ((keys - ["serviceDetails"])|length==0) and (.serviceDetails|type=="object") and ((.serviceDetails|keys) - ["buildCommand","startCommand","healthCheckPath"]|length==0)' >/dev/null; then
-          echo "Unsafe Render service patch rejected."; git reset --hard HEAD; exit 0
+        if ! printf '%s' "$json" | jq -e 'type=="object"' >/dev/null; then
+          echo "Unsafe Render service patch rejected: invalid JSON."; git reset --hard HEAD; exit 0
+        fi
+        if printf '%s' "$json" | jq -e 'keys | map(select(. != "serviceDetails")) | length > 0' >/dev/null; then
+          echo "Unsafe Render service patch rejected: top-level fields are not allowlisted."; git reset --hard HEAD; exit 0
+        fi
+        if printf '%s' "$json" | jq -e 'has("serviceDetails") and ((.serviceDetails|type) != "object" or ((.serviceDetails|keys) - ["buildCommand","startCommand","healthCheckPath"] | length > 0))' >/dev/null; then
+          echo "Unsafe Render service patch rejected: serviceDetails fields are not allowlisted."; git reset --hard HEAD; exit 0
         fi
         curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID" --data "$json" >/dev/null
         ;;
