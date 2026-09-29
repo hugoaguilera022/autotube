@@ -50,7 +50,6 @@ jobs:
       - name: Validate Recovery Engine contract
         run: |
           set -euo pipefail
-          chmod +x scripts/autotube-recovery-contract.sh scripts/autotube-render-autorepair.sh
           bash scripts/autotube-recovery-contract.sh --self-test
 
       - name: Inspect and repair latest failed Render deploy
