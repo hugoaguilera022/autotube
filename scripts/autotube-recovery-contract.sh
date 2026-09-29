@@ -51,22 +51,39 @@ validate_recovery_contract() {
   local patch="${1:-}"
   [ -n "$patch" ] || return 10
 
-  # A repair is only actionable when it is a real unified diff.
+  # A repair is actionable only when it is a real unified git diff.
   grep -q '^diff --git ' <<<"$patch" || return 11
   grep -q '^--- ' <<<"$patch" || return 12
   grep -q '^+++ ' <<<"$patch" || return 13
 
-  # Never permit a repair to weaken the core product contract.
-  if grep -Eiq 'REAL_AI_VIDEO_REQUIRED|requireRealAiVideoGeneration|validateRenderedMp4|referenceSimilarityValidation' <<<"$patch"; then
-    # Referencing validators is fine; deleting or weakening their enforcement is not.
-    if grep -Eiq '^-.*(REAL_AI_VIDEO_REQUIRED|requireRealAiVideoGeneration|validateRenderedMp4|referenceSimilarityValidation)' <<<"$patch"; then
-      return 20
-    fi
+  # Parse changed paths from the git diff header instead of matching arbitrary
+  # patch text. This avoids false positives from comments/context lines.
+  local files
+  files="$(grep '^diff --git ' <<<"$patch" | sed -E 's#^diff --git a/(.*) b/(.*)$#\1#' | sort -u)"
+  [ -n "$files" ] || return 14
+  local file_count
+  file_count="$(printf '%s\n' "$files" | sed '/^$/d' | wc -l | tr -d ' ')"
+  [ "$file_count" -le 2 ] || return 15
+
+  # Never allow generated repairs to touch secrets, credentials, dependency
+  # locks, workflow authority, or repository configuration.
+  if printf '%s\n' "$files" | grep -Eiq '(^|/)(\.env|secrets|credentials)(/|$)|(^|/)package-lock\.json$|(^|/)\.github/'; then
+    return 21
   fi
 
-  # Never allow secret/config mutation through the generated patch.
-  if grep -Eiq '^(+++|--- ).*(\.env|secrets|credentials|package-lock\.json)' <<<"$patch"; then
-    return 21
+  # Core product safety is immutable: deletion of strict-video enforcement
+  # lines is rejected. Added references are allowed.
+  if grep -Eiq '^-[^-].*(REAL_AI_VIDEO_REQUIRED|requireRealAiVideoGeneration|validateRenderedMp4|referenceSimilarityValidation)' <<<"$patch"; then
+    return 20
+  fi
+
+  # The deterministic HF_ZERO_GPU provider-switch strategy is explicitly safe
+  # only when its two independent-provider guards are present and the change
+  # is confined to server.js.
+  if grep -q 'allowPollinationsRecovery' <<<"$patch" || grep -q 'allowReplicateRecovery' <<<"$patch"; then
+    [ "$file_count" -eq 1 ] || return 22
+    [ "$files" = "server.js" ] || return 23
+    grep -q 'allowPollinationsRecovery' <<<"$patch" || grep -q 'allowReplicateRecovery' <<<"$patch" || return 24
   fi
 
   return 0
