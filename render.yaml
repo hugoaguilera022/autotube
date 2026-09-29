@@ -35,6 +35,12 @@ services:
         sync: false
       - key: AUTOTUBE_ALLOW_PAID_PROVIDERS
         value: "0"
+      - key: AUTOTUBE_ENABLE_FAL_VIDEO
+        value: "0"
+      - key: AUTOTUBE_ENABLE_REPLICATE_VIDEO
+        value: "0"
+      - key: AUTOTUBE_LEGACY_VIDEO_FALLBACKS
+        value: "1"
       - key: AUTOTUBE_VIDEO_PRIMARY
         value: "fal:seedance-2.5-i2v"
       - key: AUTOTUBE_VIDEO_FALLBACKS
