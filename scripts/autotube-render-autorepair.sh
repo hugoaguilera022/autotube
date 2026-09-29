@@ -129,8 +129,19 @@ if [ -z "${RENDER_LOG:-}" ]; then
 fi
 export DEPLOY_ID="$deploy_id" COMMIT="$commit"
 
+# Every incident must progress through a strategy, verification, and escalation loop.
+# If the same fingerprint has already produced a committed repair with the same
+# strategy, never blindly replay that strategy: move to the next route.
+strategy_history="$(git log --all --format='%s' --grep="runtime-fingerprint:$runtime_fingerprint" -n 20 || true)"
+if printf '%s\\n' "$strategy_history" | grep -q 'strategy:HF_ZERO_GPU_PROVIDER_SWITCH'; then
+  export AUTOTUBE_SKIP_DETERMINISTIC_HF="1"
+  echo "RECOVERY ENGINE: previous HF_ZERO_GPU_PROVIDER_SWITCH already reached production for this fingerprint; escalating instead of repeating it."
+else
+  export AUTOTUBE_SKIP_DETERMINISTIC_HF="0"
+fi
+
 DETERMINISTIC_PATCH_READY="false"
-if [ "$recovery_resource" = "HF_ZERO_GPU" ]; then
+if [ "$recovery_resource" = "HF_ZERO_GPU" ] && [ "${AUTOTUBE_SKIP_DETERMINISTIC_HF:-0}" != "1" ]; then
   echo "RECOVERY ENGINE: attempting deterministic HF_ZERO_GPU provider switch before Gemini."
   if bash scripts/autotube-hf-zerogpu-recovery.sh render-repair.patch; then
     if grep -q '^diff --git ' render-repair.patch; then
@@ -288,7 +299,7 @@ if printf "%s\n" "$changed" | grep -Eq "(^|/)\.github/|(^|/)\.env|(^|/)package-l
 git config user.name "AutoTube Render Repair Bot"
 git config user.email "actions@users.noreply.github.com"
 if [ "$runtime_incident" = "true" ]; then
-  repair_commit_message="[autotube-auto-repair] runtime repair $runtime_fingerprint runtime-fingerprint:$runtime_fingerprint render-deploy:$deploy_id"
+  repair_commit_message="[autotube-auto-repair] runtime repair $runtime_fingerprint strategy:$recovery_strategy runtime-fingerprint:$runtime_fingerprint render-deploy:$deploy_id"
 else
   repair_commit_message="[autotube-auto-repair] fix Render deploy $deploy_id render-deploy:$deploy_id"
 fi
@@ -375,4 +386,36 @@ done
 }
 
 echo "RECOVERY_DEPLOY_VERIFIED: Render LIVE with exact repaired SHA=$REPAIRED_SHA deploy=$RENDER_DEPLOY_ID."
-echo "Repair pushed to main; exact SHA reached Render LIVE; canonical cycle may continue."
+
+# Do not call a deploy LIVE a repair success. Wait for the canonical E2E run
+# created by this push and inspect its conclusion. A failed E2E becomes the
+# next incident, so the next cycle analyzes the new evidence instead of merely retrying.
+echo "RECOVERY_E2E_VERIFY: waiting for canonical E2E on repaired SHA=$REPAIRED_SHA"
+e2e_run=""
+for attempt in $(seq 1 18); do
+  runs="$(gh api --paginate "/repos/$REPOSITORY/actions/workflows/autotube-e2e.yml/runs?branch=main&per_page=20" 2>/dev/null || true)"
+  e2e_run="$(printf '%s' "$runs" | jq -r --arg sha "$REPAIRED_SHA" '.workflow_runs[] | select(.head_sha==$sha) | .id' | head -n1)"
+  if [ -n "$e2e_run" ]; then break; fi
+  sleep 10
+done
+if [ -z "$e2e_run" ]; then
+  echo "RECOVERY_E2E_VERIFY_BLOCKED: canonical E2E was not observed for repaired SHA=$REPAIRED_SHA."
+  exit 1
+fi
+for attempt in $(seq 1 24); do
+  e2e_json="$(gh api "/repos/$REPOSITORY/actions/runs/$e2e_run" 2>/dev/null || true)"
+  e2e_status="$(printf '%s' "$e2e_json" | jq -r '.status // empty')"
+  e2e_conclusion="$(printf '%s' "$e2e_json" | jq -r '.conclusion // empty')"
+  echo "RECOVERY_E2E_VERIFY: run=$e2e_run status=$e2e_status conclusion=$e2e_conclusion poll=$attempt/24"
+  if [ "$e2e_status" = "completed" ]; then
+    if [ "$e2e_conclusion" = "success" ]; then
+      echo "RECOVERY_E2E_VERIFIED: canonical E2E succeeded on repaired SHA=$REPAIRED_SHA run=$e2e_run."
+      exit 0
+    fi
+    echo "RECOVERY_E2E_FAILED: repaired SHA=$REPAIRED_SHA produced E2E conclusion=$e2e_conclusion; next cycle must classify the new evidence and escalate strategy."
+    exit 1
+  fi
+  sleep 20
+done
+echo "RECOVERY_E2E_VERIFY_TIMEOUT: E2E run=$e2e_run did not complete within the bounded verification window."
+exit 1
