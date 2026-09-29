@@ -20,6 +20,10 @@ case "$strategy" in
         echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy provider=FREE_AI"
         exit 0
       fi
+      if [ -n "${PIXAZO_API_KEY:-}" ]; then
+        echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy provider=PIXAZO_FREE"
+        exit 0
+      fi
       if [ -n "${AGNES_API_KEY:-}" ]; then
         echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy provider=AGNES_FREE"
         exit 0
