@@ -3009,7 +3009,21 @@ async function executeFullPipelineTest(reference,testId=null){
             try{
               clip=await withAttemptTimeout(()=>generateResilientSceneVideoClip(prompt,dir,{durationSeconds:Number(scene.duration)||4,aspectRatio:'16:9',sceneIndex:i,firstFramePath:referenceFramePath}),'adaptive-duration-scene-'+(i+1),Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||300000));
               console.log('AutoTube resilient scene generated:',i+1,'/',plan.scenes.length,'chunks=',clip.chunks,'providers=',clip.providerKey,'duration=',clip.durationSeconds);
-            }catch(videoErr){console.warn('AutoTube resilient video generation exhausted for scene '+(i+1)+':',videoErr.message||String(videoErr));}
+            }catch(videoErr){
+              const videoMessage=String(videoErr?.message||videoErr||'');
+              console.warn('AutoTube resilient video generation exhausted for scene '+(i+1)+':',videoMessage);
+              // Capacity waits are control flow, not scene failures. Propagate them
+              // immediately so the autonomous supervisor can enter waiting_capacity
+              // and resume from the checkpoint instead of consuming the remaining
+              // scenes and misclassifying the run as RETRYABLE_AI_VIDEO_INCOMPLETE.
+              if(/CAPACITY_WAIT_REQUIRED|capacity_wait|WAITING_FOR_CAPACITY/i.test(videoMessage)){
+                throw videoErr;
+              }
+              // User-action blocks must also reach the supervisor unchanged.
+              if(/INSUFFICIENT_BALANCE|401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|invalid.*credential|USER_ACTION_REQUIRED/i.test(videoMessage)){
+                throw videoErr;
+              }
+            }
             // STRICT REAL_AI_VIDEO_REQUIRED: an image converted to pan/zoom motion is
             // never accepted as a video-generation fallback. A scene must originate
             // from a real AI video provider and carry generationType=ai-video.
