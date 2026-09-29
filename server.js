@@ -157,22 +157,30 @@ app.get('/api/health',(_req,res)=>res.json({ok:true,app:'AutoTube',commit:proces
 app.get('/api/recovery/preflight',async(req,res)=>{
   const strategy=String(req.query?.strategy||'').trim();
   if(!strategy)return res.status(400).json({ok:false,error:'strategy requerida'});
-  if(strategy==='HF_INFERENCE_RESOURCE_SWITCH'||strategy==='INDEPENDENT_FREE_PROVIDER'){
+  if(strategy==='HF_INFERENCE_RESOURCE_SWITCH'){
     const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
     if(!token)return res.status(503).json({ok:false,strategy,reason:'HF_TOKEN_MISSING'});
-    const model=String(process.env.AUTOTUBE_HF_PREFLIGHT_MODEL||'Wan-AI/Wan2.1-T2V-1.3B').trim();
+    const models=String(process.env.AUTOTUBE_HF_PREFLIGHT_MODELS||'Wan-AI/Wan2.1-T2V-1.3B,Lightricks/LTX-Video-0.9.8-13B-distilled,tencent/HunyuanVideo').split(',').map(x=>x.trim()).filter(Boolean);
     try{
       const who=await fetch('https://huggingface.co/api/whoami-v2',{headers:{Authorization:'Bearer '+token,Accept:'application/json'},signal:AbortSignal.timeout(15000)});
       if(!who.ok)return res.status(503).json({ok:false,strategy,reason:'HF_TOKEN_INVALID_OR_INACCESSIBLE'});
-      const info=await fetch('https://huggingface.co/api/models/'+encodeURIComponent(model)+'?expand=inferenceProviderMapping',{headers:{Authorization:'Bearer '+token,Accept:'application/json'},signal:AbortSignal.timeout(15000)});
-      if(!info.ok)return res.status(503).json({ok:false,strategy,reason:'HF_MODEL_MAPPING_UNAVAILABLE'});
-      const data=await info.json();
-      const providers=Object.entries(data?.inferenceProviderMapping||{}).filter(([,v])=>String(v?.status||'')==='live').map(([name])=>name);
-      if(!providers.length)return res.status(503).json({ok:false,strategy,reason:'HF_NO_LIVE_VIDEO_PROVIDER',model});
-      return res.json({ok:true,strategy,provider:'HF_INFERENCE',model,liveProviders:providers});
-    }catch(err){
-      return res.status(503).json({ok:false,strategy,reason:'HF_PREFLIGHT_ERROR',detail:String(err?.message||err).slice(0,180)});
-    }
+      const found=[];
+      for(const model of models){
+        const info=await fetch('https://huggingface.co/api/models/'+encodeURIComponent(model)+'?expand=inferenceProviderMapping',{headers:{Authorization:'Bearer '+token,Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+        if(!info.ok)continue;
+        const data=await info.json();
+        for(const [provider,v] of Object.entries(data?.inferenceProviderMapping||{})){
+          if(String(v?.status||'')==='live')found.push({model,provider,isFree:Boolean(v?.is_free)});
+        }
+      }
+      const free=found.find(x=>x.isFree);
+      if(!free)return res.status(503).json({ok:false,strategy,reason:found.length?'HF_LIVE_VIDEO_PROVIDERS_REQUIRE_CREDITS_OR_PROVIDER_KEY':'HF_NO_LIVE_VIDEO_PROVIDER',liveProviders:found.length});
+      return res.json({ok:true,strategy,provider:free.provider,model:free.model,free:true,liveProviders:found.length});
+    }catch(err){return res.status(503).json({ok:false,strategy,reason:'HF_PREFLIGHT_ERROR',detail:String(err?.message||err).slice(0,180)});}
+  }
+  if(strategy==='INDEPENDENT_FREE_PROVIDER'){
+    if(String(process.env.AGNES_API_KEY||'').trim())return res.json({ok:true,strategy,provider:'AGNES_FREE'});
+    return res.status(503).json({ok:false,strategy,reason:'AGNES_API_KEY_MISSING'});
   }
   return res.json({ok:true,strategy,provider:'LOCAL'});
 });
@@ -1695,6 +1703,34 @@ async function generateFreeWan22RahulT2vVideoClip(prompt,dir,options={}) {
   return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.2 Rahul T2V',model:'Wan2.2 T2V A14B',durationSeconds:validation.durationSeconds,status:'complete'};
 }
 
+async function generateAgnesFreeVideoClip(prompt,dir,options={}) {
+  const key=String(process.env.AGNES_API_KEY||'').trim();
+  if(!key)throw new Error('AGNES_API_KEY no configurada.');
+  const duration=Math.max(5,Math.min(20,Number(options.durationSeconds)||5));
+  const create=await fetch('https://apihub.agnes-ai.com/v1/videos',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model:String(process.env.AGNES_VIDEO_MODEL||'agnes-video-v2.0'),prompt:String(prompt||'').trim(),width:1280,height:720,num_frames:Math.round(duration*16),frame_rate:16}),signal:AbortSignal.timeout(60000)});
+  const raw=await create.text(); let data=null; try{data=raw?JSON.parse(raw):null}catch{}
+  if(!create.ok)throw new Error('Agnes video '+create.status+': '+raw.slice(0,600));
+  const taskId=String(data?.id||data?.task_id||data?.video_id||'').trim(); if(!taskId)throw new Error('Agnes no devolvió task id.');
+  const deadline=Date.now()+Math.min(300000,Math.max(120000,Number(process.env.AUTOTUBE_AGNES_TIMEOUT_MS)||240000));
+  while(Date.now()<deadline){
+    const r=await fetch('https://apihub.agnes-ai.com/agnesapi?video_id='+encodeURIComponent(taskId),{headers:{Authorization:'Bearer '+key,Accept:'application/json'},signal:AbortSignal.timeout(30000)});
+    const body=await r.text(); let state=null; try{state=body?JSON.parse(body):null}catch{}
+    if(!r.ok)throw new Error('Agnes status '+r.status+': '+body.slice(0,500));
+    const status=String(state?.status||state?.data?.status||'').toLowerCase();
+    const videoUrl=String(state?.video_url||state?.data?.video_url||'').trim();
+    if(status==='failed'||status==='error')throw new Error('Agnes generación falló: '+String(state?.error||state?.message||'unknown').slice(0,500));
+    if(videoUrl){
+      const vr=await fetch(videoUrl,{signal:AbortSignal.timeout(120000)}); if(!vr.ok)throw new Error('Agnes video download '+vr.status);
+      const bytes=Buffer.from(await vr.arrayBuffer()); if(bytes.length<10000)throw new Error('Agnes vídeo vacío.');
+      const outputPath=path.join(dir,'agnes-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4'); await fs.writeFile(outputPath,bytes);
+      const validation=await validateGeneratedVideoClip(outputPath); if(!validation.ok)throw new Error('Agnes vídeo no pasó QA.');
+      return{outputPath,bytes:bytes.length,provider:'Agnes AI Free',model:String(process.env.AGNES_VIDEO_MODEL||'agnes-video-v2.0'),durationSeconds:validation.durationSeconds,status:'complete'};
+    }
+    await new Promise(r=>setTimeout(r,4000));
+  }
+  throw new Error('Agnes generación agotó el timeout.');
+}
+
 async function generateBestFreeVideoClip(prompt,dir,options={}) {
   const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);
   const referenceFramePath=String(options.firstFramePath||'').trim();
@@ -1720,6 +1756,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     ...(allowHfInferenceRecovery?['HF-Inference']:[]),
     ...(allowPollinationsRecovery?['Pollinations']:[]),
     ...(allowReplicateRecovery?['Replicate']:[]),
+    ...(process.env.AGNES_API_KEY?['Agnes-Free']:[]),
     ...(referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','Wan2.2-I2V','Wan2.1-VACE']:[]),
     'Wan2.2-Rahul-T2V',
     'Wan2.2-ZeroGPU','OpenKing-Wan2.2','LTX-2.5','Wan2.1','LTX-0.9.8'
@@ -1732,6 +1769,14 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   catch(err){ throw err; }
   const requestedResourceSeconds=Math.max(3,Number(options.durationSeconds)||3);
   for(const provider of [...new Set(order)]){
+    if(provider==='Agnes-Free'){
+      try{
+        const clip=await generateAgnesFreeVideoClip(prompt,dir,options);
+        const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);
+        completeFreeAiClip(budgetReservation); budgetCommitted=true;
+        return{...clip,providerKey:provider,generationType:'ai-video',validation};
+      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
+    }
     if(provider==='HF-Inference'){
       try{
         const clip=await generateHuggingFaceProviderVideoClip(prompt,dir,options);
