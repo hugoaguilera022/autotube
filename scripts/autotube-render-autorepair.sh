@@ -43,7 +43,7 @@ case "$status" in
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     since="$(date -u -d '35 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
     curl --fail-with-body -sS -G -H "Accept: application/json" -H "Authorization: Bearer $RENDER_API_KEY"       --data-urlencode "ownerId=$RENDER_OWNER_ID"       --data-urlencode "resource=$RENDER_SERVICE_ID"       --data-urlencode "startTime=$since"       --data-urlencode "endTime=$now"       --data-urlencode "direction=forward"       --data-urlencode "limit=100"       "https://api.render.com/v1/logs" > render-runtime-logs.json || true
-    runtime_matches="$(jq -r '.logs[]?.message // empty' render-runtime-logs.json 2>/dev/null | grep -Ei 'RETRYABLE_AI_VIDEO_INCOMPLETE|REAL_AI_VIDEO_REQUIRED|visual-sources-all-scenes.*failed|AI video scene .* unavailable|ZeroGPU quota|MUSIC_PROVIDERS_EXHAUSTED|audio.*QA.*fail|502|503|504|ECONNRESET|ETIMEDOUT|out of memory|heap out of memory' | tail -n 120 || true)"
+    runtime_matches="$(jq -r '.logs[]?.message // empty' render-runtime-logs.json 2>/dev/null | grep -Ei 'RETRYABLE_AI_VIDEO_INCOMPLETE|REAL_AI_VIDEO_REQUIRED|visual-sources-all-scenes.*failed|AI video scene .* unavailable|ZeroGPU quota|MUSIC_PROVIDERS_EXHAUSTED|audio.*QA.*fail|502|503|504|ECONNRESET|ETIMEDOUT|out of memory|heap out of memory|ReferenceError|Cannot access .* before initialization' | tail -n 120 || true)"
     if [ -n "$runtime_matches" ]; then
       runtime_incident="true"
       incident_kind="runtime"
