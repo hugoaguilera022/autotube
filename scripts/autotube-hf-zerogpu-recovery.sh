@@ -14,10 +14,8 @@ set -euo pipefail
 
 PATCH_FILE="${1:-render-repair.patch}"
 
-python3 - "$PATCH_FILE" <<'PY'
+python3 - <<'PY'
 from pathlib import Path
-import difflib
-import sys
 
 path = Path("server.js")
 old = path.read_text()
@@ -55,24 +53,30 @@ replacement = """  // HF_ZERO_GPU recovery uses already-implemented non-Hugging-
 """
 new = old.replace(needle, replacement, 1)
 
-# Refuse any semantic weakening of the strict real-video gate.
-required = [
+for marker in [
     "function requireRealAiVideoGeneration(){return String(process.env.AUTOTUBE_REQUIRE_REAL_AI_VIDEO??'1').trim()!=='0';}",
     "REAL_AI_VIDEO_REQUIRED: todos los proveedores de vídeo IA",
     "generationType:'ai-video'",
-]
-for marker in required:
+]:
     if marker not in new:
         raise SystemExit("DETERMINISTIC_RECOVERY_SAFETY_MARKER_MISSING")
 
-diff = ''.join(difflib.unified_diff(
-    old.splitlines(True),
-    new.splitlines(True),
-    fromfile="a/server.js",
-    tofile="b/server.js",
-))
-if not diff.startswith("--- a/server.js\n") or "\n+++ b/server.js\n" not in diff:
-    raise SystemExit("DETERMINISTIC_RECOVERY_INVALID_DIFF")
-Path(sys.argv[1]).write_text("diff --git a/server.js b/server.js\n" + diff)
-print("DETERMINISTIC_HF_ZERO_GPU_PATCH_READY")
+path.write_text(new)
 PY
+
+git diff -- server.js > "$PATCH_FILE"
+git restore -- server.js
+
+if ! grep -q '^diff --git a/server.js b/server.js' "$PATCH_FILE"; then
+  echo "DETERMINISTIC_RECOVERY_INVALID_GIT_DIFF"
+  exit 3
+fi
+if ! grep -q 'allowPollinationsRecovery' "$PATCH_FILE" && ! grep -q 'allowReplicateRecovery' "$PATCH_FILE"; then
+  echo "DETERMINISTIC_RECOVERY_EXPECTED_CHANGE_MISSING"
+  exit 4
+fi
+if ! grep -q 'REAL_AI_VIDEO_REQUIRED' server.js || ! grep -q 'function requireRealAiVideoGeneration' server.js; then
+  echo "DETERMINISTIC_RECOVERY_SAFETY_MARKER_MISSING_AFTER_RESTORE"
+  exit 5
+fi
+echo "DETERMINISTIC_HF_ZERO_GPU_PATCH_READY"
