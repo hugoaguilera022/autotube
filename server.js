@@ -3490,7 +3490,7 @@ function resourceTargetDurationSeconds(){
   const configured=Math.max(5,Number(process.env.AUTOTUBE_AUTONOMOUS_MAX_DURATION_SECONDS||20)||20);
   return Math.min(3600,configured);
 }
-function resourceProviderCandidates(requiredVideoSeconds){
+function resourceProviderCandidates(requiredVideoSeconds,externalCapacity={}){
   const candidates=[];
   const add=(provider,configured,capacity,unit='seconds')=>{
     if(!configured)return;
@@ -3510,9 +3510,10 @@ function resourceProviderCandidates(requiredVideoSeconds){
   add('Replicate',
     Boolean(process.env.REPLICATE_API_TOKEN),
     resourceNumberEnv('AUTOTUBE_REPLICATE_REMAINING_VIDEO_SECONDS'));
-  add('MagicHour',
-    Boolean(process.env.MAGIC_HOUR_API_KEY),
-    resourceNumberEnv('AUTOTUBE_MAGIC_HOUR_REMAINING_CREDITS'),'credits');
+  const magicCredits=Number(externalCapacity?.magic?.credits);
+  if(process.env.MAGIC_HOUR_API_KEY&&externalCapacity?.magic?.status==='available'&&Number.isFinite(magicCredits)){
+    add('MagicHour',true,magicCredits,'credits');
+  }
   // ZeroGPU capacity is measured in requested GPU seconds. If a shared quota
   // cooldown is active it is categorically unavailable.
   if(typeof zeroGpuQuotaActive==='function'&&!zeroGpuQuotaActive()){
@@ -3528,10 +3529,11 @@ function requiredVideoResourceSeconds(){
   // retries/chunking and the pipeline must finish every scene.
   return {durationSeconds:duration,sceneCount,videoSeconds:duration*resourceMargin()};
 }
-function evaluateAutonomousResourceGate(){
+async function evaluateAutonomousResourceGate(){
   const need=requiredVideoResourceSeconds();
+  const externalCapacity={magic:await probeMagicHourAccount()};
   const required={videoSeconds:need.videoSeconds,sceneCount:need.sceneCount};
-  const candidates=resourceProviderCandidates(need.videoSeconds);
+  const candidates=resourceProviderCandidates(need.videoSeconds,externalCapacity);
   const viable=candidates.filter(c=>{
     if(c.unit==='credits'){
       // Magic Hour text-to-video currently documents 24 credits/sec at its
@@ -3552,6 +3554,7 @@ function evaluateAutonomousResourceGate(){
   autonomousResourceGate.required=required;
   autonomousResourceGate.available={
     videoCandidates:candidates,
+    externalCapacity,
     viableRoutes:viable.map(x=>x.provider),
     render:renderAvailable,
     gemini:geminiConfigured,
@@ -3582,7 +3585,7 @@ function releaseAutonomousResources(){
   autonomousResourceGate.reservation=null;
 }
 app.get('/api/autonomous/resource-gate',async(_req,res)=>{
-  const gate=evaluateAutonomousResourceGate();
+  const gate=await evaluateAutonomousResourceGate();
   return res.status(gate.ok?200:503).json(gate);
 });
 
@@ -3591,7 +3594,7 @@ async function runAutonomousCycle(){
   const now=Date.now();
   // HARD GATE: no autonomous production cycle may be created without a
   // complete, explicitly quota-confirmed resource route for the whole job.
-  const resourceGate=evaluateAutonomousResourceGate();
+  const resourceGate=await evaluateAutonomousResourceGate();
   if(!resourceGate.ok||!reserveAutonomousResources(resourceGate)){
     autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
     return;
