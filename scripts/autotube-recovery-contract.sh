@@ -130,7 +130,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 
     strategy_plan="$(mktemp)"
     RENDER_LOG="ZeroGPU quota exceeded" RECOVERY_CLASS="QUOTA" RECOVERY_RESOURCE="HF_ZERO_GPU" STRATEGY_HISTORY="" REPAIR_ATTEMPT="1" AUTOTUBE_STRATEGY_PLAN_FILE="$strategy_plan" bash scripts/autotube-recovery-strategy-engine.sh >/tmp/autotube-strategy-selftest.log
-    grep -q "RECOVERY_STRATEGY_PLAN_SELECTED=HF_ZERO_GPU_PROVIDER_SWITCH" /tmp/autotube-strategy-selftest.log || { echo "adaptive strategy self-test failed"; cat /tmp/autotube-strategy-selftest.log; exit 1; }
+    grep -q "RECOVERY_STRATEGY_PLAN_SELECTED=HF_INFERENCE_RESOURCE_SWITCH" /tmp/autotube-strategy-selftest.log || { echo "adaptive strategy self-test failed"; cat /tmp/autotube-strategy-selftest.log; exit 1; }
     grep -q "strategy:HF_ZERO_GPU_PROVIDER_SWITCH" <(printf "strategy:HF_ZERO_GPU_PROVIDER_SWITCH\\n") || exit 1
     rm -f "$strategy_plan" /tmp/autotube-strategy-selftest.log
 
