@@ -169,7 +169,7 @@ for model in models:
             print(check.stderr[-2000:])
             continue
         break
-   except urllib.error.HTTPError as ex:
+    except urllib.error.HTTPError as ex:
         print("Recovery model failed:",model,ex.code)
 else:
     raise RuntimeError("All Gemini recovery models failed")
