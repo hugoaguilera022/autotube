@@ -118,16 +118,17 @@ if [ "$repair_attempt" -gt "$MAX_RECOVERY_ATTEMPTS" ]; then
   exit 0
 fi
 
-if git log --all --oneline --grep="render-deploy:$deploy_id" -n 1 | grep -q .; then
-  echo "This Render incident was already repaired/processed."
+if [ "$runtime_incident" != "true" ] && git log --all --oneline --grep="render-deploy:$deploy_id" -n 1 | grep -q .; then
+  echo "This Render deploy incident was already repaired/processed."
   exit 0
 fi
 
-echo "RECOVERY ENGINE: class=$recovery_class resource=$recovery_resource strategy=$recovery_strategy attempt=$repair_attempt/3"
+echo "RECOVERY ENGINE: class=$recovery_class resource=$recovery_resource strategy=$recovery_strategy attempt=$repair_attempt/$MAX_RECOVERY_ATTEMPTS"
 export RECOVERY_RESOURCE="$recovery_resource"
 export RECOVERY_CLASS="$recovery_class"
 export RECOVERY_STRATEGY="$recovery_strategy"
 export REPAIR_ATTEMPT="$repair_attempt"
+export MAX_RECOVERY_ATTEMPTS="$MAX_RECOVERY_ATTEMPTS"
 
 started="${started:-$(echo "$latest" | jq -r '.startedAt // .createdAt // empty')}"
 finished="${finished:-$(echo "$latest" | jq -r '.finishedAt // .updatedAt // empty')}"
@@ -141,7 +142,7 @@ export DEPLOY_ID="$deploy_id" COMMIT="$commit"
 
 python3 - <<'PY'
 import json, os, urllib.error, urllib.request, subprocess
-prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Treat shared ZeroGPU Spaces as ONE resource, not independent providers. If the current resource is exhausted, switch resource class instead of adding more Spaces from the same resource. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. Repair provider adapters, fallback selection, checkpoint/retry state, FFmpeg/render logic, YouTube acquisition, networking, memory, or deployment configuration when logs identify those as the root cause. Never merely retry the same failing operation. Resource=%s Class=%s Strategy=%s Attempt=%s/3 Incident=%s Commit=%s Logs=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""))
+prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Treat shared ZeroGPU Spaces as ONE resource, not independent providers. If the current resource is exhausted, switch resource class instead of adding more Spaces from the same resource. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. If the current resource is unavailable and no independent free route is technically available from the repository/runtime context, return NO_SAFE_PATCH instead of inventing an API or weakening validation. Repair provider adapters, fallback selection, checkpoint/retry state, FFmpeg/render logic, YouTube acquisition, networking, memory, or deployment configuration when logs identify those as the root cause. Never merely retry the same failing operation. Resource=%s Class=%s Strategy=%s Attempt=%s/%s Incident=%s Commit=%s Logs=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("MAX_RECOVERY_ATTEMPTS","12"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""))
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
 models=["gemini-3.1-flash-lite","gemini-3.8-flash","gemini-2.5-flash-lite","gemini-2.5-flash"]
 for model in models:
