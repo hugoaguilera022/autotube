@@ -127,13 +127,21 @@ jobs:
                         if [ "$has_video" -ge 1 ] && [ "$has_audio" -ge 1 ] &&                            awk "BEGIN {exit !($duration > 0)}" &&                            awk "BEGIN {exit !($size > 10000)}"; then
                           echo "Basic MP4 container validation passed."
 
-                          reference_ok="$(jq -r '.result.validation.referenceSimilarityValidation.accepted // false' status.json 2>/dev/null || echo false)"
-                          if [ "$reference_ok" != "true" ]; then
-                            last_error="Final MP4 did not pass audiovisual similarity validation against the YouTube reference"
+                          real_ai="$(jq -r '.result.allScenesRealAiVideo // false' status.json 2>/dev/null || echo false)"
+                          required_ai="$(jq -r '.result.realAiVideoRequired // false' status.json 2>/dev/null || echo false)"
+                          ai_motion="$(jq -r '.result.finalMotionDetected // false' status.json 2>/dev/null || echo false)"
+                          ai_clips="$(jq -r '.result.realAiVideoClips // 0' status.json 2>/dev/null || echo 0)"
+                          if [ "$real_ai" != "true" ] || [ "$required_ai" != "true" ] || [ "$ai_motion" != "true" ] || [ "$ai_clips" -lt 1 ]; then
+                            last_error="Final pipeline did not prove real AI video provenance for every generated scene"
                             echo "$last_error"
+                            echo "AI provenance: allScenesRealAiVideo=$real_ai realAiVideoRequired=$required_ai finalMotionDetected=$ai_motion realAiVideoClips=$ai_clips"
                             continue
                           fi
-                          echo "REFERENCE VALIDATION PASSED: generated MP4 matches the reference audiovisual profile."
+                          reference_status="$(jq -r '.result.referenceConformance.status // empty' status.json 2>/dev/null || true)"
+                          case "$reference_status" in
+                            passed|deterministic|deterministic-only) echo "REFERENCE VALIDATION PASSED: status=$reference_status";;
+                            *) last_error="Final MP4 did not pass reference conformance validation (status=$reference_status)"; echo "$last_error"; continue;;
+                          esac
 
                           # Require measurable frame-to-frame visual change.
                           motion="$(ffmpeg -hide_banner -loglevel error                             -i autotube-final.mp4                             -vf "select='gt(scene,0.003)',metadata=print:file=motion.txt"                             -an -f null - 2>&1 || true)"
