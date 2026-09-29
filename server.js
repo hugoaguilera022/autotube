@@ -3838,6 +3838,7 @@ function buildAutonomousRouteMatrix({need,externalCapacity}){
     else if(!resolutionOk)reason='resolution_not_supported';
     else if(!referenceOk)reason='reference_frame_unavailable';
     else if(capacityStatus==='unknown')reason='quota_unknown_probe_required';
+    else if(!resourceOk&&Number(capacity)>0)reason='partial_capacity';
     else if(!resourceOk)reason='insufficient_quota';
     return {
       provider:route.provider,
@@ -3890,7 +3891,7 @@ async function evaluateAutonomousResourceGate(){
   const usableRoutes=routePlan.routes.filter(r=>
     r.configured&&r.integrated&&r.realAi&&r.state==='available'&&
     !['insufficient_quota','not_configured','unsupported','resolution_not_supported'].includes(r.reason) &&
-    (r.resourceOk||r.capacityStatus==='unknown'||r.capacityStatus==='live'||r.capacityStatus==='explicit')
+    (r.resourceOk||r.capacityStatus==='unknown'||r.capacityStatus==='live'||r.capacityStatus==='explicit'||r.reason==='partial_capacity')
   );
   const complete=Boolean(usableRoutes.length&&renderAvailable&&geminiConfigured&&musicCanRun);
   autonomousResourceGate.checkedAt=Date.now();
