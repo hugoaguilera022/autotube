@@ -175,7 +175,8 @@ if [ "$recovery_strategy" = "HF_ZERO_GPU_PROVIDER_SWITCH" ] && [ "$recovery_reso
   else
     echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU route could not produce a safe patch; falling back to bounded repair generation."
   fi
-fi[ -n "$RENDER_LOG" ] || export RENDER_LOG="Render incident $deploy_id status=$status and no diagnostic log was returned."
+fi
+[ -n "$RENDER_LOG" ] || export RENDER_LOG="Render incident $deploy_id status=$status and no diagnostic log was returned."
 
 if [ "$DETERMINISTIC_PATCH_READY" != "true" ]; then
 python3 - <<'PY'
