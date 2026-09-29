@@ -86,6 +86,13 @@ validate_recovery_contract() {
     grep -q 'allowPollinationsRecovery' <<<"$patch" || grep -q 'allowReplicateRecovery' <<<"$patch" || return 24
   fi
 
+  # HF Inference resource-switch repairs are confined to server.js and preserve strict AI-video enforcement.
+  if grep -q 'allowHfInferenceRecovery' <<<"$patch"; then
+    [ "$file_count" -eq 1 ] || return 25
+    [ "$files" = "server.js" ] || return 26
+    grep -q 'allowHfInferenceRecovery' <<<"$patch" || return 27
+  fi
+
   return 0
 }
 
