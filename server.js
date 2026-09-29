@@ -179,8 +179,9 @@ app.get('/api/recovery/preflight',async(req,res)=>{
     }catch(err){return res.status(503).json({ok:false,strategy,reason:'HF_PREFLIGHT_ERROR',detail:String(err?.message||err).slice(0,180)});}
   }
   if(strategy==='INDEPENDENT_FREE_PROVIDER'){
-    if(String(process.env.AGNES_API_KEY||'').trim())return res.json({ok:true,strategy,provider:'AGNES_FREE'});
-    return res.status(503).json({ok:false,strategy,reason:'AGNES_API_KEY_MISSING'});
+    if(String(process.env.FREE_AI_API_KEY||'').trim())return res.json({ok:true,strategy,provider:'FREE_AI',free:true});
+    if(String(process.env.AGNES_API_KEY||'').trim())return res.json({ok:true,strategy,provider:'AGNES_FREE',free:true});
+    return res.status(503).json({ok:false,strategy,reason:'NO_INDEPENDENT_FREE_PROVIDER_CREDENTIAL'});
   }
   return res.json({ok:true,strategy,provider:'LOCAL'});
 });
