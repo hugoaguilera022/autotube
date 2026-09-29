@@ -133,14 +133,7 @@ prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTI
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
 # Discover the models currently exposed to THIS Gemini API key before trying repairs.
 # This prevents stale/deprecated model IDs from consuming the recovery window.
-preferred_models=[
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.7-flash",
-    "gemini-3.8-flash",
-]
+preferred_models=[]
 discovered_models=[]
 try:
     req=urllib.request.Request(
@@ -159,24 +152,23 @@ try:
             if name:
                 lname=name.lower()
                 excluded=("image" in lname or "tts" in lname or "live" in lname or "transcribe" in lname or "computer-use" in lname or "robotics" in lname or "lyria" in lname or "deep-research" in lname)
-                coding_capable=("flash" in lname or "pro" in lname or lname.endswith("-latest") or "antigravity" in lname)
-                if coding_capable and not excluded:
+                stable_name = ((lname.startswith("gemini-2.5-") or lname.startswith("gemini-3.1-") or lname.startswith("gemini-3.5-")) and ("flash" in lname or "pro" in lname)) or lname in ("gemini-flash-latest","gemini-pro-latest")
+                if stable_name and not excluded and "preview" not in lname and "customtools" not in lname and "omni" not in lname and "antigravity" not in lname:
                     discovered_models.append(name)
 except Exception as exc:
     print("Gemini model discovery unavailable:",str(exc)[:300])
 
 models=[]
-for model in preferred_models+discovered_models:
+for model in discovered_models:
     if model and model not in models:
         models.append(model)
-if not models:
-    models=list(preferred_models)
-print("Recovery Gemini candidates:", " ".join(models))
+models = models[:4]
+print("Recovery Gemini bounded candidates:", " ".join(models))
 for model in models:
     url="https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent"
     req=urllib.request.Request(url,data=json.dumps(body).encode(),headers={"content-type":"application/json","x-goog-api-key":os.environ["GEMINI_API_KEY"]},method="POST")
     try:
-        with urllib.request.urlopen(req,timeout=90) as response: data=json.load(response)
+        with urllib.request.urlopen(req,timeout=12) as response: data=json.load(response)
         out=data["candidates"][0]["content"]["parts"][0]["text"].strip()
         if out.strip().startswith("NO_SAFE_PATCH"):
             print("Recovery model reports NO_SAFE_PATCH; continuing to next configured model:",model)
@@ -207,7 +199,7 @@ for model in models:
         print("Recovery model failed:",model,ex.code)
         continue
     except Exception as ex:
-        print("Recovery model failed:",model,type(ex).__name__,str(ex)[:300])
+        print("Recovery model failed:",model,type(ex).__name__,str(ex)[:240])
         continue
 else:
     open("render-repair.patch","w").write("NO_SAFE_PATCH\\n")
