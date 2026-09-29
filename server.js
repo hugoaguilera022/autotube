@@ -2524,7 +2524,18 @@ async function executeFullPipelineTest(reference,testId=null){
       elapsedMs:Date.now()-started,
       reference:{url:reference,title:referenceTitle,durationSeconds},
       checks,
-      result:{sceneCount:plan.scenes.length,referenceDurationSeconds:durationSeconds,renderedBytes:validation?.size||render?.size||0,downloadPath:checks['render-all-scenes']?.downloadPath||null,downloadUrl:testId?'/api/full-pipeline-test/'+encodeURIComponent(testId)+'/download':null}
+      result:{
+        sceneCount:plan.scenes.length,
+        referenceDurationSeconds:durationSeconds,
+        renderedBytes:validation?.size||render?.size||0,
+        realAiVideoClips:aiClips.length,
+        allScenesRealAiVideo:aiClips.length===plan.scenes.length && aiClips.every(x=>String(x?.generationType||'')==='ai-video'),
+        aiVideoProviders:[...new Set(aiClips.map(x=>String(x?.providerKey||x?.provider||'unknown')))],
+        realAiVideoRequired:true,
+        finalMotionDetected:Boolean(validation?.motion?.motionDetected),
+        downloadPath:checks['render-all-scenes']?.downloadPath||null,
+        downloadUrl:testId?'/api/full-pipeline-test/'+encodeURIComponent(testId)+'/download':null
+      }
     };
   }catch(err){
     const failedStage=Object.keys(checks).reverse().find(name=>checks[name]?.ok===false)||'unknown';
