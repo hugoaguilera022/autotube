@@ -3697,7 +3697,6 @@ async function evaluateAutonomousResourceGate(){
     :'No hay ninguna ruta real disponible para producir vídeo. El ciclo NO se inicia.';
   if(!complete)console.warn('[ResourceGate] autonomous cycle NOT STARTED:',autonomousResourceGate.reason,JSON.stringify(autonomousResourceGate.available));
   else console.log('[ResourceGate] dynamic multi-provider capacity enabled:',usableRoutes.map(x=>x.provider).join(','));
-  else console.log('[ResourceGate] autonomous cycle preflight READY:',JSON.stringify({required:autonomousResourceGate.required,route:routePlan.selected?.provider,allViable:routePlan.eligible.map(x=>x.provider)}));
   return {ok:complete,probeRequired:false,...autonomousResourceGate};
 }
 
