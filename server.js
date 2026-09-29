@@ -2044,12 +2044,21 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   try{ budgetReservation=reserveFreeAiBudget(options.durationSeconds||3); }
   catch(err){ throw err; }
   const requestedResourceSeconds=Math.max(3,Number(options.durationSeconds)||3);
-  for(const provider of [...new Set(order)]){
+  const allocationRows=new Map((activeVideoAllocation?.rows||[]).map(r=>[r.provider,r]));
+  const executableOrder=[...new Set(order)].filter(provider=>{
+    const row=allocationRows.get(provider);
+    if(!row)return true;
+    return Number(row.remainingSeconds)>=requestedResourceSeconds;
+  });
+  if(!executableOrder.length){
+    throw new Error('CAPACITY_WAIT_REQUIRED: ninguna ruta tiene capacidad suficiente para la siguiente petición de '+requestedResourceSeconds+'s.');
+  }
+  for(const provider of executableOrder){
     const pst=providerState(provider);
     if(pst.status==='blocked'||Date.now()<Number(pst.cooldownUntil||0)){errors.push(provider+': cooldown/blocked until '+new Date(Number(pst.cooldownUntil||0)).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'status=',pst.status,'cooldownUntil=',pst.cooldownUntil);continue;}
     if(HF_ZEROGPU_PROVIDERS.has(String(provider||''))&&zeroGpuQuotaActive()){errors.push(provider+': shared ZeroGPU quota cooldown active until '+new Date(getSharedZeroGpuCooldownUntil()).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'reason=shared ZeroGPU quota');continue;}
     if(provider==='Replicate-Wan'){
-      try{const clip=await replicateVideo(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds)); commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
+      try{const clip=await replicateVideo(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,700));continue;}
     }
     if(provider==='FAL'){
@@ -2140,7 +2149,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       ? {ok:true,status:'generation-direct'}
       : await probeVideoProvider(provider);
     if(!health.ok)continue;
-    if(provider==='Wan2.2-Rahul-AOT'){try{const clip=await generateWan22RestVideoClip(prompt,dir,{...options,durationSeconds:Math.max(3,Number(options.durationSeconds)||3),spaceUrl:process.env.WAN22_RAHUL_AOT_SPACE_URL||'https://rahul7star-wan22-aot.hf.space',mode:'simple',endpoint:'/generate_video_with_upload'});const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{success:true});completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds)); commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
+    if(provider==='Wan2.2-Rahul-AOT'){try{const clip=await generateWan22RestVideoClip(prompt,dir,{...options,durationSeconds:Math.max(3,Number(options.durationSeconds)||3),spaceUrl:process.env.WAN22_RAHUL_AOT_SPACE_URL||'https://rahul7star-wan22-aot.hf.space',mode:'simple',endpoint:'/generate_video_with_upload'});const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{success:true});completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{quota:classifyVideoProviderError(err)==='quota'});errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,700));continue;}} if(provider==='Wan2.2-Rahul-T2V'){try{const clip=await generateFreeWan22RahulT2vVideoClip(prompt,dir,{...options,durationSeconds:Math.max(3,Number(options.durationSeconds)||3)});const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{success:true});completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds)); commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{quota:classifyVideoProviderError(err)==='quota'});errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,700));continue;}} if(provider==='Wan2.2-AoTI'||provider==='Wan2.2-AoTI-R3GM'||provider==='Wan2.2-AoTI-CB'){try{const spaces={ 'Wan2.2-AoTI':process.env.WAN22_AOTI_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','Wan2.2-AoTI-R3GM':process.env.WAN22_AOTI_R3GM_SPACE_URL||'https://r3gm-wan2-2-fp8da-aoti-preview.hf.space','Wan2.2-AoTI-CB':process.env.WAN22_AOTI_CB_SPACE_URL||'https://cbensimon-wan2-2-fp8da-aoti-preview2.hf.space'};const clip=await generateFreeWan22AotiVideoClip(prompt,dir,{...options,durationSeconds:Math.max(3,Number(options.durationSeconds)||3),spaceOverride:spaces[provider]});const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{success:true});completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds)); commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{quota:classifyVideoProviderError(err)==='quota'});errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));continue;}} if(provider==='LTX-2.3-ZeroGPU'){try{const clip=await generateFreeLtx23ZeroGpuVideoClip(prompt,dir,{...options,durationSeconds:Math.max(3,Number(options.durationSeconds)||3)});const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{success:true});completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds)); commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
@@ -3674,44 +3683,57 @@ function buildVideoCapacityAllocation(durationSeconds,routeMatrix){
     r.durationOk&&r.minOk&&r.resolutionOk&&r.referencePlanned&&
     !['not_configured','not_integrated','insufficient_quota','unsupported','resolution_not_supported'].includes(r.reason)
   );
-  const known=usable.map(r=>({...r,videoSeconds:routeCapacityToVideoSeconds(r)})).filter(r=>r.videoSeconds>0);
-  // Unknown capacity can participate only through an explicit percentage weight.
-  // This lets providers such as Pollinations be used without pretending to know
-  // their remaining balance.
+  const known=usable.map(r=>({...r,videoSeconds:routeCapacityToVideoSeconds(r)}).filter(x=>x.videoSeconds>0));
   const weighted=usable.map(r=>{
     const env='AUTOTUBE_'+String(r.provider).toUpperCase().replace(/[^A-Z0-9]+/g,'_')+'_WEIGHT_PERCENT';
     const weight=Math.max(0,Number(process.env[env]||0)||0);
     return {...r,weight};
   }).filter(r=>r.weight>0);
-  const knownWeightSum=known.reduce((n,r)=>n+r.videoSeconds,0);
-  const explicitWeightSum=weighted.reduce((n,r)=>n+r.weight,0);
-  const rows=[];
-  if(knownWeightSum>0){
-    let remainingDuration=duration;
-    for(const r of known.sort((a,b)=>b.videoSeconds-a.videoSeconds)){
-      const share=r.videoSeconds/knownWeightSum;
-      const allocated=Math.min(r.videoSeconds,remainingDuration*(knownWeightSum>=duration?share:1));
-      rows.push({provider:r.provider,share:duration?allocated/duration:0,allocatedSeconds:allocated,remainingSeconds:allocated,capacitySeconds:r.videoSeconds,capacityStatus:r.capacityStatus,unit:r.unit});
-      remainingDuration=Math.max(0,remainingDuration-allocated);
-    }
-    if(remainingDuration>0)console.log('[VideoCapacity] known capacity below final duration; remaining production will wait for capacity or use newly available routes:',remainingDuration.toFixed(2)+'s');
-  }
-  // Add explicitly weighted unknown routes after known-capacity routes only if no
-  // measured capacity exists, preventing double-counting the same duration pool.
-  if(!rows.length&&explicitWeightSum>0){
-    for(const r of weighted){
-      const share=r.weight/explicitWeightSum;
-      rows.push({provider:r.provider,share,allocatedSeconds:duration*share,remainingSeconds:duration*share,capacitySeconds:null,capacityStatus:r.capacityStatus,unit:r.unit});
+  const rows=known.sort((a,b)=>waterfallRank(a.provider)-waterfallRank(b.provider)).map(r=>({
+    provider:r.provider,
+    share:0,
+    allocatedSeconds:r.videoSeconds,
+    remainingSeconds:r.videoSeconds,
+    capacitySeconds:r.videoSeconds,
+    capacityStatus:r.capacityStatus,
+    unit:r.unit
+  }));
+  if(!rows.length&&weighted.length){
+    const totalWeight=weighted.reduce((n,r)=>n+r.weight,0);
+    for(const r of weighted.sort((a,b)=>waterfallRank(a.provider)-waterfallRank(b.provider))){
+      const allocated=duration*(r.weight/totalWeight);
+      rows.push({provider:r.provider,share:allocated/duration,allocatedSeconds:allocated,remainingSeconds:allocated,capacitySeconds:null,capacityStatus:r.capacityStatus,unit:r.unit});
     }
   }
-  return {
-    durationSeconds:duration,
-    mode:rows.length?'capacity_weighted':'no_capacity_plan',
-    rows,
-    createdAt:Date.now(),
-    consumedSeconds:0
-  };
+  const totalKnown=rows.reduce((n,r)=>n+r.allocatedSeconds,0);
+  console.log('[VideoCapacity] waterfall plan:',JSON.stringify(rows.map(r=>({provider:r.provider,capacitySeconds:Number(r.allocatedSeconds.toFixed(2)),status:r.capacityStatus}))));
+  if(totalKnown<duration)console.log('[VideoCapacity] known capacity below final duration; remaining production waits for newly available capacity:',(duration-totalKnown).toFixed(2)+'s');
+  return{durationSeconds:duration,mode:rows.length?'waterfall':'no_capacity_plan',rows,createdAt:Date.now(),consumedSeconds:0};
 }
+function allocationProviderOrder(baseOrder,requestedSeconds){
+  const request=Math.max(0.5,Number(requestedSeconds)||1);
+  const ranked=[...baseOrder].sort((a,b)=>waterfallRank(a)-waterfallRank(b));
+  if(!activeVideoAllocation?.rows?.length)return ranked;
+  const rank=new Map(activeVideoAllocation.rows.map(r=>[r.provider,r]));
+  const eligible=[];
+  const unknown=[];
+  for(const provider of ranked){
+    const row=rank.get(provider);
+    if(!row){unknown.push(provider);continue;}
+    if(Number(row.remainingSeconds)>=request)eligible.push(provider);
+  }
+  return [...eligible,...unknown];
+}
+function commitVideoAllocation(provider,actualSeconds){
+  if(!activeVideoAllocation?.rows?.length)return;
+  const row=activeVideoAllocation.rows.find(r=>r.provider===provider);
+  if(!row)return;
+  const used=Math.max(0,Number(actualSeconds)||0);
+  row.remainingSeconds=Math.max(0,row.remainingSeconds-used);
+  activeVideoAllocation.consumedSeconds+=used;
+  console.log('[VideoCapacity] consumed:',provider,used.toFixed(2)+'s','remaining allocation=',row.remainingSeconds.toFixed(2)+'s','snapshot=',JSON.stringify(getVideoCapacityAllocationSnapshot()));
+}
+
 function activateVideoCapacityAllocation(durationSeconds,routeMatrix){
   activeVideoAllocation=buildVideoCapacityAllocation(durationSeconds,routeMatrix);
   console.log('[VideoCapacity] allocation initialized:',JSON.stringify({
@@ -3757,6 +3779,37 @@ function requiredVideoResourceSeconds(){
   const perSceneSeconds=duration/sceneCount;
   return {durationSeconds:duration,sceneCount,perSceneSeconds,videoSeconds:duration*margin};
 }
+async function probePollinationsAccount(){
+  const key=String(process.env.POLLINATIONS_API_KEY||'').trim();
+  if(!key)return{status:'not_configured',balance:null,videoCostPerSecond:null,videoSeconds:null};
+  try{
+    const balanceResponse=await fetch('https://gen.pollinations.ai/account/balance',{headers:{Authorization:'Bearer '+key,Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+    if(!balanceResponse.ok){
+      return{status:balanceResponse.status===403?'permission_denied':'unavailable',balance:null,videoCostPerSecond:null,videoSeconds:null};
+    }
+    const balanceBody=await balanceResponse.json().catch(()=>null);
+    const balance=Number(balanceBody?.balance??balanceBody?.pollen??balanceBody?.remaining??balanceBody?.amount);
+    let videoCostPerSecond=Number(process.env.AUTOTUBE_POLLINATIONS_POLLEN_PER_SECOND||0)||0;
+    try{
+      const modelsResponse=await fetch('https://gen.pollinations.ai/video/models',{headers:{Authorization:'Bearer '+key,Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+      if(modelsResponse.ok){
+        const body=await modelsResponse.json().catch(()=>null);
+        const list=Array.isArray(body?.data)?body.data:(Array.isArray(body)?body:[]);
+        const wanted=String(process.env.POLLINATIONS_VIDEO_MODEL||'wan-fast').trim();
+        const model=list.find(x=>String(x?.id||x?.name||'').trim()===wanted)||list.find(x=>/wan-fast/i.test(String(x?.id||x?.name||'')))||list[0];
+        const candidates=[model?.pricePerSecond,model?.price_per_second,model?.costPerSecond,model?.cost_per_second,model?.pricing?.video?.perSecond,model?.pricing?.video?.per_second,model?.pricing?.perSecond,model?.pricing?.per_second];
+        const discoveredCost=candidates.map(Number).find(x=>Number.isFinite(x)&&x>0);
+        if(discoveredCost)videoCostPerSecond=discoveredCost;
+      }
+    }catch{}
+    const videoSeconds=Number.isFinite(balance)&&balance>=0&&videoCostPerSecond>0?balance/videoCostPerSecond:null;
+    return{status:Number.isFinite(balance)?'available':'unknown',balance:Number.isFinite(balance)?balance:null,videoCostPerSecond:videoCostPerSecond>0?videoCostPerSecond:null,videoSeconds};
+  }catch(err){return{status:'unavailable',balance:null,videoCostPerSecond:null,videoSeconds:null,error:String(err?.message||err).slice(0,240)};}
+}
+
+const VIDEO_WATERFALL_PRIORITY=['Pollinations','FAL','MagicHour','HF-Inference','Replicate-Wan','Replicate','Free.ai','Pixazo-Free','Agnes-Free','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','LTX-2.3-ZeroGPU','Wan2.2-I2V','Wan2.1-VACE','Wan2.2-Rahul-T2V','Wan2.2-ZeroGPU','OpenKing-Wan2.2','LTX-2.5','Wan2.1','LTX-0.9.8'];
+function waterfallRank(provider){const i=VIDEO_WATERFALL_PRIORITY.indexOf(String(provider));return i<0?9999:i;}
+
 function buildAutonomousRouteMatrix({need,externalCapacity}){
   const referencePlanned=true;
   const desiredResolution=String(process.env.AUTOTUBE_RESOURCE_PREFLIGHT_RESOLUTION||'480p').trim().toLowerCase();
@@ -3785,6 +3838,12 @@ function buildAutonomousRouteMatrix({need,externalCapacity}){
       capacityStatus=externalCapacity?.magic?.status==='available'&&Number.isFinite(capacity)?'live':'unknown';
       const creditsPerSecond=Math.max(1,Number(process.env.AUTOTUBE_MAGIC_HOUR_CREDITS_PER_SECOND||24)||24);
       resourceRequired=requiredTotal*creditsPerSecond;
+      resourceOk=Number.isFinite(capacity)&&capacity>=resourceRequired;
+    }else if(String(route.provider)==='Pollinations'){
+      capacity=Number(externalCapacity?.pollinations?.videoSeconds);
+      unit='seconds';
+      capacityStatus=externalCapacity?.pollinations?.status==='available'&&Number.isFinite(capacity)?'live':'unknown';
+      resourceRequired=requiredTotal;
       resourceOk=Number.isFinite(capacity)&&capacity>=resourceRequired;
     }else{
       resourceOk=false;
@@ -3836,7 +3895,7 @@ function buildAutonomousRouteMatrix({need,externalCapacity}){
 }
 async function evaluateAutonomousResourceGate(){
   const need=requiredVideoResourceSeconds();
-  const externalCapacity={magic:await probeMagicHourAccount()};
+  const externalCapacity={magic:await probeMagicHourAccount(),pollinations:await probePollinationsAccount()};
   const routePlan=buildAutonomousRouteMatrix({need,externalCapacity});
   const candidates=resourceProviderCandidates(need.videoSeconds,externalCapacity,routePlan.routes);
   const renderAvailable=Boolean(ffmpegPath);
