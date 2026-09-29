@@ -280,6 +280,7 @@ git diff --check
 echo "RECOVERY_STAGE: diff-check-ok"
 changed="$(git diff --name-only)"
 count="$(printf "%s\n" "$changed" | sed "/^$/d" | wc -l)"
+echo "RECOVERY_STAGE: changed-files count=$count files=[$(printf "%s" "$changed" | tr "\n" " ")]"
 [ "$count" -le 2 ] || { git reset --hard HEAD; exit 0; }
 if printf "%s\n" "$changed" | grep -Eq "(^|/)\.github/|(^|/)\.env|(^|/)package-lock\.json$"; then git reset --hard HEAD; exit 0; fi
 git config user.name "AutoTube Render Repair Bot"
