@@ -705,14 +705,25 @@ if [ -s render-actions.txt ]; then
         ;;
       RENDER_SERVICE_PATCH\ *)
         json="${line#RENDER_SERVICE_PATCH }"
-        if ! printf '%s' "$json" | jq -e 'type=="object"' >/dev/null; then
-          echo "Unsafe Render service patch rejected: invalid JSON."; git reset --hard HEAD; exit 0
-        fi
-        if printf '%s' "$json" | jq -e 'keys | map(select(. != "serviceDetails")) | length > 0' >/dev/null; then
-          echo "Unsafe Render service patch rejected: top-level fields are not allowlisted."; git reset --hard HEAD; exit 0
-        fi
-        if printf '%s' "$json" | jq -e 'has("serviceDetails") and ((.serviceDetails|type) != "object" or ((.serviceDetails|keys) - ["buildCommand","startCommand","healthCheckPath"] | length > 0))' >/dev/null; then
-          echo "Unsafe Render service patch rejected: serviceDetails fields are not allowlisted."; git reset --hard HEAD; exit 0
+        if ! JSON="$json" python3 - <<'PY'
+import json, os, sys
+try:
+    data=json.loads(os.environ["JSON"])
+    if not isinstance(data,dict):
+        raise ValueError("patch must be an object")
+    if set(data)-{"serviceDetails"}:
+        raise ValueError("top-level field not allowlisted")
+    if "serviceDetails" in data:
+        details=data["serviceDetails"]
+        if not isinstance(details,dict) or set(details)-{"buildCommand","startCommand","healthCheckPath"}:
+            raise ValueError("serviceDetails field not allowlisted")
+except Exception as exc:
+    print("Unsafe Render service patch rejected:",str(exc))
+    sys.exit(1)
+PY
+        then
+          git reset --hard HEAD
+          exit 0
         fi
         curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID" --data "$json" >/dev/null
         ;;
