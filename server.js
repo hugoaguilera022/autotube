@@ -1588,7 +1588,7 @@ async function buildWan22AotiInputs(app,space,{frame,prompt,negative,duration,gu
     else if(key.includes('negativeprompt'))value=negative;
     else if(key==='prompt'||key.includes('textprompt'))value=String(prompt||'').trim();
     else if(key.includes('duration'))value=duration;
-    else if(key==='steps'||key.includes('numinferencessteps'))value=steps;
+    else if(key==='steps'||key.includes('numinferencessteps')||key==='inferencesteps'||key.includes('inferencessteps'))value=steps;
     else if(key.includes('guidancescale2')||key.includes('guidance2'))value=guidance2;
     else if(key.includes('guidancescale'))value=guidance1;
     else if(key==='seed')value=seedValue;
