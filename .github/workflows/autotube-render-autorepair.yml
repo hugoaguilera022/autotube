@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
+  # A workflow-file change itself must produce a fresh run so newly-created
+  # repository secrets can be verified immediately, without depending on a
+  # manual rerun of an old execution.
+  push:
+    paths:
+      - '.github/workflows/autotube-render-autorepair.yml'
 
 concurrency:
   group: autotube-render-autorepair
