@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/autotube-recovery-contract.sh"
 
 [ -n "${RENDER_API_KEY:-}" ] || { echo "RENDER_API_KEY unavailable; cannot inspect Render."; exit 0; }
-[ -n "${GEMINI_API_KEY:-}" ] || { echo "GEMINI_API_KEY unavailable; cannot repair safely."; exit 0; }
+# Gemini is no longer a hard prerequisite: HF_ZERO_GPU has a deterministic
+# provider-switch recovery path and Gemini remains a secondary repair generator.
 
 deploys="$(curl --fail-with-body -sS -H "Accept: application/json" -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=5")"
 latest="$(echo "$deploys" | jq '.[0].deploy // .[0]')"
@@ -125,8 +126,26 @@ if [ -z "${RENDER_LOG:-}" ]; then
   export RENDER_LOG="$(jq -r '.logs[]?.message // empty' render-logs.json 2>/dev/null | tail -n 2500)"
 fi
 export DEPLOY_ID="$deploy_id" COMMIT="$commit"
+
+DETERMINISTIC_PATCH_READY="false"
+if [ "$recovery_resource" = "HF_ZERO_GPU" ]; then
+  echo "RECOVERY ENGINE: attempting deterministic HF_ZERO_GPU provider switch before Gemini."
+  if [ -n "${POLLINATIONS_API_KEY:-}" ]; then
+    if bash scripts/autotube-hf-zerogpu-recovery.sh render-repair.patch; then
+      if grep -q '^diff --git ' render-repair.patch; then
+        DETERMINISTIC_PATCH_READY="true"
+        echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU patch generated successfully."
+      fi
+    else
+      echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU route unavailable; falling back to bounded Gemini repair."
+    fi
+  else
+    echo "RECOVERY ENGINE: POLLINATIONS_API_KEY unavailable; deterministic HF_ZERO_GPU route cannot be activated."
+  fi
+fi
 [ -n "$RENDER_LOG" ] || export RENDER_LOG="Render incident $deploy_id status=$status and no diagnostic log was returned."
 
+if [ "$DETERMINISTIC_PATCH_READY" != "true" ]; then
 python3 - <<'PY'
 import json, os, urllib.error, urllib.request, subprocess
 prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Treat shared ZeroGPU Spaces as ONE resource, not independent providers. If the current resource is exhausted, switch resource class instead of adding more Spaces from the same resource. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. If the current resource is unavailable and no independent free route is technically available from the repository/runtime context, return NO_SAFE_PATCH instead of inventing an API or weakening validation. Repair provider adapters, fallback selection, checkpoint/retry state, FFmpeg/render logic, YouTube acquisition, networking, memory, or deployment configuration when logs identify those as the root cause. Never merely retry the same failing operation. Resource=%s Class=%s Strategy=%s Attempt=%s/%s Incident=%s Commit=%s Logs=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("MAX_RECOVERY_ATTEMPTS","12"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""))
@@ -205,6 +224,8 @@ else:
     open("render-repair.patch","w").write("NO_SAFE_PATCH\\n")
     print("Recovery Engine could not obtain a valid repair from any configured model.")
 PY
+fi
+
 if grep -qx "NO_SAFE_PATCH" render-repair.patch; then gh issue create --repo "$REPOSITORY" --title "AutoTube Render deploy needs manual repair: $deploy_id" --body "Render deploy $deploy_id failed and no safe patch was produced."; exit 0; fi
 
 python3 - <<'PY'
