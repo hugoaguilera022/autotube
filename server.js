@@ -2118,7 +2118,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     if(!reserveVideoAllocation(provider,requestedResourceSeconds))continue;
     const pst=providerState(provider);
     if(pst.status==='blocked'||Date.now()<Number(pst.cooldownUntil||0)){releaseVideoAllocation(provider,'cooldown_or_blocked');errors.push(provider+': cooldown/blocked until '+new Date(Number(pst.cooldownUntil||0)).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'status=',pst.status,'cooldownUntil=',pst.cooldownUntil);continue;}
-    if(HF_ZEROGPU_PROVIDERS.has(String(provider||''))&&zeroGpuQuotaActive()){releaseVideoAllocation(provider,'zerogpu_cooldown');errors.push(provider+': shared ZeroGPU quota cooldown active until '+new Date(getSharedZeroGpuCooldownUntil()).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'reason=shared ZeroGPU quota');continue;}
+    if(HF_ZEROGPU_PROVIDERS.has(String(provider||''))&&zeroGpuQuotaActive()){releaseVideoAllocation(provider,'zerogpu_cooldown');capacityExhausted=true;errors.push(provider+': shared ZeroGPU quota cooldown active until '+new Date(getSharedZeroGpuCooldownUntil()).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'reason=shared ZeroGPU quota');continue;}
     if(provider==='Replicate-Wan'){
       try{const clip=await replicateVideo(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){releaseVideoAllocation(provider,'generation_or_validation_failure'); const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);if(kind==='resource_exhausted'||kind==='quota')capacityExhausted=true;if(kind==='transient_provider'||kind==='transient_network')temporaryCapacityWait=true;errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,700));continue;}
@@ -2198,11 +2198,15 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     if(!providerAvailable(provider)){
       releaseVideoAllocation(provider,'provider_unavailable');
       const st=providerState(provider);
+      if(st.status==='cooldown'||Date.now()<Number(st.cooldownUntil||0))temporaryCapacityWait=true;
+      errors.push(provider+': provider unavailable/cooldown until '+new Date(Number(st.cooldownUntil||0)).toISOString());
       console.warn('[VideoProviderManager] provider skipped before generation:',provider,'status=',st.status,'cooldownUntil=',st.cooldownUntil,'lastError=',String(st.lastError||'').slice(0,300));
       continue;
     }
     if(!reserveHfZeroGpuAttempt(provider,requestedResourceSeconds)){
       releaseVideoAllocation(provider,'zerogpu_resource_broker_rejected');
+      capacityExhausted=true;
+      errors.push(provider+': shared ZeroGPU resource broker rejected capacity reservation');
       console.warn('[VideoProviderManager] provider skipped by ZeroGPU resource broker:',provider,'requestedSeconds=',requestedResourceSeconds,'snapshot=',JSON.stringify(hfZeroGpuResourceSnapshot()));
       continue;
     }
