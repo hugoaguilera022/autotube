@@ -2843,6 +2843,15 @@ async function executeFullPipelineTest(reference,testId=null){
     if(durationSeconds<referenceDurationSeconds)console.log('AutoTube autonomous proof-duration cap:',durationSeconds,'s of reference',referenceDurationSeconds,'s; set AUTOTUBE_AUTONOMOUS_MAX_DURATION_SECONDS to the desired final duration after the smoke test passes.');
     else console.log('AutoTube autonomous cycle is running at full reference duration:',durationSeconds,'s');
 
+    // Build the per-run allocation from the same live route matrix used by the resource gate.
+    // The final duration is divided according to measured remaining capacity.
+    try{
+      const allocationGate=await evaluateAutonomousResourceGate();
+      activateVideoCapacityAllocation(durationSeconds,allocationGate.available?.routeMatrix||[]);
+    }catch(allocationErr){
+      console.warn('[VideoCapacity] allocation preflight unavailable; using normal provider fallback order:',String(allocationErr?.message||allocationErr));
+      activeVideoAllocation=null;
+    }
     outline={title:referenceTitle,outline:[],visualIdeas:[]};
 
     if(!resumedStages.includes('production-plan')||!plan) await run('production-plan',async()=>{
