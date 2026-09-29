@@ -1886,7 +1886,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   ];
   const recoveryOrder=[
     // Free ZeroGPU routes are attempted before quota-bound third-party APIs.
-    ...(legacyEnabled&&referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','Wan2.2-I2V','Wan2.1-VACE']:[]),
+    ...(legacyEnabled&&referenceFramePath?['Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','LTX-2.3-ZeroGPU','Wan2.2-I2V','Wan2.1-VACE']:[]),
     ...(process.env.FREE_AI_API_KEY?['Free.ai']:[]),
     ...(process.env.PIXAZO_API_KEY?['Pixazo-Free']:[]),
     ...(process.env.AGNES_API_KEY?['Agnes-Free']:[]),
