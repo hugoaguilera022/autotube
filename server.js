@@ -1547,8 +1547,63 @@ function providerAvailable(name){const permanentlyUnstable={ 'Wan2.2-I2V':String
 async function probeVideoProvider(name){const st=providerState(name);if(st.status==='blocked')return{ok:false,status:st.status,error:st.lastError};if(st.status==='healthy'&&Date.now()-st.lastSuccessAt<VIDEO_PROVIDER_PROBE_MS)return{ok:true,status:'healthy',cached:true};const raw={ 'Wan2.2-I2V':process.env.WAN22_I2V_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','LTX-2.5':process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space','Wan2.1':process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space','Wan2.1-VACE':process.env.WAN_VACE_SPACE_URL||'https://jdpadmin-wan2-1-vace-diffusers-demo.hf.space','LTX-0.9.8':process.env.LTX_SPACE||'https://lightricks-ltx-video-distilled.hf.space','Wan2.2-ZeroGPU':process.env.WAN22_ZEROGPU_SPACE_URL||'https://alexcheng0072-wan27-free-video-generator.hf.space','OpenKing-Wan2.2':process.env.OPENKING_WAN22_SPACE_URL||'https://openking-wan2-video-generation.hf.space', 'LTX-2.3-ZeroGPU':process.env.LTX23_ZEROGPU_SPACE||'https://shaundeoOo-ltx-2-3-fast.hf.space','Wan2.2-AoTI':process.env.WAN22_AOTI_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','Wan2.2-AoTI-R3GM':process.env.WAN22_AOTI_R3GM_SPACE_URL||'https://r3gm-wan2-2-fp8da-aoti-preview.hf.space','Wan2.2-AoTI-CB':process.env.WAN22_AOTI_CB_SPACE_URL||'https://cbensimon-wan2-2-fp8da-aoti-preview2.hf.space','Wan2.2-Rahul-AOT':process.env.WAN22_RAHUL_AOT_SPACE_URL||'https://rahul7star-wan22-aot.hf.space','Wan2.2-Rahul-T2V':process.env.WAN22_RAHUL_T2V_SPACE_URL||'https://rahul7star-wan2-2-t2v-a14b.hf.space'}[name];if(!raw)return{ok:false,status:'unconfigured'};const url=String(raw).startsWith('http')?String(raw).replace(/\/$/,'')+'/gradio_api/info':'https://'+String(raw).replace(/\/$/,'')+'.hf.space/gradio_api/info';try{const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(4000)});if(!response.ok)throw new Error('HTTP '+response.status);noteProviderSuccess(name);return{ok:true,status:'healthy'};}catch(err){noteProviderFailure(name,err);return{ok:false,status:providerState(name).status,error:String(err.message||err)};}}
 async function getVideoProviderHealth(){const result={};for(const name of ['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-Rahul-AOT','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-T2V','Wan2.2-ZeroGPU','OpenKing-Wan2.2','Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
 
+async function validateHfTokenForAutotube(token){
+  const value=String(token||'').trim();
+  if(!value)return{ok:false,reason:'missing'};
+  const now=Date.now();
+  if(global.__autotubeHfTokenCheck&&now-global.__autotubeHfTokenCheck.at<10*60*1000)return global.__autotubeHfTokenCheck;
+  try{
+    const response=await fetch('https://huggingface.co/api/whoami-v2',{
+      headers:{Authorization:'Bearer '+value,Accept:'application/json'},
+      signal:AbortSignal.timeout(15000)
+    });
+    const result={ok:response.ok,status:response.status,at:now};
+    global.__autotubeHfTokenCheck=result;
+    console.log('[Wan2.2-AoTI] HF token validation=',JSON.stringify({ok:result.ok,status:result.status}));
+    return result;
+  }catch(err){
+    const result={ok:false,status:0,at:now,reason:String(err?.message||err).slice(0,180)};
+    global.__autotubeHfTokenCheck=result;
+    console.warn('[Wan2.2-AoTI] HF token validation error=',result.reason);
+    return result;
+  }
+}
+function normalizeGradioSpaceUrl(space){
+  const raw=String(space||'').trim();
+  if(/^https?:\\/\\//i.test(raw))return raw.replace(/\\/$/,'');
+  return 'https://'+raw.replace(/\\/$/,'')+'.hf.space';
+}
+async function buildWan22AotiInputs(app,space,{frame,prompt,negative,duration,guidance1,guidance2,steps,seedValue}){
+  const api=await app.view_api();
+  const endpoint=api?.named_endpoints?.['/generate_video'];
+  const params=Array.isArray(endpoint?.parameters)?endpoint.parameters:[];
+  if(!params.length)throw new Error('AoTI /generate_video no expone parámetros en view_api().');
+  const lower=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'');
+  const values={};
+  for(const p of params){
+    const key=lower(p.label||p.name||'');
+    let value;
+    if(key.includes('inputimage')||key==='image'||key.includes('firstimage'))value=frame;
+    else if(key.includes('lastimage')||key.includes('secondimage'))value=frame;
+    else if(key.includes('negativeprompt'))value=negative;
+    else if(key==='prompt'||key.includes('textprompt'))value=String(prompt||'').trim();
+    else if(key.includes('duration'))value=duration;
+    else if(key==='steps'||key.includes('numinferencessteps'))value=steps;
+    else if(key.includes('guidancescale2')||key.includes('guidance2'))value=guidance2;
+    else if(key.includes('guidancescale'))value=guidance1;
+    else if(key==='seed')value=seedValue;
+    else if(key.includes('randomizeseed'))value=true;
+    else if(key.includes('quality'))value=5;
+    else if(p.default!==undefined)value=p.default;
+    else if(p.optional)value=null;
+    else throw new Error('AoTI parámetro no reconocido: '+String(p.label||p.name||'unknown'));
+    values[p.name||p.label]=value;
+  }
+  console.log('[Wan2.2-AoTI] resolved /generate_video schema',JSON.stringify(params.map(p=>({name:p.name,label:p.label,component:p.component}))).slice(0,3000));
+  return params.map(p=>values[p.name||p.label]);
+}
 async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
-  const {Client,handle_file}=require('@gradio/client');
+  const {Client}=require('@gradio/client');
   const space=String(options.spaceOverride||process.env.WAN22_AOTI_SPACE_URL||'zerogpu-aoti/wan2-2-fp8da-aoti-faster').trim();
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
   const firstFramePath=String(options.firstFramePath||'').trim();
@@ -1557,10 +1612,13 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
   const steps=Math.max(4,Math.min(8,Number(options.steps)||4));
   const seed=Math.floor(Math.random()*2147483647);
   console.log('[Wan2.2-AoTI] starting Gradio client generation',JSON.stringify({space,duration,steps,hasFrame:true}));
+  if(!token)throw new Error('Wan2.2 AoTI requiere HF_TOKEN/HUGGINGFACE_TOKEN.');
+  const tokenCheck=await validateHfTokenForAutotube(token);
+  if(!tokenCheck.ok)throw new Error('HF token rejected before ZeroGPU call: HTTP '+String(tokenCheck.status||0));
   let result;
   try{
-    const clientOptions=token?{token}:undefined;
-    console.log('[Wan2.2-AoTI] HF authentication configured=',Boolean(token));
+    const clientOptions={token,hf_token:token};
+    console.log('[Wan2.2-AoTI] HF authentication configured=',true);
     const app=await Client.connect(space,clientOptions);
     const frameBytes=await fs.readFile(firstFramePath);
     const ext=String(path.extname(firstFramePath)||'').toLowerCase();
@@ -1570,20 +1628,7 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
     const guidance1=Number(options.guidanceScale||1);
     const guidance2=Number(options.guidanceScale2||1);
     const seedValue=seed;
-    let inputs;
-    if(/r3gm-wan2-2-fp8da-aoti-preview\.hf\.space/i.test(space)){
-      // Current R3GM Space: input_image, prompt, negative_prompt, duration_seconds,
-      // guidance_scale, guidance_scale_2, steps, seed, randomize_seed.
-      inputs=[frame,frame,String(prompt||'').trim(),steps,negative,duration,guidance1,guidance2,seedValue,true,5];
-    }else if(/cbensimon-wan2-2-fp8da-aoti-preview2\.hf\.space/i.test(space)){
-      // Current CB preview2: input_image, last_image, prompt, steps, negative_prompt,
-      // duration_seconds, guidance_scale, guidance_scale_2, seed, randomize_seed, quality.
-      inputs=[frame,frame,String(prompt||'').trim(),steps,negative,duration,guidance1,guidance2,seedValue,true,5];
-    }else{
-      // Official AoTI Space: input_image, prompt, steps, negative_prompt, duration_seconds,
-      // guidance_scale, guidance_scale_2, seed, randomize_seed.
-      inputs=[frame,String(prompt||'').trim(),steps,negative,duration,guidance1,guidance2,seedValue,true];
-    }
+    const inputs=await buildWan22AotiInputs(app,space,{frame,prompt,negative,duration,guidance1,guidance2,steps,seedValue});
     result=await app.predict('/generate_video',inputs);
   }catch(err){
     const detail=err?.message||String(err);
@@ -1594,7 +1639,7 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
   const output=data[0];
   if(!output)throw new Error('Wan2.2 AoTI terminó sin salida: '+JSON.stringify(data).slice(0,2500));
   console.log('[Wan2.2-AoTI] generation returned output',JSON.stringify({type:typeof output,keys:typeof output==='object'?Object.keys(output):[]}).slice(0,1200));
-  const outputPath=await downloadGradioOutput(output,'https://'+space+'.hf.space',token,dir,'wan22-aoti-generated');
+  const outputPath=await downloadGradioOutput(output,normalizeGradioSpaceUrl(space),token,dir,'wan22-aoti-generated');
   const validation=await validateGeneratedVideoClip(outputPath);
   if(!validation.ok)throw new Error('Wan2.2 AoTI produjo un clip inválido.');
   const stat=await fs.stat(outputPath);
