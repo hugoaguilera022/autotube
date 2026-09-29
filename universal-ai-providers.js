@@ -38,14 +38,17 @@ function firstUrl(value, kind) {
 
 async function falSubscribe(model, input, timeoutMs=300000) {
   const fal = configureFal();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const ms=Math.max(1000,Number(timeoutMs)||300000);
+  // The SDK call itself is not abortable through the controller above; enforce the
+  // timeout at the Promise boundary so a stalled provider cannot block the cascade.
+  let timer;
   try {
-    // fal's SDK manages the queue lifecycle; timeout is enforced by AutoTube.
-    const result = await fal.subscribe(model, { input, logs: false });
-    return result?.data ?? result;
+    return await Promise.race([
+      fal.subscribe(model, { input, logs: false }).then(result=>result?.data ?? result),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('FAL_PROVIDER_TIMEOUT: '+model+' superó '+ms+' ms')),ms);})
+    ]);
   } finally {
-    clearTimeout(timer);
+    if(timer)clearTimeout(timer);
   }
 }
 
