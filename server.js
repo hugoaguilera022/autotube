@@ -2038,6 +2038,8 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   const order=allocationProviderOrder(rotatedOrder,Math.max(3,Number(options.durationSeconds)||3));
   console.log('[VideoCapacity] scene '+(sceneIndex+1)+' requested='+Math.max(3,Number(options.durationSeconds)||3)+'s order='+order.join(' > '));
   const errors=[];
+  let capacityExhausted=false;
+  let temporaryCapacityWait=false;
   
   let budgetReservation=0;
   let budgetCommitted=false;
@@ -2059,7 +2061,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     if(HF_ZEROGPU_PROVIDERS.has(String(provider||''))&&zeroGpuQuotaActive()){errors.push(provider+': shared ZeroGPU quota cooldown active until '+new Date(getSharedZeroGpuCooldownUntil()).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'reason=shared ZeroGPU quota');continue;}
     if(provider==='Replicate-Wan'){
       try{const clip=await replicateVideo(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
-        return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,700));continue;}
+        return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);if(kind==='resource_exhausted'||kind==='quota')capacityExhausted=true;if(kind==='transient_provider'||kind==='transient_network')temporaryCapacityWait=true;errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,700));continue;}
     }
     if(provider==='FAL'){
       try{
@@ -2068,7 +2070,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
         completeFreeAiClip(budgetReservation); budgetCommitted=true;
         commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};
-      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,700));continue;}
+      }catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);if(kind==='resource_exhausted'||kind==='quota')capacityExhausted=true;if(kind==='transient_provider'||kind==='transient_network')temporaryCapacityWait=true;errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,700));continue;}
     }
     if(provider==='Free.ai'){
       try{
@@ -2174,6 +2176,13 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,500));
       if(kind==='user_blocking')continue;
     }
+  }
+  // If every attempted route is exhausted/quota-blocked, this is not a permanent
+  // generation failure. The autonomous supervisor must enter WAITING_FOR_CAPACITY
+  // and re-probe later. Transient provider/network outages are also retryable.
+  if(capacityExhausted || temporaryCapacityWait){
+    if(!budgetCommitted)releaseFreeAiBudget(budgetReservation);
+    throw new Error('CAPACITY_WAIT_REQUIRED: todas las rutas compatibles agotaron capacidad o están temporalmente no disponibles; reconsultar proveedores y continuar desde el último checkpoint. '+errors.join(' | '));
   }
   if(requireRealAiVideoGeneration()) throw new Error('REAL_AI_VIDEO_REQUIRED: todos los proveedores de vídeo IA disponibles fallaron; el fallback determinista está bloqueado en el E2E estricto.');
   // Last-resort free path: if an AI video provider is unavailable, use a validated
@@ -3684,27 +3693,19 @@ function buildVideoCapacityAllocation(durationSeconds,routeMatrix){
     !['not_configured','not_integrated','insufficient_quota','unsupported','resolution_not_supported'].includes(r.reason)
   );
   const known=usable.map(r=>({...r,videoSeconds:routeCapacityToVideoSeconds(r)})).filter(x=>x.videoSeconds>0);
-  const weighted=usable.map(r=>{
-    const env='AUTOTUBE_'+String(r.provider).toUpperCase().replace(/[^A-Z0-9]+/g,'_')+'_WEIGHT_PERCENT';
-    const weight=Math.max(0,Number(process.env[env]||0)||0);
-    return {...r,weight};
-  }).filter(r=>r.weight>0);
+  // TRUE WATERFALL: never invent capacity from percentage weights.
+  // A route receives its full measured capacity. The next route is considered
+  // only after the current route no longer has enough capacity for the next clip.
   const rows=known.sort((a,b)=>waterfallRank(a.provider)-waterfallRank(b.provider)).map(r=>({
     provider:r.provider,
     share:0,
     allocatedSeconds:r.videoSeconds,
     remainingSeconds:r.videoSeconds,
+    reservedSeconds:0,
     capacitySeconds:r.videoSeconds,
     capacityStatus:r.capacityStatus,
     unit:r.unit
   }));
-  if(!rows.length&&weighted.length){
-    const totalWeight=weighted.reduce((n,r)=>n+r.weight,0);
-    for(const r of weighted.sort((a,b)=>waterfallRank(a.provider)-waterfallRank(b.provider))){
-      const allocated=duration*(r.weight/totalWeight);
-      rows.push({provider:r.provider,share:allocated/duration,allocatedSeconds:allocated,remainingSeconds:allocated,capacitySeconds:null,capacityStatus:r.capacityStatus,unit:r.unit});
-    }
-  }
   const totalKnown=rows.reduce((n,r)=>n+r.allocatedSeconds,0);
   console.log('[VideoCapacity] waterfall plan:',JSON.stringify(rows.map(r=>({provider:r.provider,capacitySeconds:Number(r.allocatedSeconds.toFixed(2)),status:r.capacityStatus}))));
   if(totalKnown<duration)console.log('[VideoCapacity] known capacity below final duration; remaining production waits for newly available capacity:',(duration-totalKnown).toFixed(2)+'s');
