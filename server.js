@@ -3780,8 +3780,30 @@ async function runAutonomousCycle(){
   const resourceGate=await evaluateAutonomousResourceGate();
   if(!resourceGate.ok){
     if(resourceGate.probeRequired){
-      console.warn('[ResourceGate] full cycle held: controlled 5s quota probe required before production.');
-      autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
+      if(autonomousProbe.status!=='RUNNING'){
+        const candidate=autonomousProbeEligibleProvider(resourceGate);
+        if(candidate){
+          console.warn('[ResourceGate] full cycle held: launching controlled 5s probe for',candidate.provider);
+          const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-auto-probe-'));
+          autonomousProbe.status='RUNNING'; autonomousProbe.provider=candidate.provider; autonomousProbe.startedAt=Date.now(); autonomousProbe.attempts++;
+          try{
+            const probeResult=await generateBestFreeVideoClip(
+              'Original cinematic relaxing motion with subtle natural movement and stable composition.',
+              dir,{durationSeconds:5,sceneIndex:0,generateAudio:false,resourceProbe:true}
+            );
+            const validation=await validateGeneratedVideoClip(probeResult.outputPath);
+            const ok=Boolean(validation?.ok&&Number(validation.durationSeconds)>=4.5&&Number(validation.durationSeconds)<=6.5&&Number(validation.sizeBytes||validation.size||0)>1000);
+            autonomousProbe.lastResult={ok,provider:probeResult.providerKey||candidate.provider,durationSeconds:Number(validation.durationSeconds)||0,sizeBytes:Number(validation.sizeBytes||validation.size||0),validation};
+            autonomousProbe.status=ok?'CONFIRMED_FOR_RUN':'FAILED';
+            console.warn('[ResourceGate] 5s probe result:',JSON.stringify(autonomousProbe.lastResult));
+          }catch(err){
+            autonomousProbe.status='FAILED';
+            autonomousProbe.lastResult={ok:false,provider:candidate.provider,error:String(err?.message||err)};
+            console.error('[ResourceGate] 5s probe failed:',candidate.provider,String(err?.message||err));
+          }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
+        }
+      }
+      autonomousLastStart=Date.now()+Math.max(15000,autonomousIntervalMs);
     }else{
       autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
     }
