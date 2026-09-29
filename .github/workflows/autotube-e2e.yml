@@ -2,6 +2,9 @@ name: AutoTube real YouTube to MP4 E2E
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 concurrency:
   group: autotube-e2e-canonical
