@@ -168,7 +168,7 @@ for model in preferred_models+discovered_models:
 if not models:
     models=list(preferred_models)
 print("Recovery Gemini candidates:", " ".join(models))
-for model in "${models[@]}"; do
+for model in models:
     url="https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent"
     req=urllib.request.Request(url,data=json.dumps(body).encode(),headers={"content-type":"application/json","x-goog-api-key":os.environ["GEMINI_API_KEY"]},method="POST")
     try:
