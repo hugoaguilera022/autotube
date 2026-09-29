@@ -1703,6 +1703,18 @@ async function generateFreeWan22RahulT2vVideoClip(prompt,dir,options={}) {
   return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.2 Rahul T2V',model:'Wan2.2 T2V A14B',durationSeconds:validation.durationSeconds,status:'complete'};
 }
 
+let agnesStatusNextAt=0;
+let agnesStatusLock=Promise.resolve();
+async function waitForAgnesStatusSlot(minIntervalMs=15000){
+  let release;
+  const previous=agnesStatusLock;
+  agnesStatusLock=new Promise(resolve=>{release=resolve});
+  await previous;
+  const wait=Math.max(0,agnesStatusNextAt-Date.now());
+  if(wait>0)await new Promise(r=>setTimeout(r,wait));
+  agnesStatusNextAt=Date.now()+Math.max(10000,minIntervalMs);
+  release();
+}
 async function generateAgnesFreeVideoClip(prompt,dir,options={}) {
   const key=String(process.env.AGNES_API_KEY||'').trim();
   if(!key)throw new Error('AGNES_API_KEY no configurada.');
@@ -1715,11 +1727,31 @@ async function generateAgnesFreeVideoClip(prompt,dir,options={}) {
   const raw=await create.text(); let data=null; try{data=raw?JSON.parse(raw):null}catch{}
   if(!create.ok)throw new Error('Agnes video '+create.status+': '+raw.slice(0,900));
   const taskId=String(data?.video_id||data?.id||data?.task_id||'').trim(); if(!taskId)throw new Error('Agnes no devolvió video_id.');
-  const deadline=Date.now()+Math.min(300000,Math.max(120000,Number(process.env.AUTOTUBE_AGNES_TIMEOUT_MS)||240000));
+  const deadline=Date.now()+Math.min(360000,Math.max(180000,Number(process.env.AUTOTUBE_AGNES_TIMEOUT_MS)||300000));
+  let pollDelay=15000;
   while(Date.now()<deadline){
-    const r=await fetch('https://apihub.agnes-ai.com/agnesapi?video_id='+encodeURIComponent(taskId),{headers:{Authorization:'Bearer '+key,Accept:'application/json'},signal:AbortSignal.timeout(30000)});
+    await waitForAgnesStatusSlot(Math.max(15000,pollDelay));
+    let r;
+    try{
+      r=await fetch('https://apihub.agnes-ai.com/agnesapi?video_id='+encodeURIComponent(taskId),{headers:{Authorization:'Bearer '+key,Accept:'application/json'},signal:AbortSignal.timeout(30000)});
+    }catch(err){
+      console.warn('Agnes status query transient error:',String(err?.message||err).slice(0,240));
+      await new Promise(res=>setTimeout(res,Math.min(45000,pollDelay)));
+      pollDelay=Math.min(45000,pollDelay+5000);
+      continue;
+    }
     const body=await r.text(); let state=null; try{state=body?JSON.parse(body):null}catch{}
-    if(!r.ok)throw new Error('Agnes status '+r.status+': '+body.slice(0,500));
+    if(!r.ok){
+      if(r.status===429){
+        const retryHeader=Number(r.headers.get('retry-after')||0);
+        const retryMs=Math.max(30000,Number.isFinite(retryHeader)&&retryHeader>0?retryHeader*1000:0);
+        console.warn('Agnes status rate limited; backing off ms='+retryMs);
+        await new Promise(res=>setTimeout(res,retryMs));
+        pollDelay=Math.min(60000,Math.max(pollDelay,retryMs));
+        continue;
+      }
+      throw new Error('Agnes status '+r.status+': '+body.slice(0,500));
+    }
     const status=String(state?.status||state?.data?.status||'').toLowerCase();
     const videoUrl=String(state?.video_url||state?.data?.video_url||'').trim();
     if(status==='failed'||status==='error')throw new Error('Agnes generación falló: '+String(state?.error||state?.message||'unknown').slice(0,500));
@@ -1730,11 +1762,10 @@ async function generateAgnesFreeVideoClip(prompt,dir,options={}) {
       const validation=await validateGeneratedVideoClip(outputPath); if(!validation.ok)throw new Error('Agnes vídeo no pasó QA.');
       return{outputPath,bytes:bytes.length,provider:'Agnes AI Free',model:String(process.env.AGNES_VIDEO_MODEL||'agnes-video-v2.0'),durationSeconds:validation.durationSeconds,status:'complete'};
     }
-    await new Promise(r=>setTimeout(r,4000));
+    pollDelay=Math.min(45000,pollDelay+5000);
   }
   throw new Error('Agnes generación agotó el timeout.');
 }
-
 async function generateBestFreeVideoClip(prompt,dir,options={}) {
   const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);
   const referenceFramePath=String(options.firstFramePath||'').trim();
