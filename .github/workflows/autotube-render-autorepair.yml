@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
+  workflow_run:
+    workflows:
+      - AutoTube real YouTube to MP4 E2E
+    types:
+      - completed
   # A workflow-file change itself must produce a fresh run so newly-created
   # repository secrets can be verified immediately, and repair-code changes are verified immediately, without depending on a
   # manual rerun of an old execution.
