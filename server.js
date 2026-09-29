@@ -2009,6 +2009,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   // noteProviderFailure/providerAvailable, so the next attempt moves to a genuinely
   // different capability route instead of repeating the same dead lane.
   const legacyEnabled=String(process.env.AUTOTUBE_LEGACY_VIDEO_FALLBACKS||'0').trim()==='1';
+  const magicConfigured=configured('MAGIC_HOUR_API_KEY');
   const marketOrder=[
     ...(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_VIDEO??'1').trim()!=='0'?['FAL']:[]),
     ...(replicateConfigured()&&String(process.env.AUTOTUBE_ENABLE_REPLICATE_VIDEO??'1').trim()!=='0'?['Replicate-Wan']:[]),
