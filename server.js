@@ -1884,9 +1884,13 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     ...(allowPaid&&process.env.POLLINATIONS_API_KEY&&String(process.env.AUTOTUBE_ALLOW_POLLINATIONS_PAID||'0').trim()==='1'?['Pollinations']:[]),
     ...(allowHfInferenceRecovery?['HF-Inference']:[])
   ];
+  const aotiEnabled=String(process.env.AUTOTUBE_ENABLE_WAN22_AOTI??'1').trim()!=='0';
   const recoveryOrder=[
-    // Free ZeroGPU routes are attempted before quota-bound third-party APIs.
-    ...(legacyEnabled&&referenceFramePath?['Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','LTX-2.3-ZeroGPU','Wan2.2-I2V','Wan2.1-VACE']:[]),
+    // Explicitly enabled AoTI is independent of the legacy-fallback master switch.
+    // The frame requirement is kept because the AoTI endpoint is image-to-video.
+    ...(aotiEnabled&&referenceFramePath?['Wan2.2-AoTI']:[]),
+    // Remaining legacy ZeroGPU routes stay behind the legacy switch.
+    ...(legacyEnabled&&referenceFramePath?['Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','LTX-2.3-ZeroGPU','Wan2.2-I2V','Wan2.1-VACE']:[]),
     ...(process.env.FREE_AI_API_KEY?['Free.ai']:[]),
     ...(process.env.PIXAZO_API_KEY?['Pixazo-Free']:[]),
     ...(process.env.AGNES_API_KEY?['Agnes-Free']:[]),
@@ -1961,8 +1965,15 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
         return{...clip,providerKey:provider,generationType:'ai-video',validation};
       }catch(err){noteProviderFailure(provider,err);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{quota:classifyVideoProviderError(err)==='quota'});errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
     }
-    if(!providerAvailable(provider))continue;
-    if(!reserveHfZeroGpuAttempt(provider,requestedResourceSeconds))continue;
+    if(!providerAvailable(provider)){
+      const st=providerState(provider);
+      console.warn('[VideoProviderManager] provider skipped before generation:',provider,'status=',st.status,'cooldownUntil=',st.cooldownUntil,'lastError=',String(st.lastError||'').slice(0,300));
+      continue;
+    }
+    if(!reserveHfZeroGpuAttempt(provider,requestedResourceSeconds)){
+      console.warn('[VideoProviderManager] provider skipped by ZeroGPU resource broker:',provider,'requestedSeconds=',requestedResourceSeconds,'snapshot=',JSON.stringify(hfZeroGpuResourceSnapshot()));
+      continue;
+    }
     // ZeroGPU public Spaces can expose a transient/incorrect /info health response.
     // Do not spend a generation window on a redundant probe; the real Gradio request
     // plus output validation is the authoritative health check for these free routes.
