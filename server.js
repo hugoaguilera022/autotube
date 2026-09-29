@@ -2034,7 +2034,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   ];
   const baseOrder=[...new Set([...marketOrder,...recoveryOrder])];
   const rotation=baseOrder.length?sceneIndex%baseOrder.length:0;
-  const rotatedOrder=[...baseOrder.slice(rotation),...baseOrder.slice(0,rotation)];\n  const order=allocationProviderOrder(rotatedOrder,requestedResourceSeconds);
+  const rotatedOrder=[...baseOrder.slice(rotation),...baseOrder.slice(0,rotation)];
   const errors=[];
   
   let budgetReservation=0;
