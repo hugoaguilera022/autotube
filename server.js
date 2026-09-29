@@ -1702,6 +1702,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   let budgetCommitted=false;
   try{ budgetReservation=reserveFreeAiBudget(options.durationSeconds||3); }
   catch(err){ throw err; }
+  const requestedResourceSeconds=Math.max(3,Number(options.durationSeconds)||3);
   for(const provider of [...new Set(order)]){
     if(provider==='HF-Inference'){
       try{
@@ -1725,7 +1726,6 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       }catch(err){noteProviderFailure(provider,err);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{quota:classifyVideoProviderError(err)==='quota'});errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
     }
     if(!providerAvailable(provider))continue;
-    const requestedResourceSeconds=Math.max(3,Number(options.durationSeconds)||3);
     if(!reserveHfZeroGpuAttempt(provider,requestedResourceSeconds))continue;
     // ZeroGPU public Spaces can expose a transient/incorrect /info health response.
     // Do not spend a generation window on a redundant probe; the real Gradio request
