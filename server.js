@@ -3441,9 +3441,140 @@ const autonomousEnabled=String(process.env.AUTOTUBE_AUTONOMOUS_ENABLED||'1').tri
 const autonomousIntervalMs=Math.max(60000,Number(process.env.AUTOTUBE_AUTONOMOUS_INTERVAL_MS||60000));
 let autonomousStopped=false;
 let autonomousLastStart=0;
+
+/* AUTOTUBE_RESOURCE_PREFLIGHT_V1
+ * Hard invariant for autonomous production:
+ * a new production cycle is forbidden unless a complete resource plan exists.
+ * Unknown external quota is NOT treated as available capacity.
+ */
+const autonomousResourceGate={
+  status:'NOT_CHECKED',
+  reason:'',
+  checkedAt:0,
+  route:null,
+  required:null,
+  available:null,
+  reservation:null
+};
+let autonomousResourceReservation=null;
+
+function resourceNumberEnv(name, fallback=0){
+  const n=Number(process.env[name]);
+  return Number.isFinite(n)&&n>=0?n:fallback;
+}
+function resourceMargin(){
+  return Math.max(1,Number(process.env.AUTOTUBE_RESOURCE_PREFLIGHT_MARGIN||1.2)||1.2);
+}
+function resourceTargetDurationSeconds(){
+  const configured=Math.max(5,Number(process.env.AUTOTUBE_AUTONOMOUS_MAX_DURATION_SECONDS||20)||20);
+  return Math.min(3600,configured);
+}
+function resourceProviderCandidates(requiredVideoSeconds){
+  const candidates=[];
+  const add=(provider,configured,capacity,unit='seconds')=>{
+    if(!configured)return;
+    const st=typeof videoProviderState!=='undefined'?videoProviderState.get(provider):null;
+    if(st&&(st.status==='blocked'||Number(st.cooldownUntil||0)>Date.now()))return;
+    candidates.push({provider,capacity:Number(capacity)||0,unit});
+  };
+  // These values are deliberately explicit. A credential alone is never treated
+  // as proof of remaining quota. The value can be populated by a future provider
+  // account/usage adapter without changing the gate.
+  add('HF-Inference',
+    Boolean(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN),
+    resourceNumberEnv('AUTOTUBE_HF_INFERENCE_REMAINING_SECONDS'));
+  add('FAL',
+    Boolean(process.env.FAL_KEY||process.env.FAL_API_KEY),
+    resourceNumberEnv('AUTOTUBE_FAL_REMAINING_VIDEO_SECONDS'));
+  add('Replicate',
+    Boolean(process.env.REPLICATE_API_TOKEN),
+    resourceNumberEnv('AUTOTUBE_REPLICATE_REMAINING_VIDEO_SECONDS'));
+  add('MagicHour',
+    Boolean(process.env.MAGIC_HOUR_API_KEY),
+    resourceNumberEnv('AUTOTUBE_MAGIC_HOUR_REMAINING_CREDITS'),'credits');
+  // ZeroGPU capacity is measured in requested GPU seconds. If a shared quota
+  // cooldown is active it is categorically unavailable.
+  if(typeof zeroGpuQuotaActive==='function'&&!zeroGpuQuotaActive()){
+    const zeroGpuSeconds=resourceNumberEnv('AUTOTUBE_ZEROGPU_REMAINING_SECONDS');
+    if(zeroGpuSeconds>0)candidates.push({provider:'ZeroGPU',capacity:zeroGpuSeconds,unit:'seconds'});
+  }
+  return candidates;
+}
+function requiredVideoResourceSeconds(){
+  const duration=resourceTargetDurationSeconds();
+  const sceneCount=Math.max(1,Math.min(60,Number(process.env.AUTOTUBE_RESOURCE_PREFLIGHT_SCENES||Math.ceil(duration/5))||1));
+  // Reserve more than the final duration because AI providers may require
+  // retries/chunking and the pipeline must finish every scene.
+  return {durationSeconds:duration,sceneCount,videoSeconds:duration*resourceMargin()};
+}
+function evaluateAutonomousResourceGate(){
+  const need=requiredVideoResourceSeconds();
+  const required={videoSeconds:need.videoSeconds,sceneCount:need.sceneCount};
+  const candidates=resourceProviderCandidates(need.videoSeconds);
+  const viable=candidates.filter(c=>{
+    if(c.unit==='credits'){
+      // Magic Hour text-to-video currently documents 24 credits/sec at its
+      // base rate; keep the multiplier configurable for model-specific pricing.
+      const creditsPerSecond=Math.max(1,Number(process.env.AUTOTUBE_MAGIC_HOUR_CREDITS_PER_SECOND||24)||24);
+      return c.capacity >= need.videoSeconds*creditsPerSecond;
+    }
+    return c.capacity >= need.videoSeconds;
+  });
+  const renderAvailable=Boolean(ffmpegPath);
+  const geminiConfigured=Boolean(String(process.env.GEMINI_API_KEY||'').trim());
+  const musicCanRun=Boolean(
+    String(process.env.GEMINI_API_KEY||'').trim() ||
+    String(process.env.FAL_KEY||process.env.FAL_API_KEY||'').trim()
+  );
+  const complete=Boolean(viable.length&&renderAvailable&&geminiConfigured&&musicCanRun);
+  autonomousResourceGate.checkedAt=Date.now();
+  autonomousResourceGate.required=required;
+  autonomousResourceGate.available={
+    videoCandidates:candidates,
+    viableRoutes:viable.map(x=>x.provider),
+    render:renderAvailable,
+    gemini:geminiConfigured,
+    music:musicCanRun
+  };
+  autonomousResourceGate.route=viable[0]||null;
+  autonomousResourceGate.status=complete?'READY':'WAITING_FOR_RESOURCES';
+  autonomousResourceGate.reason=complete
+    ?'Existe una ruta con capacidad explícitamente confirmada para completar el ciclo.'
+    :'No existe una ruta completa con cuota/capacidad explícitamente confirmada para TODO el ciclo. El ciclo NO se inicia.';
+  if(!complete)console.warn('[ResourceGate] autonomous cycle NOT STARTED:',autonomousResourceGate.reason,JSON.stringify(autonomousResourceGate.available));
+  else console.log('[ResourceGate] autonomous cycle preflight READY:',JSON.stringify({required,route:autonomousResourceGate.route?.provider}));
+  return {ok:complete,...autonomousResourceGate};
+}
+function reserveAutonomousResources(gate){
+  if(!gate?.ok||autonomousResourceReservation)return false;
+  autonomousResourceReservation={
+    id:'res_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex'),
+    createdAt:Date.now(),
+    route:gate.route,
+    required:gate.required
+  };
+  autonomousResourceGate.reservation=autonomousResourceReservation;
+  return true;
+}
+function releaseAutonomousResources(){
+  autonomousResourceReservation=null;
+  autonomousResourceGate.reservation=null;
+}
+app.get('/api/autonomous/resource-gate',async(_req,res)=>{
+  const gate=evaluateAutonomousResourceGate();
+  return res.status(gate.ok?200:503).json(gate);
+});
+
 async function runAutonomousCycle(){
   if(!autonomousEnabled||autonomousStopped||!autonomousReference)return;
   const now=Date.now();
+  // HARD GATE: no autonomous production cycle may be created without a
+  // complete, explicitly quota-confirmed resource route for the whole job.
+  const resourceGate=evaluateAutonomousResourceGate();
+  if(!resourceGate.ok||!reserveAutonomousResources(resourceGate)){
+    autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
+    return;
+  }
   const running=[...fullPipelineTestJobs.values()].find(j=>j.status==='running');
   if(running){
     const age=now-Number(running.startedAt||now);
@@ -3516,6 +3647,8 @@ async function runAutonomousCycle(){
       autonomousLastStart=Date.now()+Math.min(15*60*1000,Math.max(60*1000,autonomousIntervalMs*2));
       console.error('AutoTube autonomous cycle error; classified as retryable and scheduled with backoff:',id,message);
     }
+  }finally{
+    releaseAutonomousResources();
   }
 }
 setTimeout(()=>{runAutonomousCycle().catch(err=>console.error('AutoTube autonomous launch error:',err));},20000);
