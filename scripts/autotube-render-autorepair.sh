@@ -157,7 +157,11 @@ try:
             if name.startswith("models/"):
                 name=name[7:]
             if name:
-                discovered_models.append(name)
+                lname=name.lower()
+                excluded=("image" in lname or "tts" in lname or "live" in lname or "transcribe" in lname or "computer-use" in lname or "robotics" in lname or "lyria" in lname or "deep-research" in lname)
+                coding_capable=("flash" in lname or "pro" in lname or lname.endswith("-latest") or "antigravity" in lname)
+                if coding_capable and not excluded:
+                    discovered_models.append(name)
 except Exception as exc:
     print("Gemini model discovery unavailable:",str(exc)[:300])
 
@@ -201,6 +205,10 @@ for model in models:
         break
     except urllib.error.HTTPError as ex:
         print("Recovery model failed:",model,ex.code)
+        continue
+    except Exception as ex:
+        print("Recovery model failed:",model,type(ex).__name__,str(ex)[:300])
+        continue
 else:
     open("render-repair.patch","w").write("NO_SAFE_PATCH\\n")
     print("Recovery Engine could not obtain a valid repair from any configured model.")
