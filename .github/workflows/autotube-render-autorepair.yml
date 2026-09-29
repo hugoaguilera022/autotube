@@ -53,6 +53,15 @@ jobs:
               gh issue create --repo "$REPOSITORY" --title "AutoTube recovery credentials blocked" --body "The autonomous Render recovery workflow is running, but these required GitHub Actions secrets are missing:$missing. The recovery engine cannot inspect Render or generate a safe code repair until they are configured. No application fallback is being weakened."
             exit 0
           fi
+      - name: Syntax-check recovery shell
+        run: |
+          set -euo pipefail
+          bash -n scripts/autotube-render-autorepair.sh
+          bash -n scripts/autotube-recovery-contract.sh
+          bash -n scripts/autotube-recovery-strategy-engine.sh
+          bash -n scripts/autotube-recovery-preflight.sh
+          bash -n scripts/autotube-hf-inference-recovery.sh
+
       - name: Validate Recovery Engine contract
         run: |
           set -euo pipefail
