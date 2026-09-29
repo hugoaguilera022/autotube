@@ -147,16 +147,29 @@ for model in models:
     try:
         with urllib.request.urlopen(req,timeout=90) as response: data=json.load(response)
         out=data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        if out.startswith("```"): out=out.split("\n",1)[1].rsplit("\n",1)[0]
-        open("render-repair.patch","w").write(out+"\n")
-        check=subprocess.run(["git","apply","--check","render-repair.patch"],capture_output=True,text=True)
-        if check.returncode != 0:
+        if out.startswith("```"):
+            lines=out.splitlines()
+            if lines and lines[0].strip().startswith("```"): lines=lines[1:]
+            if lines and lines[-1].strip()=="```": lines=lines[:-1]
+            out="\n".join(lines).strip()
+        # Gemini may wrap a valid diff in prose or append commentary.
+        if "diff --git " in out: out=out[out.index("diff --git "):]
+        lines=out.splitlines()
+        valid=False
+        for end in range(len(lines),0,-1):
+            candidate="\n".join(lines[:end]).strip()+"\n"
+            open("render-repair.patch","w").write(candidate)
+            check=subprocess.run(["git","apply","--check","render-repair.patch"],capture_output=True,text=True)
+            if check.returncode == 0:
+                valid=True
+                print("Recovery model succeeded with valid patch:",model)
+                break
+        if not valid:
             print("Recovery model produced invalid patch:",model)
             print(check.stderr[-2000:])
             continue
-        print("Recovery model succeeded with valid patch:",model)
         break
-    except urllib.error.HTTPError as ex:
+   except urllib.error.HTTPError as ex:
         print("Recovery model failed:",model,ex.code)
 else:
     raise RuntimeError("All Gemini recovery models failed")
