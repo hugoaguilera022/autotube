@@ -57,12 +57,12 @@ add_candidate() {
 
 case "$class|$resource" in
   QUOTA\|HF_ZERO_GPU)
-    add_candidate HF_INFERENCE_RESOURCE_SWITCH 95 "free inference resource with independent quota"
-    add_candidate INDEPENDENT_FREE_PROVIDER 88 "independent free video resource"
-    add_candidate CASCADE_REPAIR 82 "repair provider cascade so another available resource can execute"
-    add_candidate CODE_REPAIR 75 "repair code if runtime evidence identifies a local defect"
-    add_candidate HF_ZERO_GPU_PROVIDER_SWITCH 20 "same resource route; only useful if quota evidence changes"
-    add_candidate PROVIDER_ADAPTER_REPAIR 65 "repair provider integration contract"
+    add_candidate HF_ZERO_GPU_PROVIDER_SWITCH 95 "deterministic independent-provider switch already implemented"
+    add_candidate CODE_REPAIR 88 "repair local cascade if runtime evidence identifies a code defect"
+    add_candidate INDEPENDENT_FREE_PROVIDER 84 "investigate and implement an independent free provider"
+    add_candidate PROVIDER_ADAPTER_REPAIR 78 "repair provider integration contract"
+    add_candidate CASCADE_REPAIR 76 "repair provider cascade so the next viable resource can execute"
+    add_candidate HF_INFERENCE_RESOURCE_SWITCH 70 "use free HF inference when runtime credentials and endpoint are verified"
     ;;
   PAYMENT_OR_ACCESS\|EXTERNAL_API_ACCESS)
     add_candidate INDEPENDENT_FREE_PROVIDER 95 "avoid unavailable paid resource"
