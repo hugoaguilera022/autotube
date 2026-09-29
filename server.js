@@ -1574,11 +1574,11 @@ async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
     if(/r3gm-wan2-2-fp8da-aoti-preview\.hf\.space/i.test(space)){
       // Current R3GM Space: input_image, prompt, negative_prompt, duration_seconds,
       // guidance_scale, guidance_scale_2, steps, seed, randomize_seed.
-      inputs=[frame,String(prompt||'').trim(),negative,duration,guidance1,guidance2,steps,seedValue,true];
+      inputs=[frame,frame,String(prompt||'').trim(),steps,negative,duration,guidance1,guidance2,seedValue,true];
     }else if(/cbensimon-wan2-2-fp8da-aoti-preview2\.hf\.space/i.test(space)){
       // Current CB preview2: input_image, last_image, prompt, steps, negative_prompt,
       // duration_seconds, guidance_scale, guidance_scale_2, seed, randomize_seed, quality.
-      inputs=[frame,null,String(prompt||'').trim(),steps,negative,duration,guidance1,guidance2,seedValue,true,5];
+      inputs=[frame,frame,String(prompt||'').trim(),steps,negative,duration,guidance1,guidance2,seedValue,true,5];
     }else{
       // Official AoTI Space: input_image, prompt, steps, negative_prompt, duration_seconds,
       // guidance_scale, guidance_scale_2, seed, randomize_seed.
