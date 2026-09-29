@@ -96,6 +96,12 @@ elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "502|503|504|Service Unavailabl
 elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "out of memory|heap out of memory|exit 137"; then recovery_resource="RENDER_MEMORY"; recovery_class="INFRASTRUCTURE"; recovery_strategy="RESOURCE_OPTIMIZATION"
 elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "ECONNRESET|ETIMEDOUT|network"; then recovery_resource="NETWORK"; recovery_class="NETWORK"; recovery_strategy="NETWORK_RESILIENCE"
 elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "node --check|SyntaxError|ReferenceError|Cannot find module"; then recovery_resource="APPLICATION_CODE"; recovery_class="CODE"; recovery_strategy="CODE_REPAIR"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "ffmpeg|invalid data found|moov atom not found|Output file is empty|corrupt|codec|mux"; then recovery_resource="FFMPEG_OUTPUT"; recovery_class="OUTPUT_INVALID"; recovery_strategy="RENDER_PIPELINE_REPAIR"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "yt-dlp|Sign in to confirm|video.*unavailable|player response"; then recovery_resource="YOUTUBE_SOURCE"; recovery_class="SOURCE_ACCESS"; recovery_strategy="YOUTUBE_ACQUISITION_SWITCH"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "ENOTFOUND|EAI_AGAIN|CERT|TLS|socket hang up|ECONNREFUSED"; then recovery_resource="NETWORK"; recovery_class="NETWORK"; recovery_strategy="NETWORK_RESILIENCE"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "permission denied|EACCES|ENOENT|no such file or directory"; then recovery_resource="FILESYSTEM"; recovery_class="FILESYSTEM"; recovery_strategy="FILESYSTEM_REPAIR"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "invalid json|JSON.parse|Unexpected token|response.*schema"; then recovery_resource="INTEGRATION_CONTRACT"; recovery_class="INVALID_RESPONSE"; recovery_strategy="ADAPTER_REPAIR"
+elif printf "%s\n" "${RENDER_LOG:-}" | grep -Eiq "health.?check|did not bind|listen.*failed"; then recovery_resource="RENDER_RUNTIME"; recovery_class="DEPLOY"; recovery_strategy="SERVICE_START_REPAIR"
 fi
 
 incident_key="${runtime_incident}:$runtime_fingerprint:$deploy_id"
@@ -105,7 +111,8 @@ repair_attempt=$((repair_attempt + 1))
 
 # Hard circuit breaker: after three distinct repair attempts for the same incident,
 # do not keep producing blind patches. Surface the incident as a real blocker.
-if [ "$repair_attempt" -gt 3 ]; then
+MAX_RECOVERY_ATTEMPTS="${AUTOTUBE_MAX_RECOVERY_ATTEMPTS:-12}"
+if [ "$repair_attempt" -gt "$MAX_RECOVERY_ATTEMPTS" ]; then
   gh issue create --repo "$REPOSITORY" --title "AutoTube recovery exhausted: $recovery_resource" --body "Incident $incident_key exhausted 3 autonomous repair attempts. Resource=$recovery_resource class=$recovery_class strategy=$recovery_strategy. Last deploy=$deploy_id fingerprint=$runtime_fingerprint." || true
   echo "RECOVERY_TERMINAL: maximum autonomous repair attempts reached."
   exit 0
@@ -113,10 +120,6 @@ fi
 
 if git log --all --oneline --grep="render-deploy:$deploy_id" -n 1 | grep -q .; then
   echo "This Render incident was already repaired/processed."
-  exit 0
-fi
-if [ "$runtime_incident" = "true" ] && git log --all --oneline --grep="runtime-fingerprint:$runtime_fingerprint" -n 1 | grep -q .; then
-  echo "This runtime failure fingerprint was already repaired/processed."
   exit 0
 fi
 
@@ -138,7 +141,7 @@ export DEPLOY_ID="$deploy_id" COMMIT="$commit"
 
 python3 - <<'PY'
 import json, os, urllib.error, urllib.request, subprocess
-prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. Resource=%s Class=%s Strategy=%s Attempt=%s/3 Incident=%s Commit=%s Logs=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""))
+prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Treat shared ZeroGPU Spaces as ONE resource, not independent providers. If the current resource is exhausted, switch resource class instead of adding more Spaces from the same resource. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. Repair provider adapters, fallback selection, checkpoint/retry state, FFmpeg/render logic, YouTube acquisition, networking, memory, or deployment configuration when logs identify those as the root cause. Never merely retry the same failing operation. Resource=%s Class=%s Strategy=%s Attempt=%s/3 Incident=%s Commit=%s Logs=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""))
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
 models=["gemini-3.1-flash-lite","gemini-3.8-flash","gemini-2.5-flash-lite","gemini-2.5-flash"]
 for model in models:
