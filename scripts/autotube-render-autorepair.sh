@@ -98,7 +98,7 @@ export DEPLOY_ID="$deploy_id" COMMIT="$commit"
 [ -n "$RENDER_LOG" ] || export RENDER_LOG="Render incident $deploy_id status=$status and no diagnostic log was returned."
 
 python3 - <<'PY'
-import json, os, urllib.error, urllib.request
+import json, os, urllib.error, urllib.request, subprocess
 prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. Resource=%s Class=%s Strategy=%s Attempt=%s/3 Incident=%s Commit=%s Logs=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""))
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
 models=["gemini-3.1-flash-lite","gemini-3.8-flash","gemini-2.5-flash-lite","gemini-2.5-flash"]
@@ -110,7 +110,12 @@ for model in models:
         out=data["candidates"][0]["content"]["parts"][0]["text"].strip()
         if out.startswith("```"): out=out.split("\n",1)[1].rsplit("\n",1)[0]
         open("render-repair.patch","w").write(out+"\n")
-        print("Recovery model succeeded:",model)
+        check=subprocess.run(["git","apply","--check","render-repair.patch"],capture_output=True,text=True)
+        if check.returncode != 0:
+            print("Recovery model produced invalid patch:",model)
+            print(check.stderr[-2000:])
+            continue
+        print("Recovery model succeeded with valid patch:",model)
         break
     except urllib.error.HTTPError as ex:
         print("Recovery model failed:",model,ex.code)
