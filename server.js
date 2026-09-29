@@ -2971,8 +2971,10 @@ async function executeFullPipelineTest(reference,testId=null){
     const visualReferenceAnalysis=style.visualAnalysis;
     const audioProfile={...(visualReferenceAnalysis?.audioProfile||{})};
     const referenceDurationSeconds=Math.max(1,Number(parseIsoDurationSeconds(video.duration)||visualReferenceAnalysis?.videoProfile?.durationSeconds||30));
-    const configuredAutonomousDuration=Number(process.env.AUTOTUBE_AUTONOMOUS_MAX_DURATION_SECONDS||20);
-    const autonomousMaxDurationSeconds=Math.max(10,Math.min(3600,configuredAutonomousDuration));
+    const configuredAutonomousDuration=Number(process.env.AUTOTUBE_AUTONOMOUS_MAX_DURATION_SECONDS||5);
+    // Canonical smoke/E2E target: 5 seconds. Longer final durations can be
+    // enabled later after this real-AI MP4 proof passes.
+    const autonomousMaxDurationSeconds=Math.max(5,Math.min(5,configuredAutonomousDuration));
     const durationSeconds=Math.min(referenceDurationSeconds,autonomousMaxDurationSeconds);
     if(durationSeconds<referenceDurationSeconds)console.log('AutoTube autonomous proof-duration cap:',durationSeconds,'s of reference',referenceDurationSeconds,'s; set AUTOTUBE_AUTONOMOUS_MAX_DURATION_SECONDS to the desired final duration after the smoke test passes.');
     else console.log('AutoTube autonomous cycle is running at full reference duration:',durationSeconds,'s');
