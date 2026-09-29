@@ -138,6 +138,10 @@ for model in models:
     try:
         with urllib.request.urlopen(req,timeout=90) as response: data=json.load(response)
         out=data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        if out.strip().startswith("NO_SAFE_PATCH"):
+            open("render-repair.patch","w").write("NO_SAFE_PATCH\\n")
+            print("Recovery model reports NO_SAFE_PATCH:",model)
+            break
         if out.startswith("```"):
             lines=out.splitlines()
             if lines and lines[0].strip().startswith("```"): lines=lines[1:]
@@ -163,7 +167,8 @@ for model in models:
     except urllib.error.HTTPError as ex:
         print("Recovery model failed:",model,ex.code)
 else:
-    raise RuntimeError("All Gemini recovery models failed")
+    open("render-repair.patch","w").write("NO_SAFE_PATCH\\n")
+    print("Recovery Engine could not obtain a valid repair from any configured model.")
 PY
 if grep -qx "NO_SAFE_PATCH" render-repair.patch; then gh issue create --repo "$REPOSITORY" --title "AutoTube Render deploy needs manual repair: $deploy_id" --body "Render deploy $deploy_id failed and no safe patch was produced."; exit 0; fi
 
@@ -181,6 +186,11 @@ Path("render-actions.txt").write_text(actions.strip()+"\n")
 PY
 
 if [ -s render-repair.patch ]; then
+  if ! validate_recovery_contract "$(cat render-repair.patch)"; then
+    echo "RECOVERY_PATCH_REJECTED: contract validation failed."
+    gh issue create --repo "$REPOSITORY" --title "AutoTube recovery patch rejected: $recovery_resource" --body "The generated patch failed the Recovery Engine contract before application. Incident=$incident_key resource=$recovery_resource class=$recovery_class strategy=$recovery_strategy." || true
+    exit 0
+  fi
   git apply --check render-repair.patch && git apply render-repair.patch
 fi
 node --check server.js
