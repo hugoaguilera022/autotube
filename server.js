@@ -1991,7 +1991,9 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     ...(allowReplicateRecovery?['Replicate']:[]),
     ...(legacyEnabled?['Wan2.2-Rahul-T2V','Wan2.2-ZeroGPU','OpenKing-Wan2.2','LTX-2.5','Wan2.1','LTX-0.9.8']:[])
   ];
-  const order=[...new Set([...marketOrder,...recoveryOrder])];
+  const baseOrder=[...new Set([...marketOrder,...recoveryOrder])];
+  const rotation=baseOrder.length?sceneIndex%baseOrder.length:0;
+  const order=[...baseOrder.slice(rotation),...baseOrder.slice(0,rotation)];
   const errors=[];
   
   let budgetReservation=0;
@@ -3665,32 +3667,38 @@ async function evaluateAutonomousResourceGate(){
     String(process.env.GEMINI_API_KEY||'').trim() ||
     String(process.env.FAL_KEY||process.env.FAL_API_KEY||'').trim()
   );
-  const confirmed=routePlan.eligible.filter(r=>r.capacityStatus==='explicit'||r.capacityStatus==='live');
-  const probeCandidates=routePlan.routes.filter(r=>r.configured&&r.integrated&&r.realAi&&r.state==='available'&&r.reason==='quota_unknown_probe_required');
-  const complete=Boolean(confirmed[0]&&renderAvailable&&geminiConfigured&&musicCanRun);
+  // Resource policy: do NOT require enough quota for the whole production cycle up front.
+  // Every configured, integrated, real-AI route that is not exhausted/blocked can contribute
+  // whatever capacity it currently permits. Capacity is consumed dynamically per clip.
+  const usableRoutes=routePlan.routes.filter(r=>
+    r.configured&&r.integrated&&r.realAi&&r.state==='available'&&
+    !['insufficient_quota','not_configured','unsupported','resolution_not_supported'].includes(r.reason) &&
+    (r.resourceOk||r.capacityStatus==='unknown'||r.capacityStatus==='live'||r.capacityStatus==='explicit')
+  );
+  const complete=Boolean(usableRoutes.length&&renderAvailable&&geminiConfigured&&musicCanRun);
   autonomousResourceGate.checkedAt=Date.now();
   autonomousResourceGate.required={...need,render:true,gemini:true,music:true};
   autonomousResourceGate.available={
     videoCandidates:candidates.map(c=>({provider:c.provider,capacity:c.capacity,unit:c.unit,capacityStatus:c.capacityStatus})),
     externalCapacity,
     routeMatrix:routePlan.routes,
-    viableRoutes:routePlan.eligible.map(x=>x.provider),
-    selectedRoute:routePlan.selected,
-    probeCandidates:[...probeCandidates].sort((a,b)=>{const p=x=>x.provider==='Pollinations'?0:x.provider==='Agnes-Free'?1:2;return p(a)-p(b)}).map(x=>x.provider),
+    viableRoutes:usableRoutes.map(x=>x.provider),
+    selectedRoute:(routePlan.selected||usableRoutes[0]||null),
+    allocationMode:'dynamic_multi_provider',
+    providersAvailableForImmediateUse:usableRoutes.map(x=>({provider:x.provider,capacity:x.capacity,unit:x.unit,capacityStatus:x.capacityStatus,resourceOk:x.resourceOk})),
     render:renderAvailable,
     gemini:geminiConfigured,
     music:musicCanRun
   };
-  autonomousResourceGate.route=routePlan.selected;
-  autonomousResourceGate.status=complete?'READY':(probeCandidates.length?'PROBE_REQUIRED':'WAITING_FOR_RESOURCES');
+  autonomousResourceGate.route=(routePlan.selected||usableRoutes[0]||null);
+  autonomousResourceGate.status=complete?'READY':'WAITING_FOR_RESOURCES';
   autonomousResourceGate.reason=complete
-    ?'Existe una ruta completa, integrada y con capacidad confirmada para TODO el ciclo.'
-    :(probeCandidates.length
-      ?'No existe una ruta con cuota confirmada. Hay proveedores configurados cuya cuota es desconocida y requieren una prueba real controlada de 5 s antes de iniciar producción.'
-      :'No existe una ruta completa, integrada y con cuota/capacidad confirmada para TODO el ciclo. El ciclo NO se inicia.');
+    ?'Hay al menos una ruta real disponible. El ciclo consume dinámicamente la capacidad permitida de todas las rutas utilizables, sin exigir cuota total por adelantado.'
+    :'No hay ninguna ruta real disponible para producir vídeo. El ciclo NO se inicia.';
   if(!complete)console.warn('[ResourceGate] autonomous cycle NOT STARTED:',autonomousResourceGate.reason,JSON.stringify(autonomousResourceGate.available));
+  else console.log('[ResourceGate] dynamic multi-provider capacity enabled:',usableRoutes.map(x=>x.provider).join(','));
   else console.log('[ResourceGate] autonomous cycle preflight READY:',JSON.stringify({required:autonomousResourceGate.required,route:routePlan.selected?.provider,allViable:routePlan.eligible.map(x=>x.provider)}));
-  return {ok:complete,probeRequired:Boolean(!complete&&probeCandidates.length),...autonomousResourceGate};
+  return {ok:complete,probeRequired:false,...autonomousResourceGate};
 }
 
 function reserveAutonomousResources(gate){
@@ -3779,34 +3787,7 @@ async function runAutonomousCycle(){
   // HARD GATE: only a brand-new production cycle is blocked by missing resources.
   const resourceGate=await evaluateAutonomousResourceGate();
   if(!resourceGate.ok){
-    if(resourceGate.probeRequired){
-      if(autonomousProbe.status!=='RUNNING'){
-        const candidate=autonomousProbeEligibleProvider(resourceGate);
-        if(candidate){
-          console.warn('[ResourceGate] full cycle held: launching controlled 5s probe for',candidate.provider);
-          const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-auto-probe-'));
-          autonomousProbe.status='RUNNING'; autonomousProbe.provider=candidate.provider; autonomousProbe.startedAt=Date.now(); autonomousProbe.attempts++;
-          try{
-            const probeResult=await generateBestFreeVideoClip(
-              'Original cinematic relaxing motion with subtle natural movement and stable composition.',
-              dir,{durationSeconds:5,sceneIndex:0,generateAudio:false,resourceProbe:true}
-            );
-            const validation=await validateGeneratedVideoClip(probeResult.outputPath);
-            const ok=Boolean(validation?.ok&&Number(validation.durationSeconds)>=4.5&&Number(validation.durationSeconds)<=6.5&&Number(validation.sizeBytes||validation.size||0)>1000);
-            autonomousProbe.lastResult={ok,provider:probeResult.providerKey||candidate.provider,durationSeconds:Number(validation.durationSeconds)||0,sizeBytes:Number(validation.sizeBytes||validation.size||0),validation};
-            autonomousProbe.status=ok?'CONFIRMED_FOR_RUN':'FAILED';
-            console.warn('[ResourceGate] 5s probe result:',JSON.stringify(autonomousProbe.lastResult));
-          }catch(err){
-            autonomousProbe.status='FAILED';
-            autonomousProbe.lastResult={ok:false,provider:candidate.provider,error:String(err?.message||err)};
-            console.error('[ResourceGate] 5s probe failed:',candidate.provider,String(err?.message||err));
-          }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
-        }
-      }
-      autonomousLastStart=Date.now()+Math.max(15000,autonomousIntervalMs);
-    }else{
-      autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
-    }
+    autonomousLastStart=Date.now()+Math.max(15000,autonomousIntervalMs);
     return;
   }
   if(!reserveAutonomousResources(resourceGate)){
