@@ -3490,85 +3490,184 @@ function resourceTargetDurationSeconds(){
   const configured=Math.max(5,Number(process.env.AUTOTUBE_AUTONOMOUS_MAX_DURATION_SECONDS||20)||20);
   return Math.min(3600,configured);
 }
-function resourceProviderCandidates(requiredVideoSeconds,externalCapacity={}){
+function autonomousVideoProviderRegistry(){
+  const configured=(...names)=>names.some(name=>Boolean(String(process.env[name]||'').trim()));
+  const legacyEnabled=String(process.env.AUTOTUBE_LEGACY_VIDEO_FALLBACKS||'0').trim()==='1';
+  const aotiEnabled=String(process.env.AUTOTUBE_ENABLE_WAN22_AOTI??'1').trim()!=='0';
+  const hfConfigured=configured('HF_TOKEN','HUGGINGFACE_TOKEN');
+  const falConfiguredNow=configured('FAL_KEY','FAL_API_KEY');
+  const replicateConfiguredNow=configured('REPLICATE_API_TOKEN');
+  const pixazoConfigured=configured('PIXAZO_API_KEY');
+  const freeAiConfigured=configured('FREE_AI_API_KEY');
+  const agnesConfigured=configured('AGNES_API_KEY');
+  const pollinationsConfigured=configured('POLLINATIONS_API_KEY');
+  const magicConfigured=configured('MAGIC_HOUR_API_KEY');
+  const providers=[
+    {provider:'FAL',integrated:true,configured:falConfiguredNow,tasks:['T2V','I2V'],minSeconds:4,maxSeconds:30,resolutions:['480p','720p','1080p'],realAi:true,resourceEnv:'AUTOTUBE_FAL_REMAINING_VIDEO_SECONDS',unit:'seconds'},
+    {provider:'Replicate-Wan',integrated:true,configured:replicateConfiguredNow,tasks:['T2V','I2V'],minSeconds:2,maxSeconds:30,resolutions:['720p'],realAi:true,resourceEnv:'AUTOTUBE_REPLICATE_REMAINING_VIDEO_SECONDS',unit:'seconds'},
+    {provider:'HF-Inference',integrated:true,configured:hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:null,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_HF_INFERENCE_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Pixazo-Free',integrated:true,configured:pixazoConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:10,resolutions:['720p','1080p'],realAi:true,resourceEnv:null,unit:'unknown'},
+    {provider:'Agnes-Free',integrated:true,configured:agnesConfigured,tasks:['T2V'],minSeconds:5,maxSeconds:20,resolutions:['1152x768'],realAi:true,resourceEnv:null,unit:'unknown'},
+    {provider:'Free.ai',integrated:true,configured:freeAiConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:3,resolutions:[],realAi:true,resourceEnv:null,unit:'unknown'},
+    {provider:'Wan2.2-AoTI',integrated:true,configured:aotiEnabled&&hfConfigured,tasks:['I2V'],minSeconds:0.5,maxSeconds:5,resolutions:[],realAi:true,requiresReferenceFrame:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Wan2.2-AoTI-R3GM',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['I2V'],minSeconds:0.5,maxSeconds:5,resolutions:[],realAi:true,requiresReferenceFrame:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Wan2.2-AoTI-CB',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['I2V'],minSeconds:0.5,maxSeconds:5,resolutions:[],realAi:true,requiresReferenceFrame:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Wan2.2-Rahul-AOT',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['I2V'],minSeconds:0.5,maxSeconds:5,resolutions:[],realAi:true,requiresReferenceFrame:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'LTX-2.3-ZeroGPU',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['I2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,requiresReferenceFrame:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Wan2.2-I2V',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['I2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,requiresReferenceFrame:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Wan2.1-VACE',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['I2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,requiresReferenceFrame:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Wan2.2-Rahul-T2V',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Wan2.2-ZeroGPU',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'OpenKing-Wan2.2',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'LTX-2.5',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:20,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Wan2.1',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'LTX-0.9.8',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
+    {provider:'Pollinations',integrated:true,configured:pollinationsConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:null,resolutions:[],realAi:true,resourceEnv:null,unit:'unknown'},
+    {provider:'MagicHour',integrated:false,configured:magicConfigured,tasks:['T2V','I2V'],minSeconds:2,maxSeconds:10,resolutions:['480p','720p','1080p'],realAi:true,resourceEnv:null,unit:'credits',externalQuota:'magic'},
+    {provider:'LTX-Direct',integrated:false,configured:configured('LTX_API_KEY','LTX_API_TOKEN'),tasks:['T2V','I2V'],minSeconds:6,maxSeconds:20,resolutions:['720p','1080p','4K'],realAi:true,resourceEnv:null,unit:'unknown',externalQuota:'ltx'}
+  ];
+  return providers;
+}
+function providerRuntimeState(provider){
+  const st=typeof videoProviderState!=='undefined'?videoProviderState.get(provider):null;
+  if(st?.status==='blocked')return {status:'blocked',cooldownUntil:Number(st.cooldownUntil||0)};
+  if(Number(st?.cooldownUntil||0)>Date.now())return {status:'cooldown',cooldownUntil:Number(st.cooldownUntil||0)};
+  return {status:'available',cooldownUntil:0};
+}
+function resourceProviderCandidates(requiredVideoSeconds,externalCapacity={},routeMatrix=[]){
   const candidates=[];
-  const add=(provider,configured,capacity,unit='seconds')=>{
-    if(!configured)return;
-    const st=typeof videoProviderState!=='undefined'?videoProviderState.get(provider):null;
-    if(st&&(st.status==='blocked'||Number(st.cooldownUntil||0)>Date.now()))return;
-    candidates.push({provider,capacity:Number(capacity)||0,unit});
-  };
-  // These values are deliberately explicit. A credential alone is never treated
-  // as proof of remaining quota. The value can be populated by a future provider
-  // account/usage adapter without changing the gate.
-  add('HF-Inference',
-    Boolean(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN),
-    resourceNumberEnv('AUTOTUBE_HF_INFERENCE_REMAINING_SECONDS'));
-  add('FAL',
-    Boolean(process.env.FAL_KEY||process.env.FAL_API_KEY),
-    resourceNumberEnv('AUTOTUBE_FAL_REMAINING_VIDEO_SECONDS'));
-  add('Replicate',
-    Boolean(process.env.REPLICATE_API_TOKEN),
-    resourceNumberEnv('AUTOTUBE_REPLICATE_REMAINING_VIDEO_SECONDS'));
-  const magicCredits=Number(externalCapacity?.magic?.credits);
-  if(process.env.MAGIC_HOUR_API_KEY&&externalCapacity?.magic?.status==='available'&&Number.isFinite(magicCredits)){
-    add('MagicHour',true,magicCredits,'credits');
-  }
-  // ZeroGPU capacity is measured in requested GPU seconds. If a shared quota
-  // cooldown is active it is categorically unavailable.
-  if(typeof zeroGpuQuotaActive==='function'&&!zeroGpuQuotaActive()){
-    const zeroGpuSeconds=resourceNumberEnv('AUTOTUBE_ZEROGPU_REMAINING_SECONDS');
-    if(zeroGpuSeconds>0)candidates.push({provider:'ZeroGPU',capacity:zeroGpuSeconds,unit:'seconds'});
+  for(const route of routeMatrix){
+    if(!route.configured||!route.integrated||!route.realAi)continue;
+    const state=providerRuntimeState(route.provider);
+    if(state.status!=='available')continue;
+    let capacity=0,unit=route.unit||'unknown',capacityStatus='unknown';
+    if(route.resourceEnv){
+      capacity=resourceNumberEnv(route.resourceEnv);
+      capacityStatus=capacity>0?'explicit':'zero';
+    }else if(route.externalQuota==='magic'){
+      capacity=Number(externalCapacity?.magic?.credits);
+      unit='credits';
+      capacityStatus=externalCapacity?.magic?.status==='available'&&Number.isFinite(capacity)?'live':'unknown';
+    }
+    candidates.push({...route,capacity:Number.isFinite(capacity)?capacity:0,unit,capacityStatus,state});
   }
   return candidates;
 }
 function requiredVideoResourceSeconds(){
   const duration=resourceTargetDurationSeconds();
   const sceneCount=Math.max(1,Math.min(60,Number(process.env.AUTOTUBE_RESOURCE_PREFLIGHT_SCENES||Math.ceil(duration/5))||1));
-  // Reserve more than the final duration because AI providers may require
-  // retries/chunking and the pipeline must finish every scene.
-  return {durationSeconds:duration,sceneCount,videoSeconds:duration*resourceMargin()};
+  const margin=resourceMargin();
+  const perSceneSeconds=duration/sceneCount;
+  return {durationSeconds:duration,sceneCount,perSceneSeconds,videoSeconds:duration*margin};
+}
+function buildAutonomousRouteMatrix({need,externalCapacity}){
+  const referencePlanned=true;
+  const desiredResolution=String(process.env.AUTOTUBE_RESOURCE_PREFLIGHT_RESOLUTION||'480p').trim().toLowerCase();
+  const routes=autonomousVideoProviderRegistry().map(route=>{
+    const state=providerRuntimeState(route.provider);
+    const requiredTotal=need.videoSeconds;
+    const maxPerRequest=Number(route.maxSeconds);
+    const durationOk=!Number.isFinite(maxPerRequest)||need.perSceneSeconds<=maxPerRequest;
+    const minOk=!Number.isFinite(Number(route.minSeconds))||need.perSceneSeconds>=Number(route.minSeconds);
+    const resolutionOk=!route.resolutions?.length||route.resolutions.map(String).map(x=>x.toLowerCase()).includes(desiredResolution)||desiredResolution==='auto';
+    const taskNeeded=route.tasks.includes('T2V')?'T2V':route.tasks[0];
+    const referenceOk=!route.requiresReferenceFrame||referencePlanned;
+    const configured=Boolean(route.configured);
+    const integrated=Boolean(route.integrated);
+    let capacity=0,unit=route.unit||'unknown',capacityStatus='unknown',resourceOk=false,resourceRequired=requiredTotal;
+    if(route.resourceEnv){
+      capacity=resourceNumberEnv(route.resourceEnv);
+      capacityStatus=capacity>0?'explicit':'zero';
+      resourceOk=capacity>=requiredTotal;
+    }else if(route.externalQuota==='magic'){
+      capacity=Number(externalCapacity?.magic?.credits);
+      unit='credits';
+      capacityStatus=externalCapacity?.magic?.status==='available'&&Number.isFinite(capacity)?'live':'unknown';
+      const creditsPerSecond=Math.max(1,Number(process.env.AUTOTUBE_MAGIC_HOUR_CREDITS_PER_SECOND||24)||24);
+      resourceRequired=requiredTotal*creditsPerSecond;
+      resourceOk=Number.isFinite(capacity)&&capacity>=resourceRequired;
+    }else{
+      resourceOk=false;
+    }
+    let reason='eligible';
+    if(!configured)reason='not_configured';
+    else if(!integrated)reason='not_integrated';
+    else if(!route.realAi)reason='not_real_ai';
+    else if(state.status!=='available')reason=state.status;
+    else if(!durationOk)reason='scene_duration_exceeds_provider_limit';
+    else if(!minOk)reason='scene_duration_below_provider_minimum';
+    else if(!resolutionOk)reason='resolution_not_supported';
+    else if(!referenceOk)reason='reference_frame_unavailable';
+    else if(capacityStatus==='unknown')reason='quota_unknown';
+    else if(!resourceOk)reason='insufficient_quota';
+    return {
+      provider:route.provider,
+      task:taskNeeded,
+      configured,
+      integrated,
+      realAi:Boolean(route.realAi),
+      requiresReferenceFrame:Boolean(route.requiresReferenceFrame),
+      referencePlanned,
+      minSeconds:route.minSeconds??null,
+      maxSeconds:route.maxSeconds??null,
+      resolution:desiredResolution,
+      supportedResolutions:route.resolutions||[],
+      state:state.status,
+      cooldownUntil:state.cooldownUntil||0,
+      capacity,
+      unit,
+      capacityStatus,
+      resourceRequired,
+      resourceAvailable:capacity,
+      resourceOk,
+      durationOk,
+      minOk,
+      resolutionOk,
+      eligible:Boolean(configured&&integrated&&route.realAi&&state.status==='available'&&durationOk&&minOk&&resolutionOk&&referenceOk&&resourceOk),
+      reason
+    };
+  });
+  const eligible=routes.filter(r=>r.eligible);
+  eligible.sort((a,b)=>{
+    const rank=x=>({FAL:10,'Replicate-Wan':20,'Pixazo-Free':30,'Agnes-Free':40,'HF-Inference':50,'MagicHour':60,'LTX-Direct':70}[x.provider]||100);
+    return rank(a)-rank(b);
+  });
+  return {routes,eligible,selected:eligible[0]||null};
 }
 async function evaluateAutonomousResourceGate(){
   const need=requiredVideoResourceSeconds();
   const externalCapacity={magic:await probeMagicHourAccount()};
-  const required={videoSeconds:need.videoSeconds,sceneCount:need.sceneCount};
-  const candidates=resourceProviderCandidates(need.videoSeconds,externalCapacity);
-  const viable=candidates.filter(c=>{
-    if(c.unit==='credits'){
-      // Magic Hour text-to-video currently documents 24 credits/sec at its
-      // base rate; keep the multiplier configurable for model-specific pricing.
-      const creditsPerSecond=Math.max(1,Number(process.env.AUTOTUBE_MAGIC_HOUR_CREDITS_PER_SECOND||24)||24);
-      return c.capacity >= need.videoSeconds*creditsPerSecond;
-    }
-    return c.capacity >= need.videoSeconds;
-  });
+  const routePlan=buildAutonomousRouteMatrix({need,externalCapacity});
+  const candidates=resourceProviderCandidates(need.videoSeconds,externalCapacity,routePlan.routes);
   const renderAvailable=Boolean(ffmpegPath);
   const geminiConfigured=Boolean(String(process.env.GEMINI_API_KEY||'').trim());
   const musicCanRun=Boolean(
     String(process.env.GEMINI_API_KEY||'').trim() ||
     String(process.env.FAL_KEY||process.env.FAL_API_KEY||'').trim()
   );
-  const complete=Boolean(viable.length&&renderAvailable&&geminiConfigured&&musicCanRun);
+  const complete=Boolean(routePlan.selected&&renderAvailable&&geminiConfigured&&musicCanRun);
   autonomousResourceGate.checkedAt=Date.now();
-  autonomousResourceGate.required=required;
+  autonomousResourceGate.required={...need,render:true,gemini:true,music:true};
   autonomousResourceGate.available={
-    videoCandidates:candidates,
+    videoCandidates:candidates.map(c=>({provider:c.provider,capacity:c.capacity,unit:c.unit,capacityStatus:c.capacityStatus})),
     externalCapacity,
-    viableRoutes:viable.map(x=>x.provider),
+    routeMatrix:routePlan.routes,
+    viableRoutes:routePlan.eligible.map(x=>x.provider),
+    selectedRoute:routePlan.selected,
     render:renderAvailable,
     gemini:geminiConfigured,
     music:musicCanRun
   };
-  autonomousResourceGate.route=viable[0]||null;
+  autonomousResourceGate.route=routePlan.selected;
   autonomousResourceGate.status=complete?'READY':'WAITING_FOR_RESOURCES';
   autonomousResourceGate.reason=complete
-    ?'Existe una ruta con capacidad explícitamente confirmada para completar el ciclo.'
-    :'No existe una ruta completa con cuota/capacidad explícitamente confirmada para TODO el ciclo. El ciclo NO se inicia.';
+    ?'Existe una ruta completa, integrada y con capacidad explícitamente confirmada para TODO el ciclo.'
+    :'No existe una ruta completa, integrada y con cuota/capacidad explícitamente confirmada para TODO el ciclo. El ciclo NO se inicia.';
   if(!complete)console.warn('[ResourceGate] autonomous cycle NOT STARTED:',autonomousResourceGate.reason,JSON.stringify(autonomousResourceGate.available));
-  else console.log('[ResourceGate] autonomous cycle preflight READY:',JSON.stringify({required,route:autonomousResourceGate.route?.provider}));
+  else console.log('[ResourceGate] autonomous cycle preflight READY:',JSON.stringify({required:autonomousResourceGate.required,route:routePlan.selected?.provider,allViable:routePlan.eligible.map(x=>x.provider)}));
   return {ok:complete,...autonomousResourceGate};
 }
+
 function reserveAutonomousResources(gate){
   if(!gate?.ok||autonomousResourceReservation)return false;
   autonomousResourceReservation={
@@ -3592,13 +3691,6 @@ app.get('/api/autonomous/resource-gate',async(_req,res)=>{
 async function runAutonomousCycle(){
   if(!autonomousEnabled||autonomousStopped||!autonomousReference)return;
   const now=Date.now();
-  // HARD GATE: no autonomous production cycle may be created without a
-  // complete, explicitly quota-confirmed resource route for the whole job.
-  const resourceGate=await evaluateAutonomousResourceGate();
-  if(!resourceGate.ok||!reserveAutonomousResources(resourceGate)){
-    autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
-    return;
-  }
   const running=[...fullPipelineTestJobs.values()].find(j=>j.status==='running');
   if(running){
     const age=now-Number(running.startedAt||now);
@@ -3635,7 +3727,13 @@ async function runAutonomousCycle(){
   }
   const recentDone=[...fullPipelineTestJobs.values()].find(j=>j.reference===autonomousReference&&j.status==='done'&&j.result?.ok);
   if(recentDone){autonomousStopped=true;console.log('AutoTube autonomous cycle: validated MP4 already exists; supervisor stopped:',recentDone.id);return;}
-  if(Date.now()-autonomousLastStart<autonomousIntervalMs)return;
+  // HARD GATE: only a brand-new production cycle is blocked by missing resources.
+  const resourceGate=await evaluateAutonomousResourceGate();
+  if(!resourceGate.ok||!reserveAutonomousResources(resourceGate)){
+    autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
+    return;
+  }
+  if(Date.now()-autonomousLastStart<autonomousIntervalMs){releaseAutonomousResources();return;}
   autonomousLastStart=Date.now();
   const id='auto_fulltest_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
   fullPipelineTestJobs.set(id,{id,reference:autonomousReference,status:'running',startedAt:Date.now(),lastProgressAt:Date.now(),currentStage:'starting',progress:0,result:null,autonomous:true});
