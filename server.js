@@ -2115,7 +2115,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
         commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};
       }catch(err){
-        noteProviderFailure(provider,err); errors.push(provider+': '+String(err.message||err).slice(0,500)); continue;
+        const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);if(kind==='resource_exhausted'||kind==='quota')capacityExhausted=true;if(kind==='transient_provider'||kind==='transient_network')temporaryCapacityWait=true; errors.push(provider+': '+String(err.message||err).slice(0,500)); continue;
       }
     }
     if(provider==='Pixazo-Free'){
@@ -2125,7 +2125,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
         completeFreeAiClip(budgetReservation); budgetCommitted=true;
         commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};
-      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
+      }catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);if(kind==='resource_exhausted'||kind==='quota')capacityExhausted=true;if(kind==='transient_provider'||kind==='transient_network')temporaryCapacityWait=true;errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
     }
     if(provider==='Agnes-Free'){
       try{
@@ -2134,7 +2134,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
         completeFreeAiClip(budgetReservation); budgetCommitted=true;
         commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};
-      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
+      }catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);if(kind==='resource_exhausted'||kind==='quota')capacityExhausted=true;if(kind==='transient_provider'||kind==='transient_network')temporaryCapacityWait=true;errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
     }
     if(provider==='HF-Inference'){
       try{
@@ -2160,7 +2160,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
         noteProviderSuccess(provider); completeFreeAiClip(budgetReservation); budgetCommitted=true;
         commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};
-      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,700));continue;}
+      }catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);if(kind==='resource_exhausted'||kind==='quota')capacityExhausted=true;if(kind==='transient_provider'||kind==='transient_network')temporaryCapacityWait=true;errors.push(provider+': '+String(err.message||err).slice(0,700));continue;}
     }
     if(provider==='Pollinations'){
       try{
