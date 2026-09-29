@@ -82,6 +82,10 @@ if [ "$runtime_incident" = "true" ] && git log --all --oneline --grep="runtime-f
 fi
 
 echo "RECOVERY ENGINE: class=$recovery_class resource=$recovery_resource strategy=$recovery_strategy attempt=$repair_attempt/3"
+export RECOVERY_RESOURCE="$recovery_resource"
+export RECOVERY_CLASS="$recovery_class"
+export RECOVERY_STRATEGY="$recovery_strategy"
+export REPAIR_ATTEMPT="$repair_attempt"
 
 started="${started:-$(echo "$latest" | jq -r '.startedAt // .createdAt // empty')}"
 finished="${finished:-$(echo "$latest" | jq -r '.finishedAt // .updatedAt // empty')}"
