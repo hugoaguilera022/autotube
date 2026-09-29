@@ -1707,10 +1707,14 @@ async function generateAgnesFreeVideoClip(prompt,dir,options={}) {
   const key=String(process.env.AGNES_API_KEY||'').trim();
   if(!key)throw new Error('AGNES_API_KEY no configurada.');
   const duration=Math.max(5,Math.min(20,Number(options.durationSeconds)||5));
-  const create=await fetch('https://apihub.agnes-ai.com/v1/videos',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model:String(process.env.AGNES_VIDEO_MODEL||'agnes-video-v2.0'),prompt:String(prompt||'').trim(),width:1280,height:720,num_frames:Math.round(duration*16),frame_rate:16}),signal:AbortSignal.timeout(60000)});
+  const frameRate=24;
+  // Agnes requires num_frames <= 441 and num_frames = 8n + 1.
+  const requestedFrames=Math.max(9,Math.min(441,Math.round(duration*frameRate)));
+  const numFrames=Math.min(441,8*Math.max(1,Math.round((requestedFrames-1)/8))+1);
+  const create=await fetch('https://apihub.agnes-ai.com/v1/videos',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model:String(process.env.AGNES_VIDEO_MODEL||'agnes-video-v2.0'),prompt:String(prompt||'').trim(),width:1152,height:768,num_frames:numFrames,frame_rate:frameRate}),signal:AbortSignal.timeout(60000)});
   const raw=await create.text(); let data=null; try{data=raw?JSON.parse(raw):null}catch{}
-  if(!create.ok)throw new Error('Agnes video '+create.status+': '+raw.slice(0,600));
-  const taskId=String(data?.id||data?.task_id||data?.video_id||'').trim(); if(!taskId)throw new Error('Agnes no devolvió task id.');
+  if(!create.ok)throw new Error('Agnes video '+create.status+': '+raw.slice(0,900));
+  const taskId=String(data?.video_id||data?.id||data?.task_id||'').trim(); if(!taskId)throw new Error('Agnes no devolvió video_id.');
   const deadline=Date.now()+Math.min(300000,Math.max(120000,Number(process.env.AUTOTUBE_AGNES_TIMEOUT_MS)||240000));
   while(Date.now()<deadline){
     const r=await fetch('https://apihub.agnes-ai.com/agnesapi?video_id='+encodeURIComponent(taskId),{headers:{Authorization:'Bearer '+key,Accept:'application/json'},signal:AbortSignal.timeout(30000)});
