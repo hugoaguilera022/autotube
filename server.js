@@ -1541,7 +1541,7 @@ function noteZeroGpuQuota(err,providerName='ZeroGPU'){
 }
 function providerState(name){if(!videoProviderState.has(name))videoProviderState.set(name,{status:'unknown',failures:0,lastError:'',lastFailureAt:0,lastSuccessAt:0,cooldownUntil:0});return videoProviderState.get(name);}
 function classifyVideoProviderError(err){const m=String(err?.message||err||'').toLowerCase();if(/depleted.*monthly.*credit|monthly.*included.*credit|purchase pre-paid|purchase prepaid|insufficient.*credit|credits.*exhausted/.test(m))return'resource_exhausted';if(/401|403|unauthori[sz]ed|forbidden|oauth|login|permission|credentials/.test(m))return'user_blocking';if(/429|zero.?gpu quota|quota|rate limit|too many requests/.test(m))return'quota';if(/502|503|504|temporarily unavailable|space.*error|service unavailable|gateway/.test(m))return'transient_provider';if(/timeout|timed out|econnreset|etimedout|eai_again|socket hang up/.test(m))return'transient_network';if(/endpoint|not found|404|could not resolve app config|no api|invalid.*parameter|unexpected.*argument/.test(m))return'integration';if(/ffmpeg|invalid.*video|stream of video|duration.*invalid|static|movement/.test(m))return'output';return'unknown';}
-function noteProviderFailure(name,err){const st=providerState(name);st.failures++;st.lastError=String(err?.message||err);st.lastFailureAt=Date.now();const kind=classifyVideoProviderError(err);if(kind==='quota'&&HF_ZEROGPU_PROVIDERS.has(String(name||''))){noteZeroGpuQuota(err,name);return;}if(kind==='resource_exhausted'){const waitMs=Math.max(5*60*1000,Number(process.env.AUTOTUBE_PROVIDER_CAPACITY_RETRY_MS||60*60*1000)||60*60*1000);st.status='capacity_wait';st.cooldownUntil=Date.now()+waitMs;console.warn('[VideoProviderManager]',name,'=> capacity_wait(resource_exhausted) until',new Date(st.cooldownUntil).toISOString(),'— se volverá a probar cuando pueda recuperar capacidad.');return;}const multiplier=kind==='quota'?4:kind==='integration'?6:1;st.cooldownUntil=Date.now()+VIDEO_PROVIDER_COOLDOWN_MS*multiplier*Math.min(4,st.failures);st.status=kind==='user_blocking'?'blocked':kind==='integration'?'broken':'down';console.warn('[VideoProviderManager]',name,'=>',st.status,'error=',st.lastError.slice(0,500));}
+function noteProviderFailure(name,err){releaseVideoAllocation(name,'provider_failure');const st=providerState(name);st.failures++;st.lastError=String(err?.message||err);st.lastFailureAt=Date.now();const kind=classifyVideoProviderError(err);if(kind==='quota'&&HF_ZEROGPU_PROVIDERS.has(String(name||''))){noteZeroGpuQuota(err,name);return;}if(kind==='resource_exhausted'){const waitMs=Math.max(5*60*1000,Number(process.env.AUTOTUBE_PROVIDER_CAPACITY_RETRY_MS||60*60*1000)||60*60*1000);st.status='capacity_wait';st.cooldownUntil=Date.now()+waitMs;console.warn('[VideoProviderManager]',name,'=> capacity_wait(resource_exhausted) until',new Date(st.cooldownUntil).toISOString(),'— se volverá a probar cuando pueda recuperar capacidad.');return;}const multiplier=kind==='quota'?4:kind==='integration'?6:1;st.cooldownUntil=Date.now()+VIDEO_PROVIDER_COOLDOWN_MS*multiplier*Math.min(4,st.failures);st.status=kind==='user_blocking'?'blocked':kind==='integration'?'broken':'down';console.warn('[VideoProviderManager]',name,'=>',st.status,'error=',st.lastError.slice(0,500));}
 function noteProviderSuccess(name){const st=providerState(name);st.status='healthy';st.failures=0;st.lastError='';st.lastSuccessAt=Date.now();st.cooldownUntil=0;}
 function providerAvailable(name){if(HF_ZEROGPU_PROVIDERS.has(String(name||''))&&zeroGpuQuotaActive())return false;const permanentlyUnstable={ 'Wan2.2-I2V':String(process.env.AUTOTUBE_ENABLE_WAN22_I2V||'0')!=='1', 'LTX-2.5':String(process.env.AUTOTUBE_ENABLE_LTX25||'0')!=='1', 'Wan2.1':String(process.env.AUTOTUBE_ENABLE_WAN21||'0')!=='1', 'LTX-0.9.8':String(process.env.AUTOTUBE_ENABLE_LTX098||'0')!=='1', 'Wan2.2-ZeroGPU':String(process.env.AUTOTUBE_ENABLE_WAN22_ZEROGPU||'1')!=='1' , 'OpenKing-Wan2.2':String(process.env.AUTOTUBE_ENABLE_OPENKING_WAN22||'1')!=='1', 'LTX-2.3-ZeroGPU':String(process.env.AUTOTUBE_ENABLE_LTX23_ZEROGPU||'1')!=='1', 'Wan2.2-AoTI':String(process.env.AUTOTUBE_ENABLE_WAN22_AOTI||'1')!=='1', 'Wan2.2-AoTI-R3GM':String(process.env.AUTOTUBE_ENABLE_WAN22_AOTI_R3GM||'1')!=='1', 'Wan2.2-AoTI-CB':String(process.env.AUTOTUBE_ENABLE_WAN22_AOTI_CB||'1')!=='1', 'Wan2.2-Rahul-AOT':String(process.env.AUTOTUBE_ENABLE_WAN22_RAHUL_AOT||'1')!=='1', 'Wan2.2-Rahul-T2V':String(process.env.AUTOTUBE_ENABLE_WAN22_RAHUL_T2V||'1')!=='1' };if(permanentlyUnstable[name])return false;const st=providerState(name);return st.status!=='blocked'&&Date.now()>=Number(st.cooldownUntil||0);}
 async function probeVideoProvider(name){const st=providerState(name);if(st.status==='blocked')return{ok:false,status:st.status,error:st.lastError};if(st.status==='healthy'&&Date.now()-st.lastSuccessAt<VIDEO_PROVIDER_PROBE_MS)return{ok:true,status:'healthy',cached:true};const raw={ 'Wan2.2-I2V':process.env.WAN22_I2V_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','LTX-2.5':process.env.LTX25_SPACE_URL||'https://lightricks-ltx-2-5.hf.space','Wan2.1':process.env.WAN21_SPACE_URL||'https://weathon-vsf.hf.space','Wan2.1-VACE':process.env.WAN_VACE_SPACE_URL||'https://jdpadmin-wan2-1-vace-diffusers-demo.hf.space','LTX-0.9.8':process.env.LTX_SPACE||'https://lightricks-ltx-video-distilled.hf.space','Wan2.2-ZeroGPU':process.env.WAN22_ZEROGPU_SPACE_URL||'https://alexcheng0072-wan27-free-video-generator.hf.space','OpenKing-Wan2.2':process.env.OPENKING_WAN22_SPACE_URL||'https://openking-wan2-video-generation.hf.space', 'LTX-2.3-ZeroGPU':process.env.LTX23_ZEROGPU_SPACE||'https://shaundeoOo-ltx-2-3-fast.hf.space','Wan2.2-AoTI':process.env.WAN22_AOTI_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','Wan2.2-AoTI-R3GM':process.env.WAN22_AOTI_R3GM_SPACE_URL||'https://r3gm-wan2-2-fp8da-aoti-preview.hf.space','Wan2.2-AoTI-CB':process.env.WAN22_AOTI_CB_SPACE_URL||'https://cbensimon-wan2-2-fp8da-aoti-preview2.hf.space','Wan2.2-Rahul-AOT':process.env.WAN22_RAHUL_AOT_SPACE_URL||'https://rahul7star-wan22-aot.hf.space','Wan2.2-Rahul-T2V':process.env.WAN22_RAHUL_T2V_SPACE_URL||'https://rahul7star-wan2-2-t2v-a14b.hf.space'}[name];if(!raw)return{ok:false,status:'unconfigured'};const url=String(raw).startsWith('http')?String(raw).replace(/\/$/,'')+'/gradio_api/info':'https://'+String(raw).replace(/\/$/,'')+'.hf.space/gradio_api/info';try{const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(4000)});if(!response.ok)throw new Error('HTTP '+response.status);noteProviderSuccess(name);return{ok:true,status:'healthy'};}catch(err){noteProviderFailure(name,err);return{ok:false,status:providerState(name).status,error:String(err.message||err)};}}
@@ -1986,6 +1986,40 @@ async function generateMagicHourVideoClip(prompt,dir,options={}) {
   } finally { clearTimeout(timer); }
 }
 
+
+// AUTOTUBE_CAPACITY_CONTROL_V2
+const videoCapacityReservations=new Map();
+const videoCapacityAudit=[];
+function auditVideoCapacity(event,data={}){
+  const row={timestamp:new Date().toISOString(),event,...data};
+  videoCapacityAudit.push(row);
+  if(videoCapacityAudit.length>500)videoCapacityAudit.splice(0,videoCapacityAudit.length-500);
+  console.log('[VideoCapacityAudit]',JSON.stringify(row));
+}
+function reserveVideoAllocation(provider,requestedSeconds){
+  const row=activeVideoAllocation?.rows?.find(r=>r.provider===provider);
+  if(!row)return true;
+  const requested=Math.max(0.5,Number(requestedSeconds)||1);
+  const reserved=Number(row.reservedSeconds||0);
+  const remaining=Number(row.remainingSeconds||0);
+  if(remaining-reserved<requested){
+    auditVideoCapacity('reserve_rejected',{provider,requestedSeconds:requested,capacityBefore:remaining,reservedSeconds:reserved,capacityAfter:remaining-reserved});
+    return false;
+  }
+  row.reservedSeconds=reserved+requested;
+  videoCapacityReservations.set(provider,{provider,requestedSeconds:requested,reservedAt:Date.now()});
+  auditVideoCapacity('reserve',{provider,requestedSeconds:requested,capacityBefore:remaining,reservedSeconds:row.reservedSeconds,capacityAfter:remaining-row.reservedSeconds});
+  return true;
+}
+function releaseVideoAllocation(provider,reason='released'){
+  const reservation=videoCapacityReservations.get(provider);
+  const row=activeVideoAllocation?.rows?.find(r=>r.provider===provider);
+  if(!reservation||!row)return;
+  row.reservedSeconds=Math.max(0,Number(row.reservedSeconds||0)-reservation.requestedSeconds);
+  videoCapacityReservations.delete(provider);
+  auditVideoCapacity('release',{provider,requestedSeconds:reservation.requestedSeconds,reason,capacityBefore:Number(row.remainingSeconds||0),reservedSeconds:Number(row.reservedSeconds||0),capacityAfter:Number(row.remainingSeconds||0)-Number(row.reservedSeconds||0)});
+}
+
 async function generateBestFreeVideoClip(prompt,dir,options={}) {
   const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);
   const referenceFramePath=String(options.firstFramePath||'').trim();
@@ -2056,9 +2090,10 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     throw new Error('CAPACITY_WAIT_REQUIRED: ninguna ruta tiene capacidad suficiente para la siguiente petición de '+requestedResourceSeconds+'s.');
   }
   for(const provider of executableOrder){
+    if(!reserveVideoAllocation(provider,requestedResourceSeconds))continue;
     const pst=providerState(provider);
-    if(pst.status==='blocked'||Date.now()<Number(pst.cooldownUntil||0)){errors.push(provider+': cooldown/blocked until '+new Date(Number(pst.cooldownUntil||0)).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'status=',pst.status,'cooldownUntil=',pst.cooldownUntil);continue;}
-    if(HF_ZEROGPU_PROVIDERS.has(String(provider||''))&&zeroGpuQuotaActive()){errors.push(provider+': shared ZeroGPU quota cooldown active until '+new Date(getSharedZeroGpuCooldownUntil()).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'reason=shared ZeroGPU quota');continue;}
+    if(pst.status==='blocked'||Date.now()<Number(pst.cooldownUntil||0)){releaseVideoAllocation(provider,'cooldown_or_blocked');errors.push(provider+': cooldown/blocked until '+new Date(Number(pst.cooldownUntil||0)).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'status=',pst.status,'cooldownUntil=',pst.cooldownUntil);continue;}
+    if(HF_ZEROGPU_PROVIDERS.has(String(provider||''))&&zeroGpuQuotaActive()){releaseVideoAllocation(provider,'zerogpu_cooldown');errors.push(provider+': shared ZeroGPU quota cooldown active until '+new Date(getSharedZeroGpuCooldownUntil()).toISOString());console.log('[VideoProviderManager] provider skipped before generation:',provider,'reason=shared ZeroGPU quota');continue;}
     if(provider==='Replicate-Wan'){
       try{const clip=await replicateVideo(prompt,dir,options);const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);if(kind==='resource_exhausted'||kind==='quota')capacityExhausted=true;if(kind==='transient_provider'||kind==='transient_network')temporaryCapacityWait=true;errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,700));continue;}
@@ -2136,11 +2171,13 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
       }catch(err){noteProviderFailure(provider,err);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{quota:classifyVideoProviderError(err)==='quota'});errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
     }
     if(!providerAvailable(provider)){
+      releaseVideoAllocation(provider,'provider_unavailable');
       const st=providerState(provider);
       console.warn('[VideoProviderManager] provider skipped before generation:',provider,'status=',st.status,'cooldownUntil=',st.cooldownUntil,'lastError=',String(st.lastError||'').slice(0,300));
       continue;
     }
     if(!reserveHfZeroGpuAttempt(provider,requestedResourceSeconds)){
+      releaseVideoAllocation(provider,'zerogpu_resource_broker_rejected');
       console.warn('[VideoProviderManager] provider skipped by ZeroGPU resource broker:',provider,'requestedSeconds=',requestedResourceSeconds,'snapshot=',JSON.stringify(hfZeroGpuResourceSnapshot()));
       continue;
     }
@@ -2150,7 +2187,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     const health=(provider==='OpenKing-Wan2.2'||provider==='Wan2.2-ZeroGPU'||provider==='LTX-2.3-ZeroGPU'||provider==='Wan2.2-AoTI'||provider==='Wan2.2-AoTI-R3GM'||provider==='Wan2.2-AoTI-CB')
       ? {ok:true,status:'generation-direct'}
       : await probeVideoProvider(provider);
-    if(!health.ok)continue;
+    if(!health.ok){releaseVideoAllocation(provider,'provider_health_failed');continue;}
     if(provider==='Wan2.2-Rahul-AOT'){try{const clip=await generateWan22RestVideoClip(prompt,dir,{...options,durationSeconds:Math.max(3,Number(options.durationSeconds)||3),spaceUrl:process.env.WAN22_RAHUL_AOT_SPACE_URL||'https://rahul7star-wan22-aot.hf.space',mode:'simple',endpoint:'/generate_video_with_upload'});const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{success:true});completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{quota:classifyVideoProviderError(err)==='quota'});errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,700));continue;}} if(provider==='Wan2.2-Rahul-T2V'){try{const clip=await generateFreeWan22RahulT2vVideoClip(prompt,dir,{...options,durationSeconds:Math.max(3,Number(options.durationSeconds)||3)});const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{success:true});completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds)); commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
         return{...clip,providerKey:provider,generationType:'ai-video',validation};}catch(err){const kind=classifyVideoProviderError(err);noteProviderFailure(provider,err);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{quota:classifyVideoProviderError(err)==='quota'});errors.push(provider+': '+kind+': '+String(err.message||err).slice(0,700));continue;}} if(provider==='Wan2.2-AoTI'||provider==='Wan2.2-AoTI-R3GM'||provider==='Wan2.2-AoTI-CB'){try{const spaces={ 'Wan2.2-AoTI':process.env.WAN22_AOTI_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space','Wan2.2-AoTI-R3GM':process.env.WAN22_AOTI_R3GM_SPACE_URL||'https://r3gm-wan2-2-fp8da-aoti-preview.hf.space','Wan2.2-AoTI-CB':process.env.WAN22_AOTI_CB_SPACE_URL||'https://cbensimon-wan2-2-fp8da-aoti-preview2.hf.space'};const clip=await generateFreeWan22AotiVideoClip(prompt,dir,{...options,durationSeconds:Math.max(3,Number(options.durationSeconds)||3),spaceOverride:spaces[provider]});const validation=await validateGeneratedVideoClip(clip.outputPath);noteProviderSuccess(provider);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{success:true});completeFreeAiClip(budgetReservation); budgetCommitted=true; commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds)); commitVideoAllocation(provider,Number(validation.durationSeconds||clip.durationSeconds||requestedResourceSeconds));
@@ -2242,9 +2279,25 @@ async function validateGeneratedVideoClip(file){
   const videoLine=(text.split(/\r?\n/).find(line=>/Video:/i.test(line))||'');
   const vm=videoLine.match(/Video:\s*([^,]+)/i);
   const dimensions=videoLine.match(/(\d{2,5})x(\d{2,5})/);
+  const stat=await fs.stat(file).catch(()=>null);
+  const sizeBytes=Number(stat?.size||0);
   if(!durationSeconds||durationSeconds<3)throw new Error('El clip IA tiene una duración inválida: '+durationSeconds+' s.');
   if(!vm)throw new Error('El archivo generado no contiene un stream de vídeo válido.');
-  return{ok:true,durationSeconds,videoCodec:String(vm[1]||'').trim(),width:dimensions?Number(dimensions[1]):0,height:dimensions?Number(dimensions[2]):0};
+  if(sizeBytes<=1000)throw new Error('El MP4 generado es demasiado pequeño para ser un vídeo IA válido: '+sizeBytes+' bytes.');
+  // Detect real temporal change. This rejects empty/static placeholder MP4s while
+  // allowing normal cinematic clips that contain smooth motion rather than cuts.
+  let motionFrames=0;
+  try{
+    const motion=await new Promise((resolve,reject)=>{
+      const p=spawn(ffmpegPath,['-hide_banner','-i',file,'-vf',"select='gt(scene,0.001)',showinfo",'-an','-f','null','-'],{stdio:['ignore','pipe','pipe']});
+      let e='';p.stderr.on('data',x=>{e+=x.toString();if(e.length>20000)e=e.slice(-20000)});
+      p.on('error',reject);p.on('close',()=>resolve(e));
+    });
+    motionFrames=(String(motion).match(/showinfo.*n:\s*\d+/gi)||[]).length;
+  }catch{}
+  const motionDetected=motionFrames>0;
+  if(!motionDetected)throw new Error('El MP4 no presenta movimiento temporal detectable; se rechaza como vídeo IA inválido.');
+  return{ok:true,durationSeconds,sizeBytes,motionDetected,motionFrames,videoCodec:String(vm[1]||'').trim(),width:dimensions?Number(dimensions[1]):0,height:dimensions?Number(dimensions[2]):0};
 }
 
 async function runVideoAiSmokeTest(){
@@ -3729,9 +3782,14 @@ function commitVideoAllocation(provider,actualSeconds){
   if(!activeVideoAllocation?.rows?.length)return;
   const row=activeVideoAllocation.rows.find(r=>r.provider===provider);
   if(!row)return;
+  const reservation=videoCapacityReservations.get(provider);
+  const requested=Number(reservation?.requestedSeconds||0);
   const used=Math.max(0,Number(actualSeconds)||0);
   row.remainingSeconds=Math.max(0,row.remainingSeconds-used);
+  row.reservedSeconds=Math.max(0,Number(row.reservedSeconds||0)-requested);
+  videoCapacityReservations.delete(provider);
   activeVideoAllocation.consumedSeconds+=used;
+  auditVideoCapacity('commit',{provider,requestedSeconds:requested,actualSeconds:used,capacityBefore:Number((row.remainingSeconds+used).toFixed(3)),capacityAfter:Number(row.remainingSeconds.toFixed(3)),reservedSeconds:Number(row.reservedSeconds.toFixed(3))});
   console.log('[VideoCapacity] consumed:',provider,used.toFixed(2)+'s','remaining allocation=',row.remainingSeconds.toFixed(2)+'s','snapshot=',JSON.stringify(getVideoCapacityAllocationSnapshot()));
 }
 
@@ -3958,6 +4016,10 @@ app.post('/api/autonomous/resource-probe',async(req,res)=>{
     return res.status(502).json({ok:false,probe:autonomousProbe,error:String(err?.message||err)});
   }finally{await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});}
 });
+app.get('/api/autonomous/capacity-state',async(_req,res)=>{
+  const gate=await evaluateAutonomousResourceGate().catch(error=>({ok:false,error:String(error?.message||error)}));
+  res.json({ok:true,gate,allocation:getVideoCapacityAllocationSnapshot(),reservations:[...videoCapacityReservations.values()],audit:videoCapacityAudit.slice(-100)});
+});
 app.get('/api/autonomous/resource-gate',async(_req,res)=>{
   const gate=await evaluateAutonomousResourceGate();
   return res.status(gate.ok?200:503).json(gate);
@@ -4027,16 +4089,18 @@ async function runAutonomousCycle(){
     const message=String(err?.message||err||'Error desconocido');
     const userActionRequired=/INSUFFICIENT_BALANCE|Insufficient balance|401 Unauthorized|403 Forbidden|missing.*API.?key|API.?key.*missing|no.*API.?key|invalid.*credential|private.*video|sign in to confirm|USER_ACTION_REQUIRED/i.test(message);
     const j=fullPipelineTestJobs.get(id);
+    const capacityWait=!userActionRequired&&/CAPACITY_WAIT_REQUIRED|capacity_wait|WAITING_FOR_CAPACITY/i.test(message);
     if(j){
-      j.status=userActionRequired?'blocked_user_action':'failed';
-      j.currentStage='recovery';
+      j.status=userActionRequired?'blocked_user_action':capacityWait?'waiting_capacity':'failed';
+      j.currentStage=capacityWait?'waiting_capacity':'recovery';
       j.lastProgressAt=Date.now();
       j.result={
         ok:false,
         error:message,
         retryable:!userActionRequired,
+        capacityWait,
         userActionRequired,
-        autonomousStopReason:userActionRequired?'Se requiere una acción del usuario para continuar.':'El ciclo seguirá reintentando automáticamente.'
+        autonomousStopReason:userActionRequired?'Se requiere una acción del usuario para continuar.':capacityWait?'Esperando capacidad y reconsultando proveedores automáticamente.':'El ciclo seguirá reintentando automáticamente.'
       };
       j.finishedAt=Date.now();
     }
