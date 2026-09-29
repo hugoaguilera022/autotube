@@ -10,6 +10,7 @@ on:
   push:
     paths:
       - '.github/workflows/autotube-render-autorepair.yml'
+      - 'scripts/autotube-render-autorepair.sh'
 
 concurrency:
   group: autotube-render-autorepair
