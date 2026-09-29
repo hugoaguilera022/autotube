@@ -18,6 +18,8 @@ on:
       - 'scripts/autotube-render-autorepair.sh'
       - 'scripts/autotube-recovery-strategy-engine.sh'
       - 'scripts/autotube-recovery-contract.sh'
+      - 'scripts/autotube-recovery-preflight.sh'
+      - 'scripts/autotube-hf-inference-recovery.sh'
 
 concurrency:
   group: autotube-repair-authority
@@ -61,6 +63,7 @@ jobs:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           RENDER_SERVICE_ID: srv-dasrdmvpn0mc739n1at0
           RENDER_OWNER_ID: tea-dasrcurbc2fs73a12d90
+          AUTOTUBE_RUNTIME_PREFLIGHT_URL: https://autotube-usm1.onrender.com/api/recovery/preflight
         run: bash scripts/autotube-render-autorepair.sh
 
       - name: Preserve recovery decision evidence
