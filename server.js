@@ -2304,6 +2304,100 @@ app.get('/api/reference-match-test/:jobId',async(req,res)=>{
 });
 
 
+
+const e2eVideoJobs=new Map();
+async function executeE2EVideo001(id,{inducePrimaryFailure=false}={}){
+  const job=e2eVideoJobs.get(id);
+  const startedAt=Date.now();
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'autotube-e2e-video-'));
+  const attempts=[];
+  const imagePath=path.join(dir,'e2e-input.png');
+  try{
+    job.currentStage='input';
+    // Stable local input image: the E2E tests the hosted AI video path, not image generation.
+    await runFfmpeg(['-y','-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=0x243447:s=1280x720','-frames:v','1','-f','image2',imagePath]);
+    const imageStat=await fs.stat(imagePath);
+    if(!imageStat.size)throw new Error('E2E input image is empty.');
+    const prompt='Original cinematic scene for AutoTube E2E validation: a peaceful futuristic mountain valley at sunrise, subtle atmospheric movement, realistic lighting, slow camera tracking, natural depth and motion. No logos, text, brands or copied imagery.';
+    const options={firstFramePath:imagePath,durationSeconds:5,aspectRatio:'16:9',resolution:'720p',generateAudio:false,sceneIndex:0};
+    const runAttempt=async(provider,fn)=>{
+      const t=Date.now();
+      try{
+        if(inducePrimaryFailure&&provider==='FAL')throw new Error('E2E_INDUCED_PRIMARY_FAILURE: simulated FAL 503');
+        const clip=await withAttemptTimeout(fn, 'E2E-VIDEO-001 '+provider, 330000);
+        const validation=await validateGeneratedVideoClip(clip.outputPath);
+        if(!validation.ok)throw new Error('E2E MP4 validation failed.');
+        const actual=Number(validation.durationSeconds||clip.durationSeconds||0);
+        if(actual<4.5||actual>5.5)throw new Error('E2E duration outside tolerance: '+actual+' s');
+        attempts.push({testId:'E2E-VIDEO-001',provider:provider,model:clip.model||'',mode:clip.routeMode||'I2V',requestedDuration:5,latencyMs:Date.now()-t,status:'success',validation});
+        return {...clip,validation};
+      }catch(err){
+        attempts.push({testId:'E2E-VIDEO-001',provider,model:'',mode:'I2V',requestedDuration:5,latencyMs:Date.now()-t,status:'failed',errorClass:classifyVideoProviderError(err),error:String(err?.message||err).slice(0,900),retryAllowed:false});
+        throw err;
+      }
+    };
+    job.currentStage='primary-fal-seedance-2.5-i2v';
+    let clip;
+    try{
+      clip=await runAttempt('FAL',()=>falVideo(prompt,dir,{...options}));
+      noteProviderSuccess('FAL');
+    }catch(primaryErr){
+      noteProviderFailure('FAL',primaryErr);
+      job.currentStage='fallback-replicate-wan-2.7-i2v';
+      clip=await runAttempt('Replicate-Wan',()=>replicateVideo(prompt,dir,{...options}));
+      noteProviderSuccess('Replicate-Wan');
+    }
+    job.currentStage='final-validation';
+    const final=await validateGeneratedVideoClip(clip.outputPath);
+    const result={
+      ok:true,
+      status:inducePrimaryFailure?'PASS_WITH_FALLBACK':'PASS',
+      testId:'E2E-VIDEO-001',
+      realAiVideo:true,
+      primary:'fal.ai Seedance 2.5 I2V',
+      fallback:'Replicate Wan 2.7 I2V',
+      selectedProvider:clip.provider,
+      selectedModel:clip.model,
+      outputPath:clip.outputPath,
+      downloadPath:clip.outputPath,
+      validation:final,
+      attempts,
+      elapsedMs:Date.now()-startedAt,
+      inducedPrimaryFailure:inducePrimaryFailure
+    };
+    job.status='done';job.currentStage='complete';job.result=result;job.finishedAt=Date.now();
+    return result;
+  }catch(err){
+    const result={ok:false,status:'FAIL',testId:'E2E-VIDEO-001',realAiVideo:false,error:String(err?.message||err),attempts,elapsedMs:Date.now()-startedAt};
+    job.status='failed';job.currentStage='failed';job.result=result;job.finishedAt=Date.now();
+    return result;
+  }finally{
+    // Keep a successful MP4 available to the status/download endpoint until the job expires.
+    if(job?.status!=='done')await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
+}
+app.get('/api/e2e/video-001',async(req,res)=>{
+  const induce=String(req.query?.inducePrimaryFailure||'0')==='1';
+  const existing=[...e2eVideoJobs.values()].find(j=>j.status==='running'&&j.inducePrimaryFailure===induce);
+  if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/e2e/video-001/'+encodeURIComponent(existing.id)});
+  const id='e2e_video_001_'+Date.now()+'_'+crypto.randomBytes(4).toString('hex');
+  e2eVideoJobs.set(id,{id,status:'running',startedAt:Date.now(),result:null,inducePrimaryFailure:induce,currentStage:'queued'});
+  res.status(202).json({ok:false,status:'running',jobId:id,statusUrl:'/api/e2e/video-001/'+encodeURIComponent(id),testId:'E2E-VIDEO-001',inducedPrimaryFailure:induce});
+  executeE2EVideo001(id,{inducePrimaryFailure:induce}).catch(err=>console.error('E2E-VIDEO-001 runner error:',err));
+});
+app.get('/api/e2e/video-001/:jobId',async(req,res)=>{
+  const j=e2eVideoJobs.get(String(req.params.jobId||''));
+  if(!j)return res.status(410).json({ok:false,status:'restart',error:'E2E job lost after Render restart.'});
+  if(j.status==='running')return res.status(202).json({ok:false,status:'running',jobId:j.id,testId:'E2E-VIDEO-001',currentStage:j.currentStage,elapsedMs:Date.now()-j.startedAt});
+  return res.status(j.result?.ok?200:503).json({status:j.status,jobId:j.id,...(j.result||{ok:false})});
+});
+app.get('/api/e2e/video-001/:jobId/download',async(req,res)=>{
+  const j=e2eVideoJobs.get(String(req.params.jobId||''));
+  const file=j?.result?.downloadPath;
+  if(!j?.result?.ok||!file)return res.status(404).json({ok:false,error:'MP4 E2E no disponible.'});
+  try{await fs.stat(file);return res.download(file,'autotube-e2e-video-001.mp4');}catch{return res.status(404).json({ok:false,error:'MP4 E2E expirado.'});}
+});
+
 app.get('/api/video-ai-test',async(_req,res)=>{
   const existing=[...videoAiTestJobs.values()].find(j=>j.status==='running');
   if(existing)return res.status(202).json({ok:false,status:'running',jobId:existing.id,statusUrl:'/api/video-ai-test/'+encodeURIComponent(existing.id)});
