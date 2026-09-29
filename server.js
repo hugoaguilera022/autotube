@@ -180,6 +180,7 @@ app.get('/api/recovery/preflight',async(req,res)=>{
   }
   if(strategy==='INDEPENDENT_FREE_PROVIDER'){
     if(String(process.env.FREE_AI_API_KEY||'').trim())return res.json({ok:true,strategy,provider:'FREE_AI',free:true});
+    if(String(process.env.PIXAZO_API_KEY||'').trim())return res.json({ok:true,strategy,provider:'PIXAZO_FREE',model:'LTX',free:true});
     if(String(process.env.AGNES_API_KEY||'').trim())return res.json({ok:true,strategy,provider:'AGNES_FREE',free:true});
     return res.status(503).json({ok:false,strategy,reason:'NO_INDEPENDENT_FREE_PROVIDER_CREDENTIAL'});
   }
