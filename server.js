@@ -2429,18 +2429,11 @@ async function executeFullPipelineTest(reference,testId=null){
               clip=await withAttemptTimeout(()=>generateResilientSceneVideoClip(prompt,dir,{durationSeconds:Number(scene.duration)||4,aspectRatio:'16:9',sceneIndex:i,firstFramePath:referenceFramePath}),'adaptive-duration-scene-'+(i+1),Number(process.env.AUTOTUBE_AI_PROVIDER_ATTEMPT_TIMEOUT_MS||300000));
               console.log('AutoTube resilient scene generated:',i+1,'/',plan.scenes.length,'chunks=',clip.chunks,'providers=',clip.providerKey,'duration=',clip.durationSeconds);
             }catch(videoErr){console.warn('AutoTube resilient video generation exhausted for scene '+(i+1)+':',videoErr.message||String(videoErr));}
-            if(!clip){
-              try{
-                const image=await generateOriginalImageWithCascade('Create an original cinematic 16:9 visual for this scene. '+prompt+' Use completely new characters, environments and compositions. No logos, no text, no copied frames.',dir,{width:854,height:480});
-                const motionPath=path.join(dir,'ai-image-motion-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
-                const seconds=Math.max(3,Math.min(Number(scene.duration)||4,Number(process.env.AUTOTUBE_IMAGE_MOTION_MAX_SECONDS||8)));
-                await runFfmpeg(['-y','-hide_banner','-loglevel','error','-loop','1','-i',image.outputPath,'-vf','scale=854:480:force_original_aspect_ratio=increase,crop=854:480,zoompan=z=1+0.0008*on:d=1:s=854x480:fps=15,format=yuv420p','-t',String(seconds),'-an','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart',motionPath]);
-                await validateGeneratedVideoClip(motionPath);const st=await fs.stat(motionPath);
-                clip={outputPath:motionPath,bytes:st.size,provider:image.provider+' + FFmpeg motion',model:image.model+' animated',durationSeconds:seconds,generationType:'ai-image-motion',status:'complete'};
-              }catch(fallbackErr){console.warn('AutoTube AI-image story fallback failed for scene '+(i+1)+':',fallbackErr.message||String(fallbackErr));}
-            }
-            if(!clip)throw new Error('No se pudo completar la escena '+(i+1)+' con vídeo IA ni fallback AI-image.');
-            aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model,providerKey:clip.providerKey,generationType:clip.generationType||classifyGenerationType(clip),durationSeconds:clip.durationSeconds||Number(scene.duration)||4});
+            // STRICT REAL_AI_VIDEO_REQUIRED: an image converted to pan/zoom motion is
+            // never accepted as a video-generation fallback. A scene must originate
+            // from a real AI video provider and carry generationType=ai-video.
+            if(!clip)throw new Error('No se pudo completar la escena '+(i+1)+' con vídeo IA real.');
+|Number(scene.duration)||4});
             console.log('AutoTube scene clip committed:',i+1,'/',plan.scenes.length,'provider=',clip.providerKey||clip.provider,'duration=',clip.durationSeconds||Number(scene.duration)||4,'s');
           }catch(err){console.warn('AI video scene '+(i+1)+' unavailable:',err.message||String(err));}
         }
