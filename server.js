@@ -1947,6 +1947,45 @@ async function generateAgnesFreeVideoClip(prompt,dir,options={}) {
   }
   throw new Error('Agnes generación agotó el timeout.');
 }
+async function generateMagicHourVideoClip(prompt,dir,options={}) {
+  const key=String(process.env.MAGIC_HOUR_API_KEY||'').trim();
+  if(!key)throw new Error('Magic Hour no configurado: falta MAGIC_HOUR_API_KEY.');
+  const duration=Math.max(2,Math.min(10,Number(options.durationSeconds)||5));
+  const outputPath=path.join(dir,'magichour-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');
+  const controller=new AbortController();
+  const timeoutMs=Math.max(90000,Number(process.env.AUTOTUBE_MAGIC_HOUR_TIMEOUT_MS||480000));
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  async function mhFetch(url,init={}) {
+    const r=await fetch(url,{...init,headers:{accept:'application/json','content-type':'application/json',authorization:'Bearer '+key,...(init.headers||{})},signal:controller.signal});
+    const raw=await r.text(); let body=null; try{body=JSON.parse(raw);}catch{}
+    if(!r.ok)throw new Error('Magic Hour '+String(body?.code||'HTTP_'+r.status)+': '+String(body?.message||body?.error?.message||raw).slice(0,900));
+    return body;
+  }
+  try {
+    const requestedDuration=Math.max(2,Math.min(10,Math.round(duration)));
+    const create=await mhFetch('https://api.magichour.ai/v1/text-to-video',{method:'POST',body:JSON.stringify({
+      name:'AutoTube E2E AI video smoke test',end_seconds:requestedDuration,aspect_ratio:'16:9',
+      resolution:'480p',model:'ltx-2.5',audio:false,style:{prompt:String(prompt||'').slice(0,7000)}
+    })});
+    const id=String(create?.id||'').trim(); if(!id)throw new Error('Magic Hour no devolvió id de proyecto.');
+    const started=Date.now(); let project=null;
+    while(Date.now()-started<timeoutMs-5000){
+      await new Promise(resolve=>setTimeout(resolve,5000));
+      project=await mhFetch('https://api.magichour.ai/v1/video-projects/'+encodeURIComponent(id),{method:'GET'});
+      const status=String(project?.status||'').toLowerCase();
+      if(status==='complete'){
+        const url=String(project?.downloads?.[0]?.url||'').trim(); if(!url)throw new Error('Magic Hour terminó sin URL de descarga.');
+        const vr=await fetch(url,{signal:controller.signal}); if(!vr.ok)throw new Error('Magic Hour descarga HTTP '+vr.status);
+        const buf=Buffer.from(await vr.arrayBuffer()); if(buf.length<1000)throw new Error('Magic Hour devolvió un MP4 demasiado pequeño.');
+        await fs.writeFile(outputPath,buf);
+        return{outputPath,bytes:buf.length,provider:'Magic Hour',model:'ltx-2.5',durationSeconds:requestedDuration,jobId:id,creditsCharged:Number(project?.credits_charged||create?.credits_charged||0),status:'complete'};
+      }
+      if(status==='error'||status==='canceled')throw new Error('Magic Hour job '+status+': '+String(project?.error?.message||project?.error||'sin detalle').slice(0,900));
+    }
+    throw new Error('Magic Hour job excedió el timeout de '+timeoutMs+' ms.');
+  } finally { clearTimeout(timer); }
+}
+
 async function generateBestFreeVideoClip(prompt,dir,options={}) {
   const sceneIndex=Math.max(0,Number(options.sceneIndex)||0);
   const referenceFramePath=String(options.firstFramePath||'').trim();
@@ -1975,7 +2014,8 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     ...(replicateConfigured()&&String(process.env.AUTOTUBE_ENABLE_REPLICATE_VIDEO??'1').trim()!=='0'?['Replicate-Wan']:[]),
     ...(allowPaid&&process.env.REPLICATE_API_TOKEN?['Replicate']:[]),
     ...(allowPaid&&process.env.POLLINATIONS_API_KEY&&String(process.env.AUTOTUBE_ALLOW_POLLINATIONS_PAID||'0').trim()==='1'?['Pollinations']:[]),
-    ...(allowHfInferenceRecovery?['HF-Inference']:[])
+    ...(allowHfInferenceRecovery?['HF-Inference']:[]),
+    ...(magicConfigured?['MagicHour']:[])
   ];
   const aotiEnabled=String(process.env.AUTOTUBE_ENABLE_WAN22_AOTI??'1').trim()!=='0';
   const recoveryOrder=[
@@ -2055,6 +2095,15 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
         const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{success:true});
         return{...clip,providerKey:provider,generationType:'ai-video',validation};
       }catch(err){noteProviderFailure(provider,err);settleHfZeroGpuAttempt(provider,requestedResourceSeconds,{quota:classifyVideoProviderError(err)==='quota'});errors.push(provider+': '+String(err.message||err).slice(0,500));continue;}
+    }
+    if(provider==='MagicHour'){
+      try{
+        const clip=await generateMagicHourVideoClip(prompt,dir,options);
+        const validation=await validateGeneratedVideoClip(clip.outputPath);
+        if(!validation.ok)throw new Error('Magic Hour generó un clip inválido.');
+        noteProviderSuccess(provider); completeFreeAiClip(budgetReservation); budgetCommitted=true;
+        return{...clip,providerKey:provider,generationType:'ai-video',validation};
+      }catch(err){noteProviderFailure(provider,err);errors.push(provider+': '+String(err.message||err).slice(0,700));continue;}
     }
     if(provider==='Pollinations'){
       try{
@@ -3542,7 +3591,7 @@ function autonomousVideoProviderRegistry(){
     {provider:'Wan2.1',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
     {provider:'LTX-0.9.8',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:10,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
     {provider:'Pollinations',integrated:true,configured:pollinationsConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:null,resolutions:[],realAi:true,resourceEnv:null,unit:'unknown'},
-    {provider:'MagicHour',integrated:false,configured:magicConfigured,tasks:['T2V','I2V'],minSeconds:2,maxSeconds:10,resolutions:['480p','720p','1080p'],realAi:true,resourceEnv:null,unit:'credits',externalQuota:'magic'},
+    {provider:'MagicHour',integrated:true,configured:magicConfigured,tasks:['T2V','I2V'],minSeconds:2,maxSeconds:10,resolutions:['480p','720p','1080p'],realAi:true,resourceEnv:null,unit:'credits',externalQuota:'magic'},
     {provider:'LTX-Direct',integrated:false,configured:configured('LTX_API_KEY','LTX_API_TOKEN'),tasks:['T2V','I2V'],minSeconds:6,maxSeconds:20,resolutions:['720p','1080p','4K'],realAi:true,resourceEnv:null,unit:'unknown',externalQuota:'ltx'}
   ];
   return providers;
