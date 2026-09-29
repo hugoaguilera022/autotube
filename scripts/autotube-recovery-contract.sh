@@ -73,7 +73,7 @@ validate_recovery_contract() {
 
   # Core product safety is immutable: deletion of strict-video enforcement
   # lines is rejected. Added references are allowed.
-  if grep -Eiq '^-[^-].*(REAL_AI_VIDEO_REQUIRED|requireRealAiVideoGeneration|validateRenderedMp4|referenceSimilarityValidation)' <<<"$patch"; then
+  if grep -Eiq '^-.*(REAL_AI_VIDEO_REQUIRED|requireRealAiVideoGeneration|validateRenderedMp4|referenceSimilarityValidation)' <<<"$patch"; then
     return 20
   fi
 
