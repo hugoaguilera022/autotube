@@ -15,6 +15,14 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FAL_KEY
+        sync: false
+      - key: REPLICATE_API_TOKEN
+        sync: false
+      - key: STABILITY_API_KEY
+        sync: false
       - key: YOUTUBE_CLIENT_ID
         sync: false
       - key: YOUTUBE_CLIENT_SECRET
@@ -25,6 +33,12 @@ services:
         sync: false
       - key: PIXABAY_API_KEY
         sync: false
+      - key: AUTOTUBE_ALLOW_PAID_PROVIDERS
+        value: "0"
+      - key: AUTOTUBE_VIDEO_PRIMARY
+        value: "fal:seedance-2.5-i2v"
+      - key: AUTOTUBE_VIDEO_FALLBACKS
+        value: "replicate:wan-2.7-i2v,replicate:seedance-2.5"
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: HF_TOKEN
