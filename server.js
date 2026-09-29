@@ -1548,31 +1548,45 @@ async function probeVideoProvider(name){const st=providerState(name);if(st.statu
 async function getVideoProviderHealth(){const result={};for(const name of ['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-Rahul-AOT','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-T2V','Wan2.2-ZeroGPU','OpenKing-Wan2.2','Wan2.2-I2V','LTX-2.5','Wan2.1-VACE','Wan2.1','LTX-0.9.8'])result[name]=providerAvailable(name)?await probeVideoProvider(name):{ok:false,status:providerState(name).status,cooldownUntil:providerState(name).cooldownUntil,lastError:providerState(name).lastError};return result;}
 
 async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
-  const space=String(options.spaceOverride||process.env.WAN22_AOTI_SPACE_URL||'https://zerogpu-aoti-wan2-2-fp8da-aoti-faster.hf.space').trim().replace(/\/$/,'');
+  const {Client,handle_file}=require('@gradio/client');
+  const space=String(options.spaceOverride||process.env.WAN22_AOTI_SPACE_URL||'zerogpu-aoti/wan2-2-fp8da-aoti-faster').trim();
   const token=String(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN||'').trim();
-  const imagePath=String(options.firstFramePath||'').trim(); if(!imagePath)throw new Error('Wan2.2 AoTI requiere frame.');
-  const imageBytes=await fs.readFile(imagePath); const mime=/\.png$/i.test(imagePath)?'image/png':'image/jpeg';
-  const uh={}; if(token)uh.Authorization='Bearer '+token; const form=new FormData(); form.append('files',new Blob([imageBytes],{type:mime}),path.basename(imagePath));
-  const up=await fetch(space+'/gradio_api/upload',{method:'POST',headers:uh,body:form,signal:AbortSignal.timeout(60000)}); const ut=await up.text();
-  if(!up.ok)throw new Error('Wan2.2 AoTI upload HTTP '+up.status+': '+ut.slice(0,1000)); let u=null;try{u=JSON.parse(ut)}catch{}
-  const uploaded=Array.isArray(u)?u[0]:u?.path||u?.[0]; if(!uploaded)throw new Error('Wan2.2 AoTI upload sin path: '+ut.slice(0,1000));
-  const imageFile={path:String(uploaded),meta:{_type:'gradio.FileData'},orig_name:path.basename(imagePath)};
-  const duration=Math.max(0.5,Math.min(Number(process.env.AUTOTUBE_PROVIDER_REQUEST_MAX_SECONDS||120),Number(options.durationSeconds)||3));
-  const data=[imageFile,String(prompt||'').trim(),4,String(options.negativePrompt||'blurry, jittery, distorted anatomy, text, logos, watermark').trim(),duration,1,1,Math.floor(Math.random()*2147483647),true];
-  const h={'Content-Type':'application/json'};if(token)h.Authorization='Bearer '+token;
-  const submit=await fetch(space+'/gradio_api/call/generate_video',{method:'POST',headers:h,body:JSON.stringify({data}),signal:AbortSignal.timeout(30000)});const st=await submit.text();
-  if(!submit.ok)throw new Error('Wan2.2 AoTI submit HTTP '+submit.status+': '+st.slice(0,1200));let p=null;try{p=JSON.parse(st)}catch{}
-  const id=String(p?.event_id||'').trim();if(!id)throw new Error('Wan2.2 AoTI no event_id: '+st.slice(0,800));
-  const stream=await fetch(space+'/gradio_api/call/generate_video/'+encodeURIComponent(id),{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(300000)});
-  if(!stream.ok)throw new Error('Wan2.2 AoTI SSE HTTP '+stream.status);const reader=stream.body?.getReader();if(!reader)throw new Error('Wan2.2 AoTI no SSE');
-  const decoder=new TextDecoder();let buffer='',completed=null,errorMessage='';
-  while(true){const part=await reader.read();if(part.done)break;buffer+=decoder.decode(part.value,{stream:true});const evs=buffer.split(/\n\n/);buffer=evs.pop()||'';for(const block of evs){const ev=(block.match(/(?:^|\n)event:\s*([^\n]+)/)||[])[1]?.trim()||'';const dl=(block.match(/(?:^|\n)data:\s*([\s\S]+)/)||[])[1]?.trim()||'';if(ev==='error'||ev==='exception'){errorMessage=dl||ev;break;}if(ev==='complete'){try{completed=JSON.parse(dl)}catch(e){errorMessage='invalid complete payload '+dl.slice(0,1200)}break;}}if(completed!==null||errorMessage)break;}
-  await reader.cancel().catch(()=>{});if(errorMessage)throw new Error('Wan2.2 AoTI generation error: '+String(errorMessage).slice(0,1800));
-  const arr=Array.isArray(completed)?completed:(completed?.data||[]),cand=[];const collect=v=>{if(v==null)return;if(typeof v==='string')cand.push(v);else if(Array.isArray(v))v.forEach(collect);else if(typeof v==='object')for(const k of ['video','url','path','value'])if(v[k]!=null)collect(v[k]);};collect(arr);
-  const raw=cand.find(x=>/\.mp4($|[?#])|^https?:|^\//i.test(x))||cand[0];if(!raw)throw new Error('Wan2.2 AoTI complete sin vídeo: '+JSON.stringify(arr).slice(0,2000));
-  const url=String(raw).startsWith('http')?String(raw):space+String(raw).replace(/^\//,'/');const resp=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(120000)});if(!resp.ok)throw new Error('Wan2.2 AoTI download HTTP '+resp.status);
-  const outputPath=path.join(dir,'wan22-aoti-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4');await fs.writeFile(outputPath,Buffer.from(await resp.arrayBuffer()));const validation=await validateGeneratedVideoClip(outputPath);if(!validation.ok)throw new Error('Wan2.2 AoTI invalid clip');
-  return{outputPath,bytes:(await fs.stat(outputPath)).size,provider:'Hugging Face ZeroGPU · Wan2.2 AoTI',model:'Wan2.2 I2V A14B FP8 Lightning',durationSeconds:validation.durationSeconds,status:'complete'};
+  const firstFramePath=String(options.firstFramePath||'').trim();
+  if(!firstFramePath)throw new Error('Wan2.2 AoTI requiere frame.');
+  const duration=Math.max(0.5,Math.min(5,Number(options.durationSeconds)||3.5));
+  const steps=Math.max(4,Math.min(8,Number(options.steps)||4));
+  const seed=Math.floor(Math.random()*2147483647);
+  console.log('[Wan2.2-AoTI] starting Gradio client generation',JSON.stringify({space,duration,steps,hasFrame:true}));
+  let result;
+  try{
+    const app=await Client.connect(space,token?{token}:undefined);
+    result=await app.predict('/generate_video',[
+      await handle_file(firstFramePath),
+      String(prompt||'').trim(),
+      steps,
+      String(options.negativePrompt||'worst quality, blurry, jittery, distorted, text, logos, watermark, duplicate subjects').trim(),
+      duration,
+      Number(options.guidanceScale||1),
+      Number(options.guidanceScale2||1),
+      seed,
+      true
+    ]);
+  }catch(err){
+    const detail=err?.message||String(err);
+    const extra=err?.cause?.message||err?.cause?.detail||err?.response?.data||'';
+    throw new Error('Wan2.2 AoTI Gradio generation failed: '+detail+(extra?' | detail='+String(extra).slice(0,1800):''));
+  }
+  const data=Array.isArray(result?.data)?result.data:[];
+  const output=data[0];
+  if(!output)throw new Error('Wan2.2 AoTI terminó sin salida: '+JSON.stringify(data).slice(0,2500));
+  console.log('[Wan2.2-AoTI] generation returned output',JSON.stringify({type:typeof output,keys:typeof output==='object'?Object.keys(output):[]}).slice(0,1200));
+  const outputPath=await downloadGradioOutput(output,'https://'+space+'.hf.space',token,dir,'wan22-aoti-generated');
+  const validation=await validateGeneratedVideoClip(outputPath);
+  if(!validation.ok)throw new Error('Wan2.2 AoTI produjo un clip inválido.');
+  const stat=await fs.stat(outputPath);
+  if(!stat.size)throw new Error('Wan2.2 AoTI produjo un archivo vacío.');
+  console.log('[Wan2.2-AoTI] validated real MP4',JSON.stringify({bytes:stat.size,durationSeconds:validation.durationSeconds}));
+  return{outputPath,bytes:stat.size,provider:'Hugging Face ZeroGPU · Wan2.2 AoTI',model:'Wan2.2 I2V A14B FP8 Lightning',durationSeconds:validation.durationSeconds,status:'complete'};
 }
 
 async function generateFreeLtx23ZeroGpuVideoClip(prompt,dir,options={}) {
