@@ -94,48 +94,25 @@ export DEPLOY_ID="$deploy_id" COMMIT="$commit"
 [ -n "$RENDER_LOG" ] || export RENDER_LOG="Render incident $deploy_id status=$status and no diagnostic log was returned."
 
 python3 - <<'PY'
-import json,os,urllib.request
-prompt="""Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH.
-Diagnose the concrete failed Render deployment below and repair its root cause.
-Compare at least TWO viable FREE alternatives when the failure is provider/infrastructure related, then implement the most stable route.
-Preserve real AI video generation, reference analysis, strict motion/video/MP4 QA.
-Never replace AI video with static images, stock, pan/zoom or fake video.
-Never weaken validation. Do not change secrets, authentication, billing, permissions, repository, branch, or paid-plan settings.
-Workflow files MAY be changed whenever the required web/production fix needs a change in GitHub automation or deployment configuration, not only when the workflow itself caused the failure; changes must be necessary, validated, and must not alter secrets/permissions.
-Render configuration changes ARE allowed whenever they are required to implement the web/production solution, not only when Render caused the failure. This includes safe start/build command, health check, non-secret AUTOTUBE_* operational environment variables, service runtime configuration, and other non-billing operational settings supported by the Render API. The repair agent may choose GitHub, Render, or both according to where the solution must be implemented.
-Never create or modify secret/token/key/password values. If a secret is missing, return NO_SAFE_PATCH rather than inventing it.
-Maximum 2 existing application files. No new dependency unless clearly necessary. Keep valid Node.js.
-
-RECOVERY ENGINE CONTEXT:
-- incident resource: $recovery_resource
-- failure class: $recovery_class
-- selected recovery strategy: $recovery_strategy
-- repair attempt: $repair_attempt/3
-Rules:
-1. If the resource is HF_ZERO_GPU with quota exhausted, DO NOT add more ZeroGPU Spaces as if they were independent capacity. Treat ZeroGPU as one shared resource and move to a genuinely independent route.
-2. If a provider is 402/payment/access limited, do not retry it; switch provider/resource or return NO_SAFE_PATCH if no free route exists.
-3. If capacity/503 is provider-specific, use cooldown + another independent provider.
-4. If the failure is code/infrastructure, repair the root cause rather than adding retries.
-5. Preserve strict real-AI-video requirements. Image+FFmpeg motion is never an AI-video success.
-6. A repair must change the recovery strategy or root cause; a patch that only increases retries/cooldowns is not sufficient unless the diagnosis explicitly proves transient capacity.
-7. Compare at least TWO viable FREE alternatives in your reasoning before choosing the implementation.
-
-If a Render change is required, append:
-RENDER_ACTIONS
-RENDER_ENV_SET KEY=VALUE
-RENDER_SERVICE_PATCH {"serviceDetails":{"buildCommand":"...","startCommand":"...","healthCheckPath":"..."}}
-END_RENDER_ACTIONS
-Only include the exact actions required; omit unchanged fields.
-
-FAILED DEPLOY: """+os.environ["DEPLOY_ID"]+"\nCOMMIT: "+os.environ["COMMIT"]+"\nRENDER LOG:\n"+os.environ["RENDER_LOG"]
+import json, os, urllib.error, urllib.request
+prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. Resource=%s Class=%s Strategy=%s Attempt=%s/3 Incident=%s Commit=%s Logs=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""))
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
-req=urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",data=json.dumps(body).encode(),headers={"content-type":"application/json","x-goog-api-key":os.environ["GEMINI_API_KEY"]},method="POST")
-with urllib.request.urlopen(req,timeout=90) as r: data=json.load(r)
-out=data["candidates"][0]["content"]["parts"][0]["text"].strip()
-if out.startswith("```"): out=out.split("\n",1)[1].rsplit("\n",1)[0]
-open("render-repair.patch","w").write(out+"\n")
+models=["gemini-3.1-flash-lite","gemini-3.8-flash","gemini-2.5-flash-lite","gemini-2.5-flash"]
+for model in models:
+    url="https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent"
+    req=urllib.request.Request(url,data=json.dumps(body).encode(),headers={"content-type":"application/json","x-goog-api-key":os.environ["GEMINI_API_KEY"]},method="POST")
+    try:
+        with urllib.request.urlopen(req,timeout=90) as response: data=json.load(response)
+        out=data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        if out.startswith("```"): out=out.split("\n",1)[1].rsplit("\n",1)[0]
+        open("render-repair.patch","w").write(out+"\n")
+        print("Recovery model succeeded:",model)
+        break
+    except urllib.error.HTTPError as ex:
+        print("Recovery model failed:",model,ex.code)
+else:
+    raise RuntimeError("All Gemini recovery models failed")
 PY
-
 if grep -qx "NO_SAFE_PATCH" render-repair.patch; then gh issue create --repo "$REPOSITORY" --title "AutoTube Render deploy needs manual repair: $deploy_id" --body "Render deploy $deploy_id failed and no safe patch was produced."; exit 0; fi
 
 python3 - <<'PY'
