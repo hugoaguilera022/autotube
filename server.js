@@ -1600,9 +1600,15 @@ async function buildWan22AotiInputs(app,space,{frame,prompt,negative,duration,gu
     else if(key==='seed')value=seedValue;
     else if(key.includes('randomizeseed'))value=true;
     else if(key.includes('quality'))value=5;
+    else if(key.includes('framemultiplier')||key.includes('videofps')||key.includes('fluidity'))value=16;
+    else if(key.includes('safemode'))value=false;
+    else if(key.includes('flowshift'))value=3.0;
     else if(key.includes('scheduler')){
       value=choiceDefault(p);
-      if(value===undefined)value=p.optional?null:'default';
+      if(value===undefined){
+        const choices=p?.type?.enum||p?.enum||p?.choices||p?.component_config?.choices;
+        value=Array.isArray(choices)&&choices.length?choices[0]:(p.optional?null:'UniPCMultistep');
+      }
     }
     else if(p.default!==undefined)value=p.default;
     else if(p.optional)value=null;
