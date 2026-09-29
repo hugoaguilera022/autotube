@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Restore repository file modes after the workflow self-test chmod step so mode drift is never committed.
+chmod a-x scripts/autotube-recovery-contract.sh scripts/autotube-render-autorepair.sh 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/autotube-recovery-contract.sh"
