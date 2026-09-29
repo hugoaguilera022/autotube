@@ -4,6 +4,17 @@ set -euo pipefail
 strategy="${1:-}"
 case "$strategy" in
   HF_INFERENCE_RESOURCE_SWITCH|INDEPENDENT_FREE_PROVIDER)
+    # Prefer a runtime preflight so the check sees the same Render credentials
+    # that the production generator will use. Never expose the token.
+    if [ -n "${AUTOTUBE_RUNTIME_PREFLIGHT_URL:-}" ]; then
+      runtime="$(curl -sS --max-time 25 "${AUTOTUBE_RUNTIME_PREFLIGHT_URL}?strategy=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$strategy")" || true)"
+      if printf '%s' "$runtime" | jq -e '.ok==true' >/dev/null 2>&1; then
+        echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy source=runtime $(printf '%s' "$runtime" | jq -r '.provider // "unknown"')"
+        exit 0
+      fi
+      echo "RECOVERY_PREFLIGHT_RUNTIME_REJECTED strategy=$strategy detail=$(printf '%s' "$runtime" | jq -r '.reason // .error // "unknown"' 2>/dev/null || true)"
+      exit 20
+    fi
     token="${HF_TOKEN:-${HUGGINGFACE_TOKEN:-}}"
     [ -n "$token" ] || { echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=HF_TOKEN_MISSING"; exit 20; }
     curl --fail-with-body -sS --max-time 20 -H "Authorization: Bearer $token" -H "Accept: application/json" https://huggingface.co/api/whoami-v2 >/tmp/autotube-hf-whoami.json || {
