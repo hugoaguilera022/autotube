@@ -3566,9 +3566,12 @@ function buildAutonomousRouteMatrix({need,externalCapacity}){
   const routes=autonomousVideoProviderRegistry().map(route=>{
     const state=providerRuntimeState(route.provider);
     const requiredTotal=need.videoSeconds;
-    const maxPerRequest=Number(route.maxSeconds);
-    const durationOk=!Number.isFinite(maxPerRequest)||need.perSceneSeconds<=maxPerRequest;
-    const minOk=!Number.isFinite(Number(route.minSeconds))||need.perSceneSeconds>=Number(route.minSeconds);
+    const hasMax=route.maxSeconds!==null&&route.maxSeconds!==undefined&&Number.isFinite(Number(route.maxSeconds));
+    const hasMin=route.minSeconds!==null&&route.minSeconds!==undefined&&Number.isFinite(Number(route.minSeconds));
+    const maxPerRequest=hasMax?Number(route.maxSeconds):null;
+    const minPerRequest=hasMin?Number(route.minSeconds):null;
+    const durationOk=!hasMax||need.perSceneSeconds<=maxPerRequest;
+    const minOk=!hasMin||need.perSceneSeconds>=minPerRequest;
     const resolutionOk=!route.resolutions?.length||route.resolutions.map(String).map(x=>x.toLowerCase()).includes(desiredResolution)||desiredResolution==='auto';
     const taskNeeded=route.tasks.includes('T2V')?'T2V':route.tasks[0];
     const referenceOk=!route.requiresReferenceFrame||referencePlanned;
