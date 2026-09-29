@@ -141,11 +141,13 @@ else
 fi
 
 DETERMINISTIC_PATCH_READY="false"
+APPLIED_STRATEGY="$recovery_strategy"
 if [ "$recovery_resource" = "HF_ZERO_GPU" ] && [ "${AUTOTUBE_SKIP_DETERMINISTIC_HF:-0}" != "1" ]; then
   echo "RECOVERY ENGINE: attempting deterministic HF_ZERO_GPU provider switch before Gemini."
   if bash scripts/autotube-hf-zerogpu-recovery.sh render-repair.patch; then
     if grep -q '^diff --git ' render-repair.patch; then
       DETERMINISTIC_PATCH_READY="true"
+      APPLIED_STRATEGY="HF_ZERO_GPU_PROVIDER_SWITCH"
       echo "RECOVERY ENGINE: deterministic HF_ZERO_GPU patch generated successfully; runtime credentials will select the independent provider."
     fi
   else
@@ -299,7 +301,7 @@ if printf "%s\n" "$changed" | grep -Eq "(^|/)\.github/|(^|/)\.env|(^|/)package-l
 git config user.name "AutoTube Render Repair Bot"
 git config user.email "actions@users.noreply.github.com"
 if [ "$runtime_incident" = "true" ]; then
-  repair_commit_message="[autotube-auto-repair] runtime repair $runtime_fingerprint strategy:$recovery_strategy runtime-fingerprint:$runtime_fingerprint render-deploy:$deploy_id"
+  repair_commit_message="[autotube-auto-repair] runtime repair $runtime_fingerprint strategy:$APPLIED_STRATEGY runtime-fingerprint:$runtime_fingerprint render-deploy:$deploy_id"
 else
   repair_commit_message="[autotube-auto-repair] fix Render deploy $deploy_id render-deploy:$deploy_id"
 fi
