@@ -158,7 +158,7 @@ Only include the exact actions required; omit unchanged fields.
 
 FAILED DEPLOY: """+os.environ["DEPLOY_ID"]+"\nCOMMIT: "+os.environ["COMMIT"]+"\nRENDER LOG:\n"+os.environ["RENDER_LOG"]
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
-req=urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="+os.environ["GEMINI_API_KEY"],data=json.dumps(body).encode(),headers={"content-type":"application/json"},method="POST")
+req=urllib.request.Request("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent,data=json.dumps(body).encode(),headers={"content-type":"application/json","x-goog-api-key":os.environ["GEMINI_API_KEY"]},method="POST")
 with urllib.request.urlopen(req,timeout=90) as r: data=json.load(r)
 out=data["candidates"][0]["content"]["parts"][0]["text"].strip()
 if out.startswith("```"): out=out.split("\n",1)[1].rsplit("\n",1)[0]
