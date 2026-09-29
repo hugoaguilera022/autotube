@@ -16,6 +16,7 @@ used(){ grep -Fq "strategy:$1" <<<"$history"; }
 
 score=0
 ranked=()
+PLAN_FILE="${AUTOTUBE_STRATEGY_PLAN_FILE:-/tmp/autotube-recovery-strategy-plan.txt}"
 
 add_candidate() {
   local name="$1" base="$2" reason="$3"
