@@ -1580,6 +1580,12 @@ async function buildWan22AotiInputs(app,space,{frame,prompt,negative,duration,gu
   if(!params.length)throw new Error('AoTI /generate_video no expone parámetros en view_api().');
   const lower=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'');
   const values={};
+  const choiceDefault=p=>{
+    if(p.default!==undefined&&p.default!==null)return p.default;
+    const choices=p?.type?.enum||p?.enum||p?.choices||p?.component_config?.choices;
+    if(Array.isArray(choices)&&choices.length)return choices[0];
+    return undefined;
+  };
   for(const p of params){
     const key=lower(p.label||p.name||'');
     let value;
@@ -1594,12 +1600,20 @@ async function buildWan22AotiInputs(app,space,{frame,prompt,negative,duration,gu
     else if(key==='seed')value=seedValue;
     else if(key.includes('randomizeseed'))value=true;
     else if(key.includes('quality'))value=5;
+    else if(key.includes('scheduler')){
+      value=choiceDefault(p);
+      if(value===undefined)value=p.optional?null:'default';
+    }
     else if(p.default!==undefined)value=p.default;
     else if(p.optional)value=null;
-    else throw new Error('AoTI parámetro no reconocido: '+String(p.label||p.name||'unknown'));
+    else {
+      const fallback=choiceDefault(p);
+      if(fallback!==undefined)value=fallback;
+      else throw new Error('AoTI parámetro no reconocido: '+String(p.label||p.name||'unknown'));
+    }
     values[p.name||p.label]=value;
   }
-  console.log('[Wan2.2-AoTI] resolved /generate_video schema',JSON.stringify(params.map(p=>({name:p.name,label:p.label,component:p.component}))).slice(0,3000));
+  console.log('[Wan2.2-AoTI] resolved /generate_video schema',JSON.stringify(params.map(p=>({name:p.name,label:p.label,component:p.component,default:p.default,choices:p?.type?.enum||p?.enum||p?.choices||p?.component_config?.choices}))).slice(0,5000));
   return params.map(p=>values[p.name||p.label]);
 }
 async function generateFreeWan22AotiVideoClip(prompt,dir,options={}) {
