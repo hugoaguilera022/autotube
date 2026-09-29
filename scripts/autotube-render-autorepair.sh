@@ -131,8 +131,33 @@ python3 - <<'PY'
 import json, os, urllib.error, urllib.request, subprocess
 prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTIONS block, or NO_SAFE_PATCH. Diagnose and repair the concrete Render/runtime incident. Compare at least TWO viable FREE alternatives for provider/infrastructure failures and implement the most stable route. Treat shared ZeroGPU Spaces as ONE resource, not independent providers. If the current resource is exhausted, switch resource class instead of adding more Spaces from the same resource. Preserve real AI video generation and strict QA. Never replace AI video with static images, stock, pan/zoom or fake video. Never weaken validation. Do not modify secrets, authentication, billing, permissions, repository or branch. Maximum 2 existing application files. No new dependency unless clearly necessary. If the current resource is unavailable and no independent free route is technically available from the repository/runtime context, return NO_SAFE_PATCH instead of inventing an API or weakening validation. Repair provider adapters, fallback selection, checkpoint/retry state, FFmpeg/render logic, YouTube acquisition, networking, memory, or deployment configuration when logs identify those as the root cause. Never merely retry the same failing operation. Resource=%s Class=%s Strategy=%s Attempt=%s/%s Incident=%s Commit=%s Logs=%s""" % (os.environ.get("RECOVERY_RESOURCE","UNKNOWN"),os.environ.get("RECOVERY_CLASS","UNKNOWN"),os.environ.get("RECOVERY_STRATEGY","PROVIDER_CASCADE"),os.environ.get("REPAIR_ATTEMPT","1"),os.environ.get("MAX_RECOVERY_ATTEMPTS","12"),os.environ.get("DEPLOY_ID",""),os.environ.get("COMMIT",""),os.environ.get("RENDER_LOG",""))
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
-models=["gemini-3.1-flash-lite","gemini-3.8-flash","gemini-2.5-flash-lite","gemini-2.5-flash"]
-for model in models:
+# Discover the models currently exposed to THIS Gemini API key before trying repairs.
+# This prevents stale/deprecated model IDs from consuming the recovery window.
+models_json="$(curl --fail-with-body -sS \
+  -H "Accept: application/json" \
+  -H "x-goog-api-key: $GEMINI_API_KEY" \
+  "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100" || true)"
+mapfile -t discovered_models < <(printf '%s' "$models_json" | jq -r '.models[]? | select((.supportedGenerationMethods // []) | index("generateContent")) | .name // empty' 2>/dev/null | sed 's#^models/##')
+preferred_models=(
+  "gemini-3.1-flash-lite"
+  "gemini-3.5-flash-lite"
+  "gemini-3.5-flash"
+  "gemini-3.6-flash"
+  "gemini-3.7-flash"
+  "gemini-3.8-flash"
+)
+models=()
+for model in "${preferred_models[@]}" "${discovered_models[@]}"; do
+  [ -n "$model" ] || continue
+  case " ${models[*]} " in *" $model "*) continue;; esac
+  models+=("$model")
+done
+if [ "${#models[@]}" -eq 0 ]; then
+  echo "Gemini model discovery returned no generateContent models; using known current IDs."
+  models=("${preferred_models[@]}")
+fi
+echo "Recovery Gemini candidates: ${models[*]}"
+for model in "${models[@]}"; do
     url="https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent"
     req=urllib.request.Request(url,data=json.dumps(body).encode(),headers={"content-type":"application/json","x-goog-api-key":os.environ["GEMINI_API_KEY"]},method="POST")
     try:
