@@ -96,12 +96,12 @@ previous_repairs="$(git log --all --oneline --grep="runtime-fingerprint:$runtime
 repair_attempt="$(printf '%s\\n' "$previous_repairs" | sed '/^$/d' | wc -l | tr -d ' ')"
 repair_attempt=$((repair_attempt + 1))
 
-# Hard circuit breaker: after three distinct repair attempts for the same incident,
-# do not keep producing blind patches. Surface the incident as a real blocker.
+# Hard circuit breaker: 12 recovery strategies per incident. A new causal
+# fingerprint starts a new incident; the same fingerprint cannot loop forever.
 MAX_RECOVERY_ATTEMPTS="${AUTOTUBE_MAX_RECOVERY_ATTEMPTS:-12}"
 if [ "$repair_attempt" -gt "$MAX_RECOVERY_ATTEMPTS" ]; then
-  gh issue create --repo "$REPOSITORY" --title "AutoTube recovery exhausted: $recovery_resource" --body "Incident $incident_key exhausted 3 autonomous repair attempts. Resource=$recovery_resource class=$recovery_class strategy=$recovery_strategy. Last deploy=$deploy_id fingerprint=$runtime_fingerprint." || true
-  echo "RECOVERY_TERMINAL: maximum autonomous repair attempts reached."
+  gh issue create --repo "$REPOSITORY" --title "AutoTube recovery exhausted: $recovery_resource" --body "Incident $incident_key exhausted $MAX_RECOVERY_ATTEMPTS autonomous recovery attempts. Resource=$recovery_resource class=$recovery_class strategy=$recovery_strategy. Last deploy=$deploy_id fingerprint=$runtime_fingerprint." || true
+  echo "RECOVERY_TERMINAL: maximum autonomous recovery attempts reached."
   exit 0
 fi
 
