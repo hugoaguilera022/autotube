@@ -159,9 +159,11 @@ jobs:
               echo "Render autonomous repair is already active; no overlap."
             fi
 
-            if [ "$canonical" -eq 0 ] && [ "$heal" -eq 0 ]; then
+            if [ "$canonical" -eq 0 ] && [ "$heal" -eq 0 ] && [ "$render_repair" -eq 0 ]; then
               echo "No canonical pipeline or recovery is active; dispatching canonical E2E."
               gh workflow run autotube-e2e.yml --repo "$REPOSITORY" --ref main
+            elif [ "$render_repair" -gt 0 ]; then
+              echo "Render recovery is active; waiting for exact repaired SHA before starting canonical E2E."
             else
               echo "Canonical pipeline/recovery is active; no overlap."
             fi
