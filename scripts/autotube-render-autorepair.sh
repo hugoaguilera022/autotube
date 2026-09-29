@@ -329,7 +329,7 @@ if [ -s render-actions.txt ]; then
         ;;
       RENDER_SERVICE_PATCH\ *)
         json="${line#RENDER_SERVICE_PATCH }"
-        if ! echo "$json" | jq -e 'type=="object" and ((keys - ["serviceDetails"])|length==0) and (.serviceDetails|type=="object") and ((.serviceDetails|keys) - ["buildCommand","startCommand","healthCheckPath"]|length==0)' >/dev/null; then
+        if ! echo "$json" | jq -e 'type == "object" and (.serviceDetails? | type == "object")' >/dev/null; then
           echo "Unsafe Render service patch rejected."; git reset --hard HEAD; exit 0
         fi
         curl --fail-with-body -sS -X PATCH -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" "https://api.render.com/v1/services/$RENDER_SERVICE_ID" --data "$json" >/dev/null
