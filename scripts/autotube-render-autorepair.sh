@@ -135,6 +135,7 @@ export DEPLOY_ID="$deploy_id" COMMIT="$commit"
 strategy_history="$(git log --all --format='%s' --grep="runtime-fingerprint:$runtime_fingerprint" -n 20 || true)"
 export STRATEGY_HISTORY="$strategy_history"
 if bash scripts/autotube-recovery-strategy-engine.sh; then
+  echo "RECOVERY_STRATEGY_PLAN_FILE=/tmp/autotube-recovery-strategy-plan.txt"
   selected_strategy="$(head -n1 /tmp/autotube-recovery-strategy-plan.txt | cut -d'|' -f2-2 || true)"
   if [ -n "$selected_strategy" ]; then
     recovery_strategy="$selected_strategy"
