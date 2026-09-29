@@ -1570,8 +1570,8 @@ async function validateHfTokenForAutotube(token){
 }
 function normalizeGradioSpaceUrl(space){
   const raw=String(space||'').trim();
-  if(/^https?:\\/\\//i.test(raw))return raw.replace(/\\/$/,'');
-  return 'https://'+raw.replace(/\\/$/,'')+'.hf.space';
+  if(/^https?:\/\//i.test(raw)) return raw.replace(/\/$/,'');
+  return 'https://'+raw.replace(/\/$/,'')+'.hf.space';
 }
 async function buildWan22AotiInputs(app,space,{frame,prompt,negative,duration,guidance1,guidance2,steps,seedValue}){
   const api=await app.view_api();
