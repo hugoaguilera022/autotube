@@ -1872,22 +1872,28 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   const allowReplicateRecovery =
     Boolean(process.env.REPLICATE_API_TOKEN) &&
     String(process.env.AUTOTUBE_ENABLE_REPLICATE_VIDEO_RECOVERY??'0').trim()==='1';
-  const order=[
-    ...(allowPaid&&process.env.REPLICATE_API_TOKEN?['Replicate']:[]),
-    ...(allowPaid&&(process.env.HF_TOKEN||process.env.HUGGINGFACE_TOKEN)?['HF-Inference']:[]),
-    ...(allowPaid&&process.env.POLLINATIONS_API_KEY&&String(process.env.AUTOTUBE_ALLOW_POLLINATIONS_PAID||'0')==='1'?['Pollinations']:[]),
-    ...(allowHfInferenceRecovery?['HF-Inference']:[]),
-    ...(allowPollinationsRecovery?['Pollinations']:[]),
-    ...(allowReplicateRecovery?['Replicate']:[]),
+  // Market-selected backbone: try the providers we intentionally selected for
+  // production BEFORE legacy/HF recovery routes. A failed provider is quarantined by
+  // noteProviderFailure/providerAvailable, so the next attempt moves to a genuinely
+  // different capability route instead of repeating the same dead lane.
+  const legacyEnabled=String(process.env.AUTOTUBE_LEGACY_VIDEO_FALLBACKS||'0').trim()==='1';
+  const marketOrder=[
     ...(falConfigured()&&String(process.env.AUTOTUBE_ENABLE_FAL_VIDEO??'1').trim()!=='0'?['FAL']:[]),
     ...(replicateConfigured()&&String(process.env.AUTOTUBE_ENABLE_REPLICATE_VIDEO??'1').trim()!=='0'?['Replicate-Wan']:[]),
+    ...(allowPaid&&process.env.REPLICATE_API_TOKEN?['Replicate']:[]),
+    ...(allowPaid&&process.env.POLLINATIONS_API_KEY&&String(process.env.AUTOTUBE_ALLOW_POLLINATIONS_PAID||'0').trim()==='1'?['Pollinations']:[]),
+    ...(allowHfInferenceRecovery?['HF-Inference']:[])
+  ];
+  const recoveryOrder=[
     ...(process.env.FREE_AI_API_KEY?['Free.ai']:[]),
     ...(process.env.PIXAZO_API_KEY?['Pixazo-Free']:[]),
     ...(process.env.AGNES_API_KEY?['Agnes-Free']:[]),
-    ...(referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','Wan2.2-I2V','Wan2.1-VACE']:[]),
-    'Wan2.2-Rahul-T2V',
-    'Wan2.2-ZeroGPU','OpenKing-Wan2.2','LTX-2.5','Wan2.1','LTX-0.9.8'
+    ...(allowPollinationsRecovery?['Pollinations']:[]),
+    ...(allowReplicateRecovery?['Replicate']:[]),
+    ...(legacyEnabled&&referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','Wan2.2-I2V','Wan2.1-VACE']:[]),
+    ...(legacyEnabled?['Wan2.2-Rahul-T2V','Wan2.2-ZeroGPU','OpenKing-Wan2.2','LTX-2.5','Wan2.1','LTX-0.9.8']:[])
   ];
+  const order=[...new Set([...marketOrder,...recoveryOrder])];
   const errors=[];
   
   let budgetReservation=0;
