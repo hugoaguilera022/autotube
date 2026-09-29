@@ -10,6 +10,20 @@ status="$(echo "$latest" | jq -r '.status // empty')"
 commit="$(echo "$latest" | jq -r '.commit.id // empty')"
 deploy_id="$(echo "$latest" | jq -r '.id // empty')"
 
+# A queued/building deploy must never hide a live runtime incident. Render can
+# queue newer deploys behind the currently live revision, so inspect the newest
+# LIVE deploy independently and use it for runtime diagnosis.
+live="$(echo "$deploys" | jq -c '[.[] | (.deploy // .) | select(.status=="live")] | .[0] // empty')"
+if [ -n "$live" ]; then
+  live_status="live"
+  live_commit="$(echo "$live" | jq -r '.commit.id // empty')"
+  live_deploy_id="$(echo "$live" | jq -r '.id // empty')"
+else
+  live_status=""
+  live_commit=""
+  live_deploy_id=""
+fi
+
 runtime_incident="false"
 runtime_fingerprint=""
 case "$status" in
@@ -40,8 +54,33 @@ case "$status" in
     fi
     ;;
   *)
-    echo "Latest Render deploy $deploy_id status=$status; no repair required."
-    exit 0
+    # Do not stop merely because a newer deploy is queued/in progress. If a
+    # live revision exists, inspect its runtime logs before deciding there is
+    # nothing to repair.
+    if [ "$live_status" = "live" ]; then
+      now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      since="$(date -u -d '35 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+      curl --fail-with-body -sS -G -H "Accept: application/json" -H "Authorization: Bearer $RENDER_API_KEY"         --data-urlencode "ownerId=$RENDER_OWNER_ID" --data-urlencode "resource=$RENDER_SERVICE_ID"         --data-urlencode "startTime=$since" --data-urlencode "endTime=$now"         --data-urlencode "direction=forward" --data-urlencode "limit=100"         "https://api.render.com/v1/logs" > render-runtime-logs.json || true
+      runtime_matches="$(jq -r '.logs[]?.message // empty' render-runtime-logs.json 2>/dev/null | grep -Ei 'RETRYABLE_AI_VIDEO_INCOMPLETE|REAL_AI_VIDEO_REQUIRED|visual-sources-all-scenes.*failed|AI video scene .* unavailable|ZeroGPU quota|MUSIC_PROVIDERS_EXHAUSTED|audio.*QA.*fail|402|429|502|503|504|ECONNRESET|ETIMEDOUT|out of memory|heap out of memory' | tail -n 120 || true)"
+      if [ -n "$runtime_matches" ]; then
+        runtime_incident="true"
+        incident_kind="runtime"
+        runtime_fingerprint="$(printf '%s
+' "$runtime_matches" | sed -E 's/[0-9a-f]{8}-[0-9a-f-]{27,}/<ID>/g; s/20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z/<TIME>/g; s/[0-9]{10,}/<N>/g' | sha256sum | cut -d' ' -f1)"
+        deploy_id="runtime-$runtime_fingerprint"
+        commit="$live_commit"
+        started="$since"
+        finished="$now"
+        export RENDER_LOG="$runtime_matches"
+        echo "Detected LIVE runtime failure while latest deploy is $status; escalating to autonomous repair fingerprint=$runtime_fingerprint live_deploy=$live_deploy_id"
+      else
+        echo "Latest Render deploy $deploy_id status=$status; LIVE deploy $live_deploy_id has no repair-worthy runtime failure."
+        exit 0
+      fi
+    else
+      echo "Latest Render deploy $deploy_id status=$status; no live revision available for runtime diagnosis."
+      exit 0
+    fi
     ;;
 esac
 
