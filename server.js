@@ -1715,6 +1715,41 @@ async function waitForAgnesStatusSlot(minIntervalMs=15000){
   agnesStatusNextAt=Date.now()+Math.max(10000,minIntervalMs);
   release();
 }
+async function generateFreeAiVideoClip(prompt,dir,options={}) {
+  const key=String(process.env.FREE_AI_API_KEY||'').trim();
+  if(!key)throw new Error('FREE_AI_API_KEY no configurada.');
+  const duration=Math.max(2,Math.min(3,Number(options.durationSeconds)||3));
+  const model=String(process.env.FREE_AI_VIDEO_MODEL||'').trim();
+  const payload={prompt:String(prompt||'').trim(),duration};
+  if(model)payload.model=model;
+  const create=await fetch('https://api.free.ai/v1/video/generate/',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(90000)});
+  const raw=await create.text(); let data=null; try{data=raw?JSON.parse(raw):null}catch{}
+  if(!create.ok)throw new Error('Free.ai video '+create.status+': '+raw.slice(0,700));
+  let videoUrl=String(data?.video_url||data?.url||'').trim();
+  const jobId=String(data?.job_id||data?.id||data?.task_id||'').trim();
+  if(!videoUrl&&jobId){
+    const deadline=Date.now()+180000;
+    let delay=10000;
+    while(Date.now()<deadline){
+      await new Promise(r=>setTimeout(r,delay));
+      const sr=await fetch('https://api.free.ai/v1/status/'+encodeURIComponent(jobId)+'/',{headers:{Authorization:'Bearer '+key,Accept:'application/json'},signal:AbortSignal.timeout(30000)});
+      const sb=await sr.text(); let sd=null; try{sd=sb?JSON.parse(sb):null}catch{}
+      if(!sr.ok)throw new Error('Free.ai status '+sr.status+': '+sb.slice(0,500));
+      videoUrl=String(sd?.video_url||sd?.url||sd?.result?.video_url||'').trim();
+      const status=String(sd?.status||sd?.state||'').toLowerCase();
+      if(/failed|error|cancel/.test(status))throw new Error('Free.ai video generation failed: '+String(sd?.error||sd?.message||status).slice(0,500));
+      if(videoUrl)break;
+      delay=Math.min(30000,delay+5000);
+    }
+  }
+  if(!videoUrl)throw new Error('Free.ai no devolvió video_url.');
+  const vr=await fetch(videoUrl,{signal:AbortSignal.timeout(120000)}); if(!vr.ok)throw new Error('Free.ai video download '+vr.status);
+  const bytes=Buffer.from(await vr.arrayBuffer()); if(bytes.length<10000)throw new Error('Free.ai vídeo vacío.');
+  const outputPath=path.join(dir,'free-ai-generated-'+Date.now()+'-'+crypto.randomBytes(4).toString('hex')+'.mp4'); await fs.writeFile(outputPath,bytes);
+  const validation=await validateGeneratedVideoClip(outputPath); if(!validation.ok)throw new Error('Free.ai vídeo no pasó QA.');
+  return{outputPath,bytes:bytes.length,provider:'Free.ai',model:model||'CogVideoX',durationSeconds:validation.durationSeconds,status:'complete'};
+}
+
 async function generateAgnesFreeVideoClip(prompt,dir,options={}) {
   const key=String(process.env.AGNES_API_KEY||'').trim();
   if(!key)throw new Error('AGNES_API_KEY no configurada.');
@@ -1791,6 +1826,7 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     ...(allowHfInferenceRecovery?['HF-Inference']:[]),
     ...(allowPollinationsRecovery?['Pollinations']:[]),
     ...(allowReplicateRecovery?['Replicate']:[]),
+    ...(process.env.FREE_AI_API_KEY?['Free.ai']:[]),
     ...(process.env.AGNES_API_KEY?['Agnes-Free']:[]),
     ...(referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','Wan2.2-I2V','Wan2.1-VACE']:[]),
     'Wan2.2-Rahul-T2V',
@@ -1804,6 +1840,16 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   catch(err){ throw err; }
   const requestedResourceSeconds=Math.max(3,Number(options.durationSeconds)||3);
   for(const provider of [...new Set(order)]){
+    if(provider==='Free.ai'){
+      try{
+        const clip=await generateFreeAiVideoClip(prompt,dir,options);
+        const validation=await validateGeneratedVideoClip(clip.outputPath); noteProviderSuccess(provider);
+        completeFreeAiClip(budgetReservation); budgetCommitted=true;
+        return{...clip,providerKey:provider,generationType:'ai-video',validation};
+      }catch(err){
+        noteProviderFailure(provider,err); errors.push(provider+': '+String(err.message||err).slice(0,500)); continue;
+      }
+    }
     if(provider==='Agnes-Free'){
       try{
         const clip=await generateAgnesFreeVideoClip(prompt,dir,options);
