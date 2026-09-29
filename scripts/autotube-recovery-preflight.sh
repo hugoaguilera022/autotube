@@ -10,16 +10,20 @@ case "$strategy" in
       echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=HF_TOKEN_INVALID_OR_INACCESSIBLE"; exit 21;
     }
     model="${AUTOTUBE_HF_PREFLIGHT_MODEL:-Wan-AI/Wan2.1-T2V-1.3B}"
-    probe_url="https://router.huggingface.co/fal-ai/v1/videos/generations"
-    probe_payload="$(jq -nc --arg model "$model" '{model:$model,prompt:"A short cinematic abstract motion test for AutoTube recovery",num_frames:8,fps:4}')"
-    http_code="$(curl -sS --max-time 45 -o /tmp/autotube-hf-probe.json -w '%{http_code}' -X POST "$probe_url" -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data "$probe_payload" || true)"
-    case "$http_code" in
-      2??) echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy provider=HF_INFERENCE"; exit 0;;
-      401|403) echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=HF_PROVIDER_ACCESS_DENIED"; exit 22;;
-      402) echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=HF_PROVIDER_CREDIT_EXHAUSTED"; exit 23;;
-      429) echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=HF_PROVIDER_RATE_LIMIT"; exit 24;;
-      *) echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=HF_PROVIDER_UNAVAILABLE_HTTP_${http_code:-000}"; exit 25;;
-    esac
+    # Availability probe: confirm that the selected text-to-video model is currently
+    # mapped to at least one live Inference Provider. The actual clip generation
+    # remains the authoritative provider test and E2E gate.
+    model="${AUTOTUBE_HF_PREFLIGHT_MODEL:-Wan-AI/Wan2.1-T2V-1.3B}"
+    encoded_model="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1],safe=""))' "$model")"
+    mapping="$(curl --fail-with-body -sS --max-time 20       -H "Authorization: Bearer $token" -H "Accept: application/json"       "https://huggingface.co/api/models/$encoded_model?expand=inferenceProviderMapping")" || {
+        echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=HF_MODEL_MAPPING_UNAVAILABLE"; exit 25;
+      }
+    live_count="$(printf '%s' "$mapping" | jq '[.inferenceProviderMapping // {} | to_entries[] | select(.value.status=="live")] | length')"
+    [ "$live_count" -gt 0 ] || {
+      echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=HF_NO_LIVE_VIDEO_PROVIDER"; exit 26;
+    }
+    echo "RECOVERY_PREFLIGHT_PASS strategy=$strategy provider=HF_INFERENCE liveProviders=$live_count model=$model"
+    exit 0
     ;;
   HF_ZERO_GPU_PROVIDER_SWITCH)
     echo "RECOVERY_PREFLIGHT_FAIL strategy=$strategy reason=ZERO_GPU_NOT_SELECTED_BY_PREFLIGHT"; exit 30;;
