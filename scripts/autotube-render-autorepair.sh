@@ -236,4 +236,81 @@ else
   repair_commit_message="[autotube-auto-repair] fix Render deploy $deploy_id render-deploy:$deploy_id"
 fi
 git add -A && git commit -m "$repair_commit_message" && git push origin HEAD:main
-echo "Repair pushed to main; Render auto-deploy and canonical cycle continue."
+
+# Deployment handoff is part of recovery, not a best-effort side effect.
+REPAIRED_SHA="$(git rev-parse HEAD)"
+echo "RECOVERY_HANDOFF: pushed repaired SHA=$REPAIRED_SHA; waiting for Render."
+
+render_deploy_for_sha() {
+  curl --fail-with-body -sS \
+    -H "Accept: application/json" \
+    -H "Authorization: Bearer $RENDER_API_KEY" \
+    "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=20" |
+    jq -c --arg sha "$REPAIRED_SHA" '[.[] | (.deploy // .) | select(.commit.id == $sha)] | .[0] // empty'
+}
+
+RENDER_DEPLOY_ID=""
+for attempt in $(seq 1 12); do
+  matched="$(render_deploy_for_sha || true)"
+  if [ -n "$matched" ]; then
+    RENDER_DEPLOY_ID="$(echo "$matched" | jq -r '.id // empty')"
+    echo "RECOVERY_HANDOFF: Render acknowledged SHA=$REPAIRED_SHA deploy=$RENDER_DEPLOY_ID"
+    break
+  fi
+  echo "RECOVERY_HANDOFF: no Render deploy for SHA=$REPAIRED_SHA yet (poll $attempt/12)."
+  sleep 20
+done
+
+# Only if auto-deploy failed to acknowledge the exact SHA do we use a bounded
+# explicit deploy fallback. This avoids duplicate deploys during normal operation.
+if [ -z "$RENDER_DEPLOY_ID" ]; then
+  echo "RECOVERY_HANDOFF: auto-deploy did not acknowledge SHA=$REPAIRED_SHA; triggering fallback deploy."
+  fallback_json="$(curl --fail-with-body -sS -X POST \
+    -H "Authorization: Bearer $RENDER_API_KEY" \
+    -H "Content-Type: application/json" \
+    "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
+    --data '{"deployMode":"build_and_deploy"}')"
+  RENDER_DEPLOY_ID="$(echo "$fallback_json" | jq -r '.id // .deploy.id // empty')"
+  [ -n "$RENDER_DEPLOY_ID" ] || {
+    echo "RECOVERY_DEPLOY_BLOCKED: Render returned no deploy id for repaired SHA=$REPAIRED_SHA."
+    exit 1
+  }
+fi
+
+# A deploy existing is not success. The exact repaired SHA must become LIVE.
+live_verified="false"
+for attempt in $(seq 1 24); do
+  deploy_json="$(curl --fail-with-body -sS \
+    -H "Accept: application/json" \
+    -H "Authorization: Bearer $RENDER_API_KEY" \
+    "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys/$RENDER_DEPLOY_ID" || true)"
+  deploy_status="$(echo "$deploy_json" | jq -r '.status // empty' 2>/dev/null || true)"
+  deploy_sha="$(echo "$deploy_json" | jq -r '.commit.id // empty' 2>/dev/null || true)"
+  echo "RECOVERY_DEPLOY_VERIFY: deploy=$RENDER_DEPLOY_ID status=$deploy_status sha=$deploy_sha poll=$attempt/24"
+
+  if [ "$deploy_sha" != "$REPAIRED_SHA" ]; then
+    echo "RECOVERY_DEPLOY_VERIFY: SHA mismatch; expected=$REPAIRED_SHA actual=$deploy_sha"
+    sleep 20
+    continue
+  fi
+
+  case "$deploy_status" in
+    live)
+      live_verified="true"
+      break
+      ;;
+    build_failed|update_failed|pre_deploy_failed|deactivated)
+      echo "RECOVERY_DEPLOY_FAILED: exact repaired SHA=$REPAIRED_SHA reached Render but status=$deploy_status."
+      exit 1
+      ;;
+  esac
+  sleep 20
+done
+
+[ "$live_verified" = "true" ] || {
+  echo "RECOVERY_DEPLOY_TIMEOUT: exact repaired SHA=$REPAIRED_SHA did not become LIVE."
+  exit 1
+}
+
+echo "RECOVERY_DEPLOY_VERIFIED: Render LIVE with exact repaired SHA=$REPAIRED_SHA deploy=$RENDER_DEPLOY_ID."
+echo "Repair pushed to main; exact SHA reached Render LIVE; canonical cycle may continue."
