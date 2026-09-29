@@ -3490,6 +3490,21 @@ function resourceTargetDurationSeconds(){
   const configured=Math.max(5,Number(process.env.AUTOTUBE_AUTONOMOUS_MAX_DURATION_SECONDS||20)||20);
   return Math.min(3600,configured);
 }
+const autonomousQuotaProbe={
+  status:'IDLE',
+  provider:null,
+  startedAt:0,
+  attempts:0,
+  lastResult:null
+};
+function autonomousProbeDurationSeconds(){return 5;}
+function autonomousProbeEligibleProvider(routePlan){
+  return routePlan.routes.find(r=>
+    r.configured&&r.integrated&&r.realAi&&r.state==='available'&&
+    r.reason==='quota_unknown_probe_required'&&
+    !r.requiresReferenceFrame
+  )||null;
+}
 function autonomousVideoProviderRegistry(){
   const configured=(...names)=>names.some(name=>Boolean(String(process.env[name]||'').trim()));
   const legacyEnabled=String(process.env.AUTOTUBE_LEGACY_VIDEO_FALLBACKS||'0').trim()==='1';
@@ -3507,7 +3522,7 @@ function autonomousVideoProviderRegistry(){
     {provider:'Replicate-Wan',integrated:true,configured:replicateConfiguredNow,tasks:['T2V','I2V'],minSeconds:2,maxSeconds:30,resolutions:['720p'],realAi:true,resourceEnv:'AUTOTUBE_REPLICATE_REMAINING_VIDEO_SECONDS',unit:'seconds'},
     {provider:'HF-Inference',integrated:true,configured:hfConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:null,resolutions:[],realAi:true,resourceEnv:'AUTOTUBE_HF_INFERENCE_REMAINING_SECONDS',unit:'seconds'},
     {provider:'Pixazo-Free',integrated:true,configured:pixazoConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:10,resolutions:['720p','1080p'],realAi:true,resourceEnv:null,unit:'unknown'},
-    {provider:'Agnes-Free',integrated:true,configured:agnesConfigured,tasks:['T2V'],minSeconds:5,maxSeconds:20,resolutions:['1152x768'],realAi:true,resourceEnv:null,unit:'unknown'},
+    {provider:'Agnes-Free',integrated:true,configured:agnesConfigured,tasks:['T2V'],minSeconds:5,maxSeconds:20,resolutions:['1152x768'],outputNormalization:true,realAi:true,resourceEnv:null,unit:'unknown'},
     {provider:'Free.ai',integrated:true,configured:freeAiConfigured,tasks:['T2V'],minSeconds:2,maxSeconds:3,resolutions:[],realAi:true,resourceEnv:null,unit:'unknown'},
     {provider:'Wan2.2-AoTI',integrated:true,configured:aotiEnabled&&hfConfigured,tasks:['I2V'],minSeconds:0.5,maxSeconds:5,resolutions:[],realAi:true,requiresReferenceFrame:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
     {provider:'Wan2.2-AoTI-R3GM',integrated:legacyEnabled,configured:legacyEnabled&&hfConfigured,tasks:['I2V'],minSeconds:0.5,maxSeconds:5,resolutions:[],realAi:true,requiresReferenceFrame:true,resourceEnv:'AUTOTUBE_ZEROGPU_REMAINING_SECONDS',unit:'seconds'},
@@ -3601,7 +3616,7 @@ function buildAutonomousRouteMatrix({need,externalCapacity}){
     else if(!minOk)reason='scene_duration_below_provider_minimum';
     else if(!resolutionOk)reason='resolution_not_supported';
     else if(!referenceOk)reason='reference_frame_unavailable';
-    else if(capacityStatus==='unknown')reason='quota_unknown';
+    else if(capacityStatus==='unknown')reason='quota_unknown_probe_required';
     else if(!resourceOk)reason='insufficient_quota';
     return {
       provider:route.provider,
@@ -3648,7 +3663,9 @@ async function evaluateAutonomousResourceGate(){
     String(process.env.GEMINI_API_KEY||'').trim() ||
     String(process.env.FAL_KEY||process.env.FAL_API_KEY||'').trim()
   );
-  const complete=Boolean(routePlan.selected&&renderAvailable&&geminiConfigured&&musicCanRun);
+  const confirmed=routePlan.eligible.filter(r=>r.capacityStatus==='explicit'||r.capacityStatus==='live');
+  const probeCandidates=routePlan.routes.filter(r=>r.configured&&r.integrated&&r.realAi&&r.state==='available'&&r.reason==='quota_unknown_probe_required');
+  const complete=Boolean(confirmed[0]&&renderAvailable&&geminiConfigured&&musicCanRun);
   autonomousResourceGate.checkedAt=Date.now();
   autonomousResourceGate.required={...need,render:true,gemini:true,music:true};
   autonomousResourceGate.available={
@@ -3657,18 +3674,21 @@ async function evaluateAutonomousResourceGate(){
     routeMatrix:routePlan.routes,
     viableRoutes:routePlan.eligible.map(x=>x.provider),
     selectedRoute:routePlan.selected,
+    probeCandidates:probeCandidates.map(x=>x.provider),
     render:renderAvailable,
     gemini:geminiConfigured,
     music:musicCanRun
   };
   autonomousResourceGate.route=routePlan.selected;
-  autonomousResourceGate.status=complete?'READY':'WAITING_FOR_RESOURCES';
+  autonomousResourceGate.status=complete?'READY':(probeCandidates.length?'PROBE_REQUIRED':'WAITING_FOR_RESOURCES');
   autonomousResourceGate.reason=complete
-    ?'Existe una ruta completa, integrada y con capacidad explícitamente confirmada para TODO el ciclo.'
-    :'No existe una ruta completa, integrada y con cuota/capacidad explícitamente confirmada para TODO el ciclo. El ciclo NO se inicia.';
+    ?'Existe una ruta completa, integrada y con capacidad confirmada para TODO el ciclo.'
+    :(probeCandidates.length
+      ?'No existe una ruta con cuota confirmada. Hay proveedores configurados cuya cuota es desconocida y requieren una prueba real controlada de 5 s antes de iniciar producción.'
+      :'No existe una ruta completa, integrada y con cuota/capacidad confirmada para TODO el ciclo. El ciclo NO se inicia.');
   if(!complete)console.warn('[ResourceGate] autonomous cycle NOT STARTED:',autonomousResourceGate.reason,JSON.stringify(autonomousResourceGate.available));
   else console.log('[ResourceGate] autonomous cycle preflight READY:',JSON.stringify({required:autonomousResourceGate.required,route:routePlan.selected?.provider,allViable:routePlan.eligible.map(x=>x.provider)}));
-  return {ok:complete,...autonomousResourceGate};
+  return {ok:complete,probeRequired:Boolean(!complete&&probeCandidates.length),...autonomousResourceGate};
 }
 
 function reserveAutonomousResources(gate){
@@ -3732,7 +3752,16 @@ async function runAutonomousCycle(){
   if(recentDone){autonomousStopped=true;console.log('AutoTube autonomous cycle: validated MP4 already exists; supervisor stopped:',recentDone.id);return;}
   // HARD GATE: only a brand-new production cycle is blocked by missing resources.
   const resourceGate=await evaluateAutonomousResourceGate();
-  if(!resourceGate.ok||!reserveAutonomousResources(resourceGate)){
+  if(!resourceGate.ok){
+    if(resourceGate.probeRequired){
+      console.warn('[ResourceGate] full cycle held: controlled 5s quota probe required before production.');
+      autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
+    }else{
+      autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
+    }
+    return;
+  }
+  if(!reserveAutonomousResources(resourceGate)){
     autonomousLastStart=Date.now()+Math.max(autonomousIntervalMs,60000);
     return;
   }
