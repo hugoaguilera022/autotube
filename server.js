@@ -2433,7 +2433,8 @@ async function executeFullPipelineTest(reference,testId=null){
             // never accepted as a video-generation fallback. A scene must originate
             // from a real AI video provider and carry generationType=ai-video.
             if(!clip)throw new Error('No se pudo completar la escena '+(i+1)+' con vídeo IA real.');
-            aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model,providerKey:clip.providerKey,generationType:clip.generationType||classifyGenerationType(clip),durationSeconds:clip.durationSeconds||Number(scene.duration)||4});
+            if(String(clip.generationType||'')!=='ai-video')throw new Error('REAL_AI_VIDEO_REQUIRED: la escena '+(i+1)+' no procede de un generador de vídeo IA real.');
+            aiClips.push({path:clip.outputPath,mediaType:'video',provider:clip.provider,model:clip.model,providerKey:clip.providerKey,generationType:'ai-video',durationSeconds:clip.durationSeconds||Number(scene.duration)||4});
             console.log('AutoTube scene clip committed:',i+1,'/',plan.scenes.length,'provider=',clip.providerKey||clip.provider,'duration=',clip.durationSeconds||Number(scene.duration)||4,'s');
           }catch(err){console.warn('AI video scene '+(i+1)+' unavailable:',err.message||String(err));}
         }
