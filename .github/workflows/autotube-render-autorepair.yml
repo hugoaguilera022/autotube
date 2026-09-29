@@ -16,6 +16,8 @@ on:
     paths:
       - '.github/workflows/autotube-render-autorepair.yml'
       - 'scripts/autotube-render-autorepair.sh'
+      - 'scripts/autotube-recovery-strategy-engine.sh'
+      - 'scripts/autotube-recovery-contract.sh'
 
 concurrency:
   group: autotube-repair-authority
