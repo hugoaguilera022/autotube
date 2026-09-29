@@ -133,20 +133,41 @@ prompt = """Return ONLY a unified git diff, optionally followed by a RENDER_ACTI
 body={"contents":[{"parts":[{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":12000}}
 # Discover the models currently exposed to THIS Gemini API key before trying repairs.
 # This prevents stale/deprecated model IDs from consuming the recovery window.
-models_json="$(curl --fail-with-body -sS \
-  -H "Accept: application/json" \
-  -H "x-goog-api-key: $GEMINI_API_KEY" \
-  "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100" || true)"
-mapfile -t discovered_models < <(printf '%s' "$models_json" | jq -r '.models[]? | select((.supportedGenerationMethods // []) | index("generateContent")) | .name // empty' 2>/dev/null | sed 's#^models/##')
-preferred_models=(
-  "gemini-3.1-flash-lite"
-  "gemini-3.5-flash-lite"
-  "gemini-3.5-flash"
-  "gemini-3.6-flash"
-  "gemini-3.7-flash"
-  "gemini-3.8-flash"
-)
-models=()
+preferred_models=[
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash",
+]
+discovered_models=[]
+try:
+    req=urllib.request.Request(
+        "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100",
+        headers={"x-goog-api-key":os.environ["GEMINI_API_KEY"],"accept":"application/json"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req,timeout=20) as response:
+        catalog=json.load(response)
+    for item in catalog.get("models",[]):
+        methods=item.get("supportedGenerationMethods",[]) or []
+        if "generateContent" in methods:
+            name=str(item.get("name","")).strip()
+            if name.startswith("models/"):
+                name=name[7:]
+            if name:
+                discovered_models.append(name)
+except Exception as exc:
+    print("Gemini model discovery unavailable:",str(exc)[:300])
+
+models=[]
+for model in preferred_models+discovered_models:
+    if model and model not in models:
+        models.append(model)
+if not models:
+    models=list(preferred_models)
+print("Recovery Gemini candidates:", " ".join(models))
 for model in "${preferred_models[@]}" "${discovered_models[@]}"; do
   [ -n "$model" ] || continue
   case " ${models[*]} " in *" $model "*) continue;; esac
