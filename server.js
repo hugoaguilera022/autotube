@@ -2081,13 +2081,19 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
   catch(err){ throw err; }
   const requestedResourceSeconds=Math.max(3,Number(options.durationSeconds)||3);
   const allocationRows=new Map((activeVideoAllocation?.rows||[]).map(r=>[r.provider,r]));
-  const executableOrder=[...new Set(order)].filter(provider=>{
-    const row=allocationRows.get(provider);
-    if(!row)return true;
-    return Number(row.remainingSeconds)>=requestedResourceSeconds;
-  });
+  // Strict waterfall gate: when live capacity has been measured, only routes with
+  // enough reserved-capacity budget for THIS request are executable. Unknown-capacity
+  // routes are not guessed or probed as a substitute; if no measured route can satisfy
+  // the next scene, the job must enter CAPACITY_WAIT_REQUIRED and re-check later.
+  const hasMeasuredAllocation=allocationRows.size>0;
+  const executableOrder=hasMeasuredAllocation
+    ? [...new Set(order)].filter(provider=>{
+        const row=allocationRows.get(provider);
+        return Boolean(row)&&Number(row.remainingSeconds)>=requestedResourceSeconds;
+      })
+    : [...new Set(order)];
   if(!executableOrder.length){
-    throw new Error('CAPACITY_WAIT_REQUIRED: ninguna ruta tiene capacidad suficiente para la siguiente petición de '+requestedResourceSeconds+'s.');
+    throw new Error('CAPACITY_WAIT_REQUIRED: ninguna ruta con capacidad medida tiene capacidad suficiente para la siguiente petición de '+requestedResourceSeconds+'s; esperar y reconsultar proveedores.');
   }
   for(const provider of executableOrder){
     if(!reserveVideoAllocation(provider,requestedResourceSeconds))continue;
