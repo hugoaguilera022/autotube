@@ -1885,12 +1885,13 @@ async function generateBestFreeVideoClip(prompt,dir,options={}) {
     ...(allowHfInferenceRecovery?['HF-Inference']:[])
   ];
   const recoveryOrder=[
+    // Free ZeroGPU routes are attempted before quota-bound third-party APIs.
+    ...(legacyEnabled&&referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','Wan2.2-I2V','Wan2.1-VACE']:[]),
     ...(process.env.FREE_AI_API_KEY?['Free.ai']:[]),
     ...(process.env.PIXAZO_API_KEY?['Pixazo-Free']:[]),
     ...(process.env.AGNES_API_KEY?['Agnes-Free']:[]),
     ...(allowPollinationsRecovery?['Pollinations']:[]),
     ...(allowReplicateRecovery?['Replicate']:[]),
-    ...(legacyEnabled&&referenceFramePath?['LTX-2.3-ZeroGPU','Wan2.2-AoTI','Wan2.2-AoTI-R3GM','Wan2.2-AoTI-CB','Wan2.2-Rahul-AOT','Wan2.2-I2V','Wan2.1-VACE']:[]),
     ...(legacyEnabled?['Wan2.2-Rahul-T2V','Wan2.2-ZeroGPU','OpenKing-Wan2.2','LTX-2.5','Wan2.1','LTX-0.9.8']:[])
   ];
   const order=[...new Set([...marketOrder,...recoveryOrder])];
