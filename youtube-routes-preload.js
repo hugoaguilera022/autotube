@@ -2,6 +2,8 @@ require('dotenv').config();
 const crypto = require('crypto');
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
+const fs = require('fs');
+const { LA_ULTIMA_CLAVE_AUTOMATION } = require('./server/youtube-automation-config');
 
 function clean(v){ return String(v||'').trim(); }
 function supabase(){
@@ -97,7 +99,7 @@ function install(){
           const url=auth.generateAuthUrl({
             access_type:'offline',
             prompt:'consent',
-            scope:['https://www.googleapis.com/auth/youtube.readonly']
+            scope:['https://www.googleapis.com/auth/youtube','https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.readonly']
           });
           return res.redirect(url);
         }catch(e){ return res.status(500).send('No se pudo iniciar la conexión con YouTube: '+e.message); }
@@ -128,6 +130,71 @@ function install(){
           console.error('YouTube profile:',e.message);
           return res.status(401).json({connected:false,error:'La conexión de YouTube ha caducado o no es válida.'});
         }
+      });
+
+      app.post('/api/youtube/upload',async(req,res)=>{
+        try{
+          await load();
+          if(!tokens) return res.status(401).json({ok:false,error:'YouTube no está conectado.'});
+          const body=req.body||{};
+          const filePath=clean(body.filePath);
+          if(!filePath) return res.status(400).json({ok:false,error:'Falta filePath.'});
+          const auth=oauth(); auth.setCredentials(tokens);
+          const yt=google.youtube({version:'v3',auth});
+          const title=clean(body.title)||'La Última Clave';
+          const description=String(body.description||'').trim();
+          const visibility=clean(body.visibility)||LA_ULTIMA_CLAVE_AUTOMATION.publishing.defaultVisibility;
+          const publishAt=clean(body.publishAt);
+          const status={privacyStatus:publishAt?'private':visibility};
+          if(publishAt) status.publishAt=new Date(publishAt).toISOString();
+          const result=await yt.videos.insert({
+            part:'snippet,status',
+            requestBody:{snippet:{
+              title,
+              description,
+              categoryId:clean(body.categoryId)||'24',
+              tags:Array.isArray(body.tags)?body.tags:[],
+              defaultLanguage:'es'
+            },status},
+            media:{body:fs.createReadStream(filePath)}
+          });
+          const videoId=result.data?.id;
+          if(!videoId) throw new Error('YouTube no devolvió videoId.');
+          if(body.thumbnailPath){
+            await yt.thumbnails.set({videoId,media:{body:fs.createReadStream(clean(body.thumbnailPath))}});
+          }
+          if(body.playlistId){
+            await yt.playlistItems.insert({
+              part:'snippet',
+              requestBody:{snippet:{playlistId:clean(body.playlistId),resourceId:{kind:'youtube#video',videoId}}}
+            });
+          }
+          return res.json({ok:true,videoId,watchUrl:'https://www.youtube.com/watch?v='+videoId,status:result.data?.status||null});
+        }catch(e){
+          console.error('YouTube upload:',e.message);
+          return res.status(500).json({ok:false,error:e.message});
+        }
+      });
+
+      app.get('/api/youtube/analytics',async(req,res)=>{
+        try{
+          await load();
+          if(!tokens) return res.status(401).json({ok:false,error:'YouTube no está conectado.'});
+          const auth=oauth(); auth.setCredentials(tokens);
+          const analytics=google.youtubeAnalytics({version:'v2',auth});
+          const end=clean(req.query.end)||new Date().toISOString().slice(0,10);
+          const start=clean(req.query.start)||new Date(Date.now()-28*86400000).toISOString().slice(0,10);
+          const metrics=clean(req.query.metrics)||'views,likes,comments,subscribersGained,estimatedMinutesWatched,averageViewDuration,averageViewPercentage';
+          const r=await analytics.reports.query({ids:'channel==MINE',startDate:start,endDate:end,metrics,dimensions:clean(req.query.dimensions)||'video',sort:'-views',maxResults:50});
+          return res.json({ok:true,startDate:start,endDate:end,rows:r.data.rows||[],columnHeaders:r.data.columnHeaders||[]});
+        }catch(e){
+          console.error('YouTube analytics:',e.message);
+          return res.status(500).json({ok:false,error:e.message});
+        }
+      });
+
+      app.get('/api/youtube/automation-config',async(_req,res)=>{
+        return res.json({ok:true,config:LA_ULTIMA_CLAVE_AUTOMATION});
       });
 
       app.post('/api/youtube/disconnect',async(_req,res)=>{
