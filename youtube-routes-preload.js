@@ -8,8 +8,31 @@ const { LA_ULTIMA_CLAVE_AUTOMATION } = require('./server/youtube-automation-conf
 function clean(v){ return String(v||'').trim(); }
 function supabaseSecretKey(){
   const key=clean(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY);
-  if(key && /\\s/.test(key)){
-    throw new Error('SUPABASE_SECRET_KEY contiene espacios o saltos de línea. Corrige la variable en Render.');
+  if(key){
+    const hasSpaces = /[ \\t]/.test(key);
+    const hasNewlines = /[\\r\\n]/.test(key);
+    const prefix = key.slice(0, 10);
+    const suffix = key.slice(-10);
+    console.log('[SupabaseKey] diagnostic', JSON.stringify({
+      source: process.env.SUPABASE_SECRET_KEY ? 'SUPABASE_SECRET_KEY' : 'SUPABASE_SERVICE_ROLE_KEY',
+      length: key.length,
+      prefix,
+      suffix,
+      hasSpaces,
+      hasNewlines
+    }));
+    if(hasSpaces || hasNewlines){
+      throw new Error('SUPABASE_SECRET_KEY contiene espacios o saltos de línea. Revisa la variable en Render.');
+    }
+  } else {
+    console.log('[SupabaseKey] diagnostic', JSON.stringify({
+      source: 'none',
+      length: 0,
+      prefix: '',
+      suffix: '',
+      hasSpaces: false,
+      hasNewlines: false
+    }));
   }
   return key;
 }
