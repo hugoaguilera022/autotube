@@ -99,7 +99,7 @@ function install(){
           const url=auth.generateAuthUrl({
             access_type:'offline',
             prompt:'consent',
-            scope:['https://www.googleapis.com/auth/youtube','https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.readonly']
+            scope:['https://www.googleapis.com/auth/youtube','https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.readonly','https://www.googleapis.com/auth/yt-analytics.readonly']
           });
           return res.redirect(url);
         }catch(e){ return res.status(500).send('No se pudo iniciar la conexión con YouTube: '+e.message); }
