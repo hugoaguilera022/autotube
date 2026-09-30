@@ -6,9 +6,16 @@ const fs = require('fs');
 const { LA_ULTIMA_CLAVE_AUTOMATION } = require('./server/youtube-automation-config');
 
 function clean(v){ return String(v||'').trim(); }
+function supabaseSecretKey(){
+  const key=clean(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY);
+  if(key && /\\s/.test(key)){
+    throw new Error('SUPABASE_SECRET_KEY contiene espacios o saltos de línea. Corrige la variable en Render.');
+  }
+  return key;
+}
 function supabase(){
   const url=clean(process.env.SUPABASE_URL).replace(/\/+$/,'');
-  const key=clean(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const key=supabaseSecretKey();
   return url&&key ? createClient(url,key,{auth:{autoRefreshToken:false,persistSession:false,detectSessionInUrl:false}}) : null;
 }
 function encKey(){
