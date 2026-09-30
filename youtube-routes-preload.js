@@ -7,31 +7,32 @@ const { LA_ULTIMA_CLAVE_AUTOMATION } = require('./server/youtube-automation-conf
 
 function clean(v){ return String(v||'').trim(); }
 function supabaseSecretKey(){
-  const key=clean(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const source=process.env.SUPABASE_SECRET_KEY ? 'SUPABASE_SECRET_KEY' : 'SUPABASE_SERVICE_ROLE_KEY';
+  const raw=String(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY||'');
+  const hasSpaces = /[ \\t]/.test(raw);
+  const hasNewlines = /[\\r\\n]/.test(raw);
+  const key=raw.replace(/[\\r\\n\\t ]+/g,'').trim();
   if(key){
-    const hasSpaces = /[ \\t]/.test(key);
-    const hasNewlines = /[\\r\\n]/.test(key);
-    const prefix = key.slice(0, 10);
-    const suffix = key.slice(-10);
     console.log('[SupabaseKey] diagnostic', JSON.stringify({
-      source: process.env.SUPABASE_SECRET_KEY ? 'SUPABASE_SECRET_KEY' : 'SUPABASE_SERVICE_ROLE_KEY',
+      source,
+      rawLength: raw.length,
       length: key.length,
-      prefix,
-      suffix,
+      prefix: key.slice(0, 10),
+      suffix: key.slice(-10),
       hasSpaces,
-      hasNewlines
+      hasNewlines,
+      normalized: raw !== key
     }));
-    if(hasSpaces || hasNewlines){
-      throw new Error('SUPABASE_SECRET_KEY contiene espacios o saltos de línea. Revisa la variable en Render.');
-    }
   } else {
     console.log('[SupabaseKey] diagnostic', JSON.stringify({
       source: 'none',
+      rawLength: 0,
       length: 0,
       prefix: '',
       suffix: '',
       hasSpaces: false,
-      hasNewlines: false
+      hasNewlines: false,
+      normalized: false
     }));
   }
   return key;
