@@ -9,6 +9,14 @@ const youtubeUpload = multer({dest:os.tmpdir(),limits:{fileSize:250*1024*1024}})
 const { LA_ULTIMA_CLAVE_AUTOMATION } = require('./server/youtube-automation-config');
 
 function clean(v){ return String(v||'').trim(); }
+function internalOnly(req,res,next){
+  const expected=clean(process.env.CLIPFORGE_INTERNAL_TOKEN);
+  const supplied=clean(req.get('x-clipforge-internal-token'));
+  if(!expected || !supplied || supplied!==expected){
+    return res.status(403).json({ok:false,error:'internal_only'});
+  }
+  return next();
+}
 function supabaseSecretKey(){
   const source=process.env.SUPABASE_SECRET_KEY ? 'SUPABASE_SECRET_KEY' : 'SUPABASE_SERVICE_ROLE_KEY';
   const raw=String(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY||'');
@@ -124,7 +132,7 @@ function install(){
     if(!app.__autotubeYoutubeRoutes){
       app.__autotubeYoutubeRoutes=true;
 
-      app.get('/api/youtube/auth',async(_req,res)=>{
+      app.get('/api/youtube/auth',internalOnly,async(_req,res)=>{
         try{
           if(!process.env.YOUTUBE_CLIENT_ID||!process.env.YOUTUBE_CLIENT_SECRET){
             return res.status(503).send('Faltan YOUTUBE_CLIENT_ID o YOUTUBE_CLIENT_SECRET en Render.');
@@ -155,7 +163,7 @@ function install(){
         }
       });
 
-      app.get('/api/youtube/profile',async(_req,res)=>{
+      app.get('/api/youtube/profile',internalOnly,async(_req,res)=>{
         try{
           const p=await profile();
           if(!p) return res.json({connected:false});
@@ -166,7 +174,7 @@ function install(){
         }
       });
 
-      app.post('/api/youtube/upload',youtubeUpload.single('video'),async(req,res)=>{
+      app.post('/api/youtube/upload',internalOnly,youtubeUpload.single('video'),async(req,res)=>{
         try{
           await load();
           if(!tokens) return res.status(401).json({ok:false,error:'YouTube no está conectado.'});
@@ -213,7 +221,7 @@ function install(){
         }
       });
 
-      app.get('/api/youtube/analytics',async(req,res)=>{
+      app.get('/api/youtube/analytics',internalOnly,async(req,res)=>{
         try{
           await load();
           if(!tokens) return res.status(401).json({ok:false,error:'YouTube no está conectado.'});
@@ -230,11 +238,11 @@ function install(){
         }
       });
 
-      app.get('/api/youtube/automation-config',async(_req,res)=>{
+      app.get('/api/youtube/automation-config',internalOnly,async(_req,res)=>{
         return res.json({ok:true,config:LA_ULTIMA_CLAVE_AUTOMATION});
       });
 
-      app.post('/api/youtube/disconnect',async(_req,res)=>{
+      app.post('/api/youtube/disconnect',internalOnly,async(_req,res)=>{
         try{
           tokens=null; loaded=true;
           const db=supabase();
