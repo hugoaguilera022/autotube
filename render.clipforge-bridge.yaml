@@ -1,0 +1,14 @@
+# Keep AutoTube as an internal YouTube OAuth/publishing provider for ClipForge.
+# The public user interface remains ClipForge Studio; this service supplies OAuth,
+# upload and analytics APIs behind the ClipForge same-origin proxy.
+services:
+  - type: web
+    name: autotube
+    runtime: node
+    repo: https://github.com/hugoaguilera022/autotube
+    branch: codex/clipforge-youtube-publish-bridge
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeployTrigger: off
