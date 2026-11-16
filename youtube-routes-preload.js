@@ -3,6 +3,9 @@ const crypto = require('crypto');
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs');
+const os = require('os');
+const multer = require('multer');
+const youtubeUpload = multer({dest:os.tmpdir(),limits:{fileSize:250*1024*1024}});
 const { LA_ULTIMA_CLAVE_AUTOMATION } = require('./server/youtube-automation-config');
 
 function clean(v){ return String(v||'').trim(); }
@@ -163,13 +166,14 @@ function install(){
         }
       });
 
-      app.post('/api/youtube/upload',async(req,res)=>{
+      app.post('/api/youtube/upload',youtubeUpload.single('video'),async(req,res)=>{
         try{
           await load();
           if(!tokens) return res.status(401).json({ok:false,error:'YouTube no está conectado.'});
           const body=req.body||{};
-          const filePath=clean(body.filePath);
-          if(!filePath) return res.status(400).json({ok:false,error:'Falta filePath.'});
+          const filePath=clean(req.file?.path||body.filePath);
+          if(!filePath) return res.status(400).json({ok:false,error:'Selecciona un archivo MP4 para publicar.'});
+          if(!req.file&&!fs.existsSync(filePath)) return res.status(400).json({ok:false,error:'El archivo exportado ya no está disponible.'});
           const auth=oauth(); auth.setCredentials(tokens);
           const yt=google.youtube({version:'v3',auth});
           const title=clean(body.title)||'La Última Clave';
@@ -204,6 +208,8 @@ function install(){
         }catch(e){
           console.error('YouTube upload:',e.message);
           return res.status(500).json({ok:false,error:e.message});
+        }finally{
+          if(req.file?.path){try{await fs.promises.unlink(req.file.path);}catch{}}
         }
       });
 
